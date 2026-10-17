@@ -20,7 +20,7 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.10.0 — DRAFT — the substrate raise to Fuaran.Core 0.38.1
+## 0.10.0 — RELEASED (tagged `v0.10.0`, 2026-10-17) — the substrate raise to Fuaran.Core 0.38.1
 
 **Class: breaking**, by this file's first rule: the contract every package is BUILT against moved.
 The substrate is `Fuaran.Core.*` 0.38.1 (was 0.34.0) and `Fuaran.Compute.DataFrame` 0.40.0 (was
