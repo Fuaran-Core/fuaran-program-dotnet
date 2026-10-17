@@ -541,10 +541,7 @@ let private divergence (case: StagingCase) (failAt: int option) (run: Run) : str
 
 let private rows: Table =
     { Table.empty with
-        Columns =
-            [ { Name = "n"
-                Type = IntType
-                Cells = [ Int 1; Int 2; Int 3 ] } ] }
+        Columns = [ Column.ofInts "n" (Vector.ofList [ 1; 2; 3 ]) AllValid ] }
 
 let private limitTwo =
     [ Fuaran.Compute.Limit(Fuaran.Compute.Slot.Lit 2, Fuaran.Compute.Slot.Lit 0) ]

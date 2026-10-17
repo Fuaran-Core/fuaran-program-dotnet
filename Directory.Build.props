@@ -166,7 +166,14 @@
          and `HandlerOutcome` and `HandlerTally` gain `Receipts` (FS0764 on a
          full literal). DECISIONS.md D43 records the decision; STABILITY.md
          holds the slot as a DRAFT until it is tagged. -->
-    <Version>0.9.0</Version>
+    <!-- 0.10.0 — the substrate raise to Fuaran.Core 0.38.1 and Fuaran.Compute.DataFrame
+         0.40.0. ADVANCES rather than rides: v0.9.0 is TAGGED, and the contract every
+         package is BUILT against moved across Core 0.37.0's breaking release — a
+         schema entry is a `Field`, a `Column` carries typed vectors and is no longer
+         comparable. A consumer of 0.9.0 on Core 0.37.0 or later reaches members its
+         binaries no longer find. No member of this repository's own surface changes.
+         STABILITY.md holds the slot as a DRAFT until it is tagged. -->
+    <Version>0.10.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
          else. Undeclared would read as `local-feed`, under which a pin only this

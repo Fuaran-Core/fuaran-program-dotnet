@@ -33,11 +33,8 @@ type private ToyHandler = Handler<ToyAction, ToyOp>
 type private ToyServerStore = ServerStore<ToyNode, ToyStore>
 
 let private orders: Table =
-    { Schema = [ "id", IntType ]
-      Columns =
-        [ { Name = "id"
-            Type = IntType
-            Cells = [ Int 1; Int 2 ] } ] }
+    { Schema = [ Field.create "id" IntType ]
+      Columns = [ Column.ofInts "id" (Vector.ofList [ 1; 2 ]) AllValid ] }
 
 let private resolve =
     QueryEvaluatorLaws.resolverOf (Map.ofList [ "orders", orders ])

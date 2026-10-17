@@ -20,6 +20,38 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
+## 0.10.0 — DRAFT — the substrate raise to Fuaran.Core 0.38.1
+
+**Class: breaking**, by this file's first rule: the contract every package is BUILT against moved.
+The substrate is `Fuaran.Core.*` 0.38.1 (was 0.34.0) and `Fuaran.Compute.DataFrame` 0.40.0 (was
+0.37.0). `v0.9.0` is tagged, so this cannot ride it: it opens the `0.10.0` draft.
+
+### What changed shape
+
+- **Nothing in this repository's own public surface.** Every type and member signature is as it was
+  at 0.9.0.
+- **What a consumer meets is Core's 0.37.0 release, through this one.** A `Schema` is a `Field list`
+  (`f.Name`, `f.Type`) rather than `(name, type)` pairs, a `Column` holds typed vectors (`Column.ofInts`,
+  `Column.ofCells`, `Column.length`; `Cells` is gone), and a `Column`, `Table` or `DataSource` is equal
+  but no longer comparable. Core's `docs/migrations/0.37.0-typed-column.md` is the edit list.
+- **Why it cannot stay at 0.9.0 for a consumer on the newer substrate:** 0.9.0's `Server` package was
+  compiled against Core 0.34.0 and calls `DataSource.CompareTo` and `Table.CompareTo`, and the
+  evaluator it pulls in (`Fuaran.Compute.DataFrame` 0.37.0) calls `Column.Cells` and the nullary
+  `TimestampType`. A graph that resolves Core 0.37.0 or later restores 0.9.0 cleanly and then fails
+  with `MissingMethodException` on any path that reaches them.
+
+### What was added
+
+- `QueryFault.evalErrorKind` names the evaluator's new `UnitMismatch` refusal (a unit conversion
+  across dimensions, `Fuaran.Compute.DataFrame` 0.40.0) as `"UnitMismatch"`.
+- `Schema.readsOfExpr` reads through the evaluator's new `ColExpr.Convert` (its target unit reads no
+  column).
+
+### What did not move
+
+- The program wire, the conformance corpus, every refusal class and every halt reason the 0.9.0
+  evaluator could produce.
+
 ## 0.9.0 — RELEASED (tagged `v0.9.0`, 2026-10-10) — the value channel on the state axis (Phase 2186), and what rode the draft (Phases 2197, 2187, 2195)
 
 **Class: breaking**, by this file's own rule, for every consumer that matches an `OpView<'Node, 'Op>`

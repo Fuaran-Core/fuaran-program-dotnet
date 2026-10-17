@@ -166,7 +166,7 @@ module Schema =
         | SchemaKnowledge.AtLeast _ -> knowledge
 
     let private ofColumns (schema: Schema) : ColumnKnowledge list =
-        schema |> List.map (fun (name, ty) -> { Name = name; Type = Some ty })
+        schema |> List.map (fun f -> { Name = f.Name; Type = Some f.Type })
 
     // ─── the source ──────────────────────────────────────────────────────────
 
@@ -214,6 +214,9 @@ module Schema =
         // literal or a parameter slot, never a column, so only the operands read.
         | ColExpr.Quotient(a, b, _) -> readsOfExpr a @ readsOfExpr b
         | ColExpr.Rounded(x, _) -> readsOfExpr x
+        // A unit conversion (Core-Compute 0.40.0) carries its target unit, never a
+        // column, so only the converted operand reads.
+        | ColExpr.Convert(x, _) -> readsOfExpr x
 
     /// The verb's discriminator — log-safe, and the name a finding uses so a
     /// reader can find the step in the declared pipeline.

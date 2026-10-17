@@ -14,10 +14,11 @@
          (OpStream). Until Phase 1896 every one of these arrived only
          transitively, through the UI tier.
 
-         The evaluator is pinned at the current Core-Compute release, 0.37.0,
+         The evaluator is pinned at the current Core-Compute release, 0.40.0,
          under the id it took at 0.36.0 (`Fuaran.Compute.DataFrame`, namespace
          `Fuaran.Compute`: Core-Compute's DECISIONS D4), and the rest of the
-         substrate at the 0.34.0 it declares. The raise from 0.21.0 is recorded
+         substrate at Core 0.38.1 (raised from 0.34.0 for 0.10.0: STABILITY.md
+         records what crossing Core 0.37.0 costs a consumer). The raise from 0.21.0 is recorded
          in docs/dataframe-0.34-surface-diff.md, and what it bought in
          docs/runquery-benchmark.md. Every version here is one the PUBLIC
          restore path serves exactly — `tools/check-pins.ps1` refuses anything
@@ -28,10 +29,10 @@
          UI tier left this repository for the UI tier's own, which depends on
          this core's released packages. CoreBoundaryTests fails the build if a
          `Fuaran.UI.*` pin returns, here or in any project. -->
-    <PackageVersion Include="Fuaran.Core.Wire" Version="0.34.0" />
-    <PackageVersion Include="Fuaran.Core.Column" Version="0.34.0" />
-    <PackageVersion Include="Fuaran.Compute.DataFrame" Version="0.37.0" />
-    <PackageVersion Include="Fuaran.Core.Tree" Version="0.34.0" />
-    <PackageVersion Include="Fuaran.Core.OpStream" Version="0.34.0" />
+    <PackageVersion Include="Fuaran.Core.Wire" Version="0.38.1" />
+    <PackageVersion Include="Fuaran.Core.Column" Version="0.38.1" />
+    <PackageVersion Include="Fuaran.Compute.DataFrame" Version="0.40.0" />
+    <PackageVersion Include="Fuaran.Core.Tree" Version="0.38.1" />
+    <PackageVersion Include="Fuaran.Core.OpStream" Version="0.38.1" />
   </ItemGroup>
 </Project>

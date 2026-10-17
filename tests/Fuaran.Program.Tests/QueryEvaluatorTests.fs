@@ -33,12 +33,12 @@ type private ToyHandler = Handler<ToyAction, ToyOp>
 type private ToyServerStore = ServerStore<ToyNode, ToyStore>
 
 let private column (name: string) (ty: ColumnType) (cells: Cell list) : Column =
-    { Name = name
-      Type = ty
-      Cells = cells }
+    match Column.ofCells name ty cells with
+    | Ok c -> c
+    | Error e -> failwithf "the fixture column %s does not build: %A" name e
 
 let private tableOf (columns: Column list) : Table =
-    { Schema = columns |> List.map (fun c -> c.Name, c.Type)
+    { Schema = columns |> List.map (fun c -> Field.create c.Name c.Type)
       Columns = columns }
 
 /// The host's named source: three orders.
@@ -166,7 +166,7 @@ let tests =
                             (ColumnCodec.encode (Embedded b))
                             "the same table, byte for byte in canonical form"
 
-                        Expect.equal (List.length (List.head a.Columns).Cells) 2 "the filter ran: two orders over ten"
+                        Expect.equal (Column.length (List.head a.Columns)) 2 "the filter ran: two orders over ten"
                     | _ -> failtest "both evaluators answer a table"
 
                 testCase "an evaluator that differs is reported with the fixture"

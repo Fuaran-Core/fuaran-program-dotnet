@@ -353,6 +353,8 @@ module QueryFault =
         // The evaluator's clock read with no pinned evaluation instant
         // (Core-Compute 0.34.0).
         | Fuaran.Compute.UnpinnedClock _ -> "UnpinnedClock"
+        // A unit conversion across dimensions (Core-Compute 0.40.0).
+        | Fuaran.Compute.UnitMismatch _ -> "UnitMismatch"
 
     /// The halt reason a fault becomes. An `Eval` fault reads exactly as the
     /// in-memory fold's halt always has.
@@ -427,7 +429,7 @@ module QueryEvaluator =
     let renderSchema (schema: Fuaran.Core.Schema) : string =
         "["
         + (schema
-           |> List.map (fun (name, ty) -> name + ":" + renderType ty)
+           |> List.map (fun f -> f.Name + ":" + renderType f.Type)
            |> String.concat ", ")
         + "]"
 
@@ -440,10 +442,10 @@ module QueryEvaluator =
     let conforms (expected: Fuaran.Program.Bounded.SchemaKnowledge) (answered: Fuaran.Core.Schema) : bool =
         let present (column: Fuaran.Program.Bounded.ColumnKnowledge) =
             answered
-            |> List.exists (fun (name, ty) ->
-                name = column.Name
+            |> List.exists (fun f ->
+                f.Name = column.Name
                 && (match column.Type with
-                    | Some derived -> derived = ty
+                    | Some derived -> derived = f.Type
                     | None -> true))
 
         let named = Fuaran.Program.Bounded.Schema.columns expected
@@ -453,7 +455,7 @@ module QueryEvaluator =
         | Fuaran.Program.Bounded.SchemaKnowledge.Closed _ ->
             allPresent
             && answered
-               |> List.forall (fun (name, _) -> named |> List.exists (fun column -> column.Name = name))
+               |> List.forall (fun f -> named |> List.exists (fun column -> column.Name = f.Name))
         | Fuaran.Program.Bounded.SchemaKnowledge.AtLeast _ -> allPresent
 
     /// The evaluator with the static query-schema check composed onto its
