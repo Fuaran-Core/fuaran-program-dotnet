@@ -250,6 +250,41 @@
 ///   * `resumed_plan_observes_entry` — at the plan: a plan built over the
 ///     served read is the plan built over the recorded value, for every
 ///     live world — two re-entries against two worlds plan alike.
+///
+/// And the STAGED READ and the REPORT (Phase 2212, DECISIONS.md D47 —
+/// the two arms the suites pinned and no theorem did, D44 and D45). The
+/// registry carries the host's query posture (`r_query_posture`, read
+/// off `ServerEffectRegistry.queryPosture`) and what a reaching read is
+/// staged as (`r_query_stage`, split as `r_op_perform` is); a staged
+/// call's landing is production's `Landing` (`landing`: nowhere, a
+/// state slot, a query slot, the last through `w_land_query`); `Report`
+/// is a seventh effect arm carrying a concrete `finding`, recorded
+/// through `r_record` into `ac_findings` / `oc_findings`:
+///
+///   * `pure_read_plans_while_planning` — under `PureRead` an admitted
+///     read is asked while planning and lands there, or halts: the arm
+///     as it was before the seam, as an equation.
+///   * `pure_read_reads_no_stage` — under `PureRead` the whole plan is
+///     the same under every staging arrow — "exactly as before".
+///   * `staged_read_stages_one_call` — under `Reaching` an admitted read
+///     stages exactly one call, landing in its query slot, records
+///     `TReached "RunQuery"`, and touches nothing else.
+///   * `staged_read_asks_no_evaluator` — the read's stage is the same
+///     under every `w_query`: the evaluator is not asked while planning.
+///   * `staged_read_not_asked_on_resume` — a completed read is served,
+///     the performer invoked only at the ordinals after it, the record
+///     landed in the query slot.
+///   * `report_records_and_moves_nothing` / `report_refused_halts` — an
+///     admitted report records its finding and touches nothing else, or
+///     halts on the recorder's refusal.
+///   * `findings_in_program_order` — the outcome's findings, on commit
+///     and on rollback, are the plan's in stage order; the perform phase
+///     adds none.
+///   * `finding_served` / `finding_diverged_refused` /
+///     `different_finding_refused` / `finding_unrun_is_live` — the
+///     journaled finding (`journal_finding`, the durable recorder at an
+///     ordinal, on the entry read's terms): served from its record,
+///     refused where the record is another's, live where there is none.
 
 module Staging
 
@@ -312,6 +347,29 @@ type store (t: Type0) (b: Type0) = {
   st_bindings: b;
 }
 
+/// F#: `Finding` (Phase 2195, D45) — a code, a severity and a message, as
+/// the host's own vocabulary types them. Program carries the three and
+/// interprets none of them: the host bounds the code and the severity
+/// through the argument policy (`r_policy`), and the message is payload.
+/// Concrete rather than a type parameter because the theorems about the
+/// `Report` arm are about findings — what the trace carries, in what order.
+type finding = {
+  f_code: string;
+  f_severity: string;
+  f_message: string;
+}
+
+/// F#: `QueryPosture` (Phase 1905, D34; Phase 2187, D44) — the HOST's
+/// declaration of its query evaluator, read off the registry
+/// (`ServerEffectRegistry.queryPosture`): a pure read is asked while
+/// planning and lands its table there; a reaching evaluator is STAGED like
+/// a host call, asked only once the plan completed. The one fact both the
+/// run (`Handler.runEffect`'s `QueryEvaluator.isStaged`) and the static
+/// postures (`Undo.defectsOfStage`, `HandlerWire.replayReasons`) consult.
+type query_posture =
+  | PureRead
+  | Reaching
+
 /// F#: `ServerEffect<'Op>`. A query's name, source and pipeline reach the
 /// model as the name and an opaque query `q`; the evaluator that reads
 /// the source and the pipeline is in the witness.
@@ -321,6 +379,10 @@ type server_effect (v: Type0) (o: Type0) (q: Type0) =
   | HostCall : fn: string -> args: v -> into: opt string -> server_effect v o q
   | EmitPatch : patch: list o -> server_effect v o q
   | Notify : channel: string -> payload: v -> server_effect v o q
+  /// F#: `ServerEffect.Report of Finding` (Phase 2195, D45): a report, not
+  /// an act. Recorded in program order while planning through the
+  /// registry's recorder; never staged, never on the undo trail.
+  | Report : report: finding -> server_effect v o q
 
 /// F#: `HandlerStage<'Action, 'Op>`.
 type stage (a: Type0) (v: Type0) (o: Type0) (q: Type0) =
@@ -341,7 +403,11 @@ type diagnostic (d: Type0) =
   | Failed : capability: string -> reason: string -> diagnostic d
   | PerformFailed : capability: string -> reason: string -> diagnostic d
 
-/// F#: `ServerEffect.capability`. Four arms are named by their
+/// F#: `FindingRecorder.Capability` — the arm's own name, under which a
+/// report is gated, constrained and journaled.
+let report_capability : string = "Report"
+
+/// F#: `ServerEffect.capability`. Five arms are named by their
 /// discriminator; a `HostCall` is namespaced by its function name.
 let capability (#v: Type0) (#o: Type0) (#q: Type0) (e: server_effect v o q) : string =
   match e with
@@ -350,6 +416,7 @@ let capability (#v: Type0) (#o: Type0) (#q: Type0) (e: server_effect v o q) : st
   | HostCall fn _ _ -> strcat "host:" fn
   | EmitPatch _ -> "EmitPatch"
   | Notify _ _ -> "Notify"
+  | Report _ -> report_capability
 
 (* ───────────────────────────────────────────────────────────────────
    The two records of arrows — what the handler reads of the witness,
@@ -442,6 +509,16 @@ noeq type witness (t: Type0) (b: Type0) (v: Type0) (o: Type0) (q: Type0) (a: Typ
   w_resolve: string -> t -> resolution v;
   /// `StoreWitness.Assign`.
   w_assign: string -> v -> b -> b;
+  /// A STAGED read's table landed in its query slot (Phase 2212): what the
+  /// perform phase does with a staged query's answer, which the durable
+  /// wrapper carries as a VALUE (`QueryEvaluator.encodeAnswer`, the table
+  /// in the column codec's canonical form) — `QueryEvaluator.decodeAnswer`
+  /// then `StoreWitness.LandQuery`, against the bindings as of the landing.
+  /// Total here: a value the journal serves at a query's ordinal that no
+  /// longer decodes is read as a REFUSAL at the snapshot (`j_step`), which
+  /// halts the handler where production's `query-answer-undecodable`
+  /// halts it — proofs/README.md, "Assumed, and stated".
+  w_land_query: string -> v -> b -> b;
   /// The landing-slot refusal: `OSome reason` refuses the slot while
   /// planning. With a dispatch axis it is `StoreWitness.IsReserved`
   /// rendered with `ReservedPrefix` into the refusal's text; without one
@@ -490,6 +567,29 @@ noeq type registry (t: Type0) (v: Type0) (o: Type0) (q: Type0) (p: Type0) = {
   /// the state as of the op — the planned state with that op applied —
   /// and the op (F-PERFORM): production's `fun _ -> perform state op`.
   r_op_perform: opt (t -> o -> (p & v));
+  /// `ServerEffectRegistry.queryPosture` (Phase 2212; D34, D44): the
+  /// host's declaration of its query evaluator — `QueryEvaluator.postureOf
+  /// registry.QueryEvaluator`, the fold's `PureRead` when none is
+  /// registered. `PureRead` asks `w_query` while planning, as every
+  /// placement did before the seam; `Reaching` STAGES the read. Read by
+  /// the plan phase and by the static postures (`Undo.stage_defects`), so
+  /// the two consult one fact.
+  r_query_posture: query_posture;
+  /// What a REACHING read is staged AS (Phase 2212): the TOKEN the perform
+  /// phase applies and the ARGUMENT it is applied to, split as
+  /// `r_op_perform` splits an op's performer — production's
+  /// `fun _ -> evaluator.Evaluate source pipeline resolve`, through
+  /// `encodeAnswer` under the durable wrapper (`QueryEvaluator.through`).
+  /// Never read under `PureRead` (`pure_read_reads_no_stage`): a pure read
+  /// is `w_query`'s.
+  r_query_stage: string -> q -> (p & v);
+  /// `RecordFinding` (Phase 2195, D45): how the plan RECORDS a finding it
+  /// reached — the finding itself outside a durable run
+  /// (`FindingRecorder.live`), or under the durable interpreter the record
+  /// the journal serves at the finding's ordinal (`journal_finding`,
+  /// below). A refusal is the recorder's — a resume that diverged here —
+  /// and halts like any plan-time failure.
+  r_record: finding -> res finding;
 }
 
 (* ───────────────────────────────────────────────────────────────────
@@ -497,12 +597,31 @@ noeq type registry (t: Type0) (v: Type0) (o: Type0) (q: Type0) (p: Type0) = {
    `HandlerOutcome`.
    ─────────────────────────────────────────────────────────────────── *)
 
-/// F#: `Handler.StagedCall`.
+/// F#: `Handler.Landing` (Phase 2212) — where a staged call's answer lands
+/// once the perform phase has it: nowhere (an op stage's receipt, a host
+/// call with no `into`), a host call's result in its declared STATE slot
+/// (`StoreWitness.Assign`), or a staged read's table in its QUERY slot
+/// (`StoreWitness.LandQuery`, through `w_land_query`). Every slot named
+/// here was checked while planning.
+type landing =
+  | LNowhere : landing
+  | LState : key: string -> landing
+  | LQuery : slot: string -> landing
+
+/// A host call's declared slot as a landing — `into` is the effect's
+/// optional member; `LNowhere` lands nothing.
+let landing_of (into: opt string) : landing =
+  match into with
+  | ONone -> LNowhere
+  | OSome key -> LState key
+
+/// F#: `Handler.StagedCall`, with the closure split into the token, the
+/// argument and the landing.
 type staged_call (v: Type0) (p: Type0) = {
   sc_capability: string;
   sc_performer: p;
   sc_args: v;
-  sc_into: opt string;
+  sc_into: landing;
 }
 
 /// F#: `UndoStep<'Node, 'Store, 'Op>` (Phase 1977) — one step of the
@@ -535,9 +654,15 @@ noeq type accumulator (t: Type0) (b: Type0) (v: Type0) (o: Type0) (eff: Type0) (
   ac_diagnostics: list (diagnostic d);
   /// The undo trail (Phase 1977), reversed like every other list here.
   ac_trail: list (step t b o);
+  /// The findings reported (Phase 2195, D45; modelled by Phase 2212),
+  /// reversed like every other list here — what each `Report` stage's
+  /// recorder answered, in program order.
+  ac_findings: list finding;
 }
 
-/// F#: `HandlerOutcome`.
+/// F#: `HandlerOutcome`. `oc_findings` survives the rollback, as
+/// production's `Findings` does: a finding is the record of what the
+/// program found on its way to a refusal, not work the halt undoes.
 type outcome (t: Type0) (b: Type0) (v: Type0) (o: Type0) (eff: Type0) (d: Type0) = {
   oc_store: store t b;
   oc_committed: bool;
@@ -546,6 +671,7 @@ type outcome (t: Type0) (b: Type0) (v: Type0) (o: Type0) (eff: Type0) (d: Type0)
   oc_notifications: list (string & v);
   oc_client_effects: list eff;
   oc_diagnostics: list (diagnostic d);
+  oc_findings: list finding;
 }
 
 /// F#: `Handler.halt`.
@@ -569,7 +695,17 @@ let staged_from (#t: Type0) (#v: Type0) (#o: Type0) (#p: Type0)
                 (cap: string) (f: t -> o -> (p & v)) (tree: t) (op: o)
   : staged_call v p =
   let (tok, args) = f tree op in
-  { sc_capability = cap; sc_performer = tok; sc_args = args; sc_into = ONone }
+  { sc_capability = cap; sc_performer = tok; sc_args = args; sc_into = LNowhere }
+
+/// F#: the staged-query arm of `Handler.runEffect` (Phase 1905, D34;
+/// modelled by Phase 2212) — one read staged under a reaching evaluator:
+/// the arm's capability, the token and argument the registry answers for
+/// the name and the query, and the QUERY slot it lands in.
+let staged_read (#v: Type0) (#q: Type0) (#p: Type0)
+                (cap: string) (f: string -> q -> (p & v)) (name: string) (query: q)
+  : staged_call v p =
+  let (tok, args) = f name query in
+  { sc_capability = cap; sc_performer = tok; sc_args = args; sc_into = LQuery name }
 
 /// `List.map w.w_op_view`: the ops of an `ApplyOps` effect, viewed to
 /// exhaustion (Phase 1976).
@@ -846,6 +982,9 @@ let slot_refused (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a
 /// order, and the order in which nothing precedes the policy decision.
 /// Four arms complete here; `HostCall` is STAGED: the token is captured,
 /// nothing is invoked, and `ac_performed` is deliberately not extended.
+/// So is a `RunQuery` under a REACHING evaluator (Phase 2212; D34, D44),
+/// on the host-call arm's terms; a `Report` is RECORDED and nothing else
+/// (Phase 2212; D45).
 let plan_effect (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
                 (w: witness t b v o q a eff d) (reg: registry t v o q p)
                 (e: server_effect v o q) (acc: accumulator t b v o eff d p)
@@ -860,10 +999,23 @@ let plan_effect (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a:
       let performed = { acc with ac_performed = cap :: acc.ac_performed } in
       (match e with
        | RunQuery name query ->
-         (match w.w_query name query performed.ac_store.st_bindings with
-          | RErr kind -> halt cap kind acc
-          | ROk bindings ->
-            { performed with ac_store = { performed.ac_store with st_bindings = bindings } })
+         (match reg.r_query_posture with
+          // An evaluator its host could not declare a pure read is staged
+          // like a host call: admitted here, asked only once the plan
+          // completed, its table landing in the query slot then.
+          // `ac_performed` is not extended, and the trail records that
+          // the run reached outside — which is what the undo refuses at.
+          | Reaching ->
+            { acc with
+              ac_staged = staged_read cap reg.r_query_stage name query :: acc.ac_staged;
+              ac_trail = TReached cap :: acc.ac_trail }
+          // The pure read: asked while planning, its table landed there,
+          // exactly as every placement did before the seam.
+          | PureRead ->
+            (match w.w_query name query performed.ac_store.st_bindings with
+             | RErr kind -> halt cap kind acc
+             | ROk bindings ->
+               { performed with ac_store = { performed.ac_store with st_bindings = bindings } }))
        | ApplyOps ops ->
          (match plan_ops w cap reg.r_op_perform ops performed.ac_store.st_tree acc.ac_staged with
           | RErr code -> halt cap code acc
@@ -899,7 +1051,7 @@ let plan_effect (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a:
              | ONone ->
               { acc with
                 ac_staged =
-                  { sc_capability = cap; sc_performer = performer; sc_args = args; sc_into = into }
+                  { sc_capability = cap; sc_performer = performer; sc_args = args; sc_into = landing_of into }
                   :: acc.ac_staged;
                 ac_trail = TReached cap :: acc.ac_trail }))
        | EmitPatch ops ->
@@ -909,7 +1061,17 @@ let plan_effect (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a:
        | Notify channel payload ->
          { performed with
            ac_notifications = (channel, payload) :: performed.ac_notifications;
-           ac_trail = TReached cap :: performed.ac_trail })
+           ac_trail = TReached cap :: performed.ac_trail }
+       // A finding (Phase 2195, D45): recorded in program order through the
+       // registry's recorder, and nothing else — not staged, because
+       // nothing is performed; not on the trail, because a report has no
+       // inverse to run; the store untouched. A recorder's refusal halts
+       // like any plan-time failure.
+       | Report f ->
+         (match reg.r_record f with
+          | RErr reason -> halt cap reason acc
+          | ROk recorded ->
+            { performed with ac_findings = recorded :: performed.ac_findings }))
 
 /// F#: `Handler.runStage`. The `Compute` arm is the shared fold with the
 /// inert arm — opaque here, Phase 1715's subject.
@@ -943,10 +1105,34 @@ let rec plan (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Ty
    declaration order, stopping at the first failure.
    ─────────────────────────────────────────────────────────────────── *)
 
+/// One staged call's success, recorded and landed — the `ROk` clause of
+/// `perform`, named so the durable replay below can reuse it for a SERVED
+/// answer as well as an invoked one: `ac_externally` gains the capability,
+/// and the answer lands where the call declared — a host call's in its
+/// state slot through `Assign`, a staged read's in its query slot through
+/// `w_land_query` (Phase 2212), an op stage's nowhere.
+let land (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+         (w: witness t b v o q a eff d) (call: staged_call v p) (result: v)
+         (acc: accumulator t b v o eff d p)
+  : accumulator t b v o eff d p =
+  let recorded = { acc with ac_externally = call.sc_capability :: acc.ac_externally } in
+  match call.sc_into with
+  | LNowhere -> recorded
+  | LState key ->
+    { recorded with
+      ac_store =
+        { recorded.ac_store with
+          st_bindings = w.w_assign key result recorded.ac_store.st_bindings } }
+  | LQuery slot ->
+    { recorded with
+      ac_store =
+        { recorded.ac_store with
+          st_bindings = w.w_land_query slot result recorded.ac_store.st_bindings } }
+
 /// F#: `Handler.perform`. The only place the performer's behaviour is
 /// read. A failure halts and records which call, and nothing after it is
 /// asked; a success is recorded in `ac_externally` and its result landed
-/// in the declared slot.
+/// in the declared slot (`land`).
 let rec perform (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
                 (w: witness t b v o q a eff d) (reg: registry t v o q p)
                 (staged: list (staged_call v p)) (acc: accumulator t b v o eff d p)
@@ -959,17 +1145,7 @@ let rec perform (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a:
        { acc with
          ac_halted = true;
          ac_diagnostics = PerformFailed call.sc_capability reason :: acc.ac_diagnostics }
-     | ROk result ->
-       let recorded = { acc with ac_externally = call.sc_capability :: acc.ac_externally } in
-       let landed =
-         (match call.sc_into with
-          | ONone -> recorded
-          | OSome key ->
-            { recorded with
-              ac_store =
-                { recorded.ac_store with
-                  st_bindings = w.w_assign key result recorded.ac_store.st_bindings } }) in
-       perform w reg rest landed)
+     | ROk result -> perform w reg rest (land w call result acc))
 
 (* ───────────────────────────────────────────────────────────────────
    THE HANDLER — `Handler.run`: plan, the phase boundary, perform, and
@@ -989,53 +1165,20 @@ let start (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#eff: Type0) (#d: Typ
     ac_notifications = [];
     ac_client_effects = [];
     ac_diagnostics = [];
-    ac_trail = [] }
+    ac_trail = [];
+    ac_findings = [] }
 
-/// F#: `Handler.runPlanned` (Phase 1977) — `run`, answering beside the
-/// outcome the TRAIL the plan phase recorded, in plan order, which is
-/// what an undo reads (`Undo.fst`). The phase boundary is the one `if`:
-/// nothing external has run above it, and nothing below it can be
+/// F#: the two outcome constructors of `Handler.runPlanned`, over whatever
+/// accumulator the perform phase left. The phase boundary is the one
+/// `if`: nothing external has run above it, and nothing below it can be
 /// undone. A halt rolls back to the entry store, keeps the diagnostics,
-/// and reports `ac_externally` — NOT emptied, because a perform-phase
-/// failure leaves its predecessors run and reporting `[]` there would be
-/// the one lie this design exists to avoid.
-let run_planned (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
-                (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
-                (stages: list (stage a v o q)) (s: store t b)
-  : (outcome t b v o eff d & list (step t b o)) =
-  let planned = plan w reg node_id stages (start s) in
-  let final = if planned.ac_halted then planned else perform w reg (rev planned.ac_staged) planned in
-  if final.ac_halted then
-    ({ oc_store = s;
-       oc_committed = false;
-       oc_performed = rev final.ac_externally;
-       oc_patches = [];
-       oc_notifications = [];
-       oc_client_effects = [];
-       oc_diagnostics = rev final.ac_diagnostics },
-     rev final.ac_trail)
-  else
-    ({ oc_store = final.ac_store;
-       oc_committed = true;
-       oc_performed = app (rev final.ac_performed) (rev final.ac_externally);
-       oc_patches = rev final.ac_patches;
-       oc_notifications = rev final.ac_notifications;
-       oc_client_effects = rev final.ac_client_effects;
-       oc_diagnostics = rev final.ac_diagnostics },
-     rev final.ac_trail)
-
-/// F#: `Handler.run`. The phase boundary is the one `if`: nothing
-/// external has run above it, and nothing below it can be undone. A halt
-/// rolls back to the entry store, keeps the diagnostics, and reports
-/// `ac_externally` — NOT emptied, because a perform-phase failure leaves
-/// its predecessors run and reporting `[]` there would be the one lie
-/// this design exists to avoid.
-let run (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
-        (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
-        (stages: list (stage a v o q)) (s: store t b)
+/// keeps the FINDINGS (D45: the record of what the program found on its
+/// way to a refusal), and reports `ac_externally` — NOT emptied, because
+/// a perform-phase failure leaves its predecessors run and reporting `[]`
+/// there would be the one lie this design exists to avoid.
+let finish (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+           (s: store t b) (final: accumulator t b v o eff d p)
   : outcome t b v o eff d =
-  let planned = plan w reg node_id stages (start s) in
-  let final = if planned.ac_halted then planned else perform w reg (rev planned.ac_staged) planned in
   if final.ac_halted then
     { oc_store = s;
       oc_committed = false;
@@ -1043,7 +1186,8 @@ let run (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) 
       oc_patches = [];
       oc_notifications = [];
       oc_client_effects = [];
-      oc_diagnostics = rev final.ac_diagnostics }
+      oc_diagnostics = rev final.ac_diagnostics;
+      oc_findings = rev final.ac_findings }
   else
     { oc_store = final.ac_store;
       oc_committed = true;
@@ -1051,7 +1195,29 @@ let run (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) 
       oc_patches = rev final.ac_patches;
       oc_notifications = rev final.ac_notifications;
       oc_client_effects = rev final.ac_client_effects;
-      oc_diagnostics = rev final.ac_diagnostics }
+      oc_diagnostics = rev final.ac_diagnostics;
+      oc_findings = rev final.ac_findings }
+
+/// F#: `Handler.runPlanned` (Phase 1977) — the plan, the phase boundary,
+/// the perform phase, and the outcome (`finish`) beside the TRAIL the plan
+/// phase recorded, in plan order, which is what an undo reads
+/// (`Undo.fst`).
+let run_planned (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
+                (stages: list (stage a v o q)) (s: store t b)
+  : (outcome t b v o eff d & list (step t b o)) =
+  let planned = plan w reg node_id stages (start s) in
+  let final = if planned.ac_halted then planned else perform w reg (rev planned.ac_staged) planned in
+  (finish s final, rev final.ac_trail)
+
+/// F#: `Handler.runWith` — `runPlanned` without the plan: the outcome
+/// alone, as production defines it.
+let run (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+        (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
+        (stages: list (stage a v o q)) (s: store t b)
+  : outcome t b v o eff d =
+  let (out, _) = run_planned w reg node_id stages s in
+  out
 
 (* ───────────────────────────────────────────────────────────────────
    THE THEOREMS
@@ -1194,9 +1360,12 @@ let plan_stage_pure (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) 
        | ONone ->
          (match e with
           | RunQuery name query ->
-            (match w.w_query name query acc.ac_store.st_bindings with
-             | RErr _ -> ()
-             | ROk _ -> ())
+            (match reg.r_query_posture with
+             | Reaching -> ()
+             | PureRead ->
+               (match w.w_query name query acc.ac_store.st_bindings with
+                | RErr _ -> ()
+                | ROk _ -> ()))
           | ApplyOps ops ->
             (match plan_ops w cap reg.r_op_perform ops acc.ac_store.st_tree acc.ac_staged with
              | RErr _ -> ()
@@ -1212,7 +1381,11 @@ let plan_stage_pure (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) 
                 | OSome _ -> ()
                 | ONone -> ()))
           | EmitPatch _ -> ()
-          | Notify _ _ -> ()))
+          | Notify _ _ -> ()
+          | Report f ->
+            (match reg.r_record f with
+             | RErr _ -> ()
+             | ROk _ -> ())))
 
 /// **`plan_pure`.** The plan phase's output is a function of the entry
 /// state, the program, the witness and the registry's gate, policy and
@@ -1260,7 +1433,9 @@ let rec perform_spec (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0)
          r.ac_staged == acc.ac_staged /\
          r.ac_patches == acc.ac_patches /\
          r.ac_notifications == acc.ac_notifications /\
-         r.ac_client_effects == acc.ac_client_effects))
+         r.ac_client_effects == acc.ac_client_effects /\
+         r.ac_trail == acc.ac_trail /\
+         r.ac_findings == acc.ac_findings))
       (decreases calls) =
   match calls with
   | [] -> app_nil (rev acc.ac_externally)
@@ -1268,16 +1443,7 @@ let rec perform_spec (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0)
     (match reg.r_perf call.sc_performer call.sc_args with
      | RErr _ -> app_nil (rev acc.ac_externally)
      | ROk result ->
-       let recorded = { acc with ac_externally = call.sc_capability :: acc.ac_externally } in
-       let landed =
-         (match call.sc_into with
-          | ONone -> recorded
-          | OSome key ->
-            { recorded with
-              ac_store =
-                { recorded.ac_store with
-                  st_bindings = w.w_assign key result recorded.ac_store.st_bindings } }) in
-       perform_spec w reg rest landed;
+       perform_spec w reg rest (land w call result acc);
        app_assoc (rev acc.ac_externally) [call.sc_capability] (take (ran reg.r_perf rest) (caps rest)))
 
 /// **`performed_in_order`.** For EVERY performer: when the plan
@@ -1378,6 +1544,292 @@ let plan_halt_performs_nothing (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (
          out.oc_notifications == [] /\
          out.oc_client_effects == [])) =
   plan_pure w reg reg.r_perf node_id stages (start s)
+
+(* ───────────────────────────────────────────────────────────────────
+   THE STAGED READ AND THE REPORT (Phase 2212; D34, D44, D45)
+
+   Stated over ONE stage, which is where each arm lives: what an admitted
+   read does under each posture, and what an admitted report does. The
+   lift to a whole program is `plan`'s own structure (one `plan_stage`
+   per stage, skipped after a halt), which `plan_pure`, `plan_findings`
+   and `pure_read_reads_no_stage` already walk.
+   ─────────────────────────────────────────────────────────────────── *)
+
+/// An effect the gate and the argument policy ADMIT — the plan phase
+/// reaches its arm. Ghost.
+[@@ noextract_to "FSharp"]
+let admitted_effect (#t: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#p: Type0)
+                    (reg: registry t v o q p) (e: server_effect v o q) : bool =
+  reg.r_gate (capability e) && ONone? (reg.r_policy e)
+
+/// **`pure_read_plans_while_planning`.** Under `PureRead`, an admitted
+/// read is ASKED while planning — `w_query` against the bindings as of
+/// the stage — and lands its table there, or halts under `RunQuery` with
+/// the evaluator's refusal: nothing is staged, the trail does not move,
+/// the tree does not move. The arm exactly as every placement ran it
+/// before the seam (D34), as an equation.
+let pure_read_plans_while_planning (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                                   (w: witness t b v o q a eff d) (reg: registry t v o q p)
+                                   (name: string) (query: q) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (requires reg.r_query_posture == PureRead /\ admitted_effect reg (RunQuery #v #o #q name query))
+      (ensures
+        (let r = plan_effect w reg (RunQuery #v #o #q name query) acc in
+         (match w.w_query name query acc.ac_store.st_bindings with
+          | RErr kind -> r == halt "RunQuery" kind acc
+          | ROk bindings ->
+            r == { acc with
+                   ac_performed = "RunQuery" :: acc.ac_performed;
+                   ac_store = { acc.ac_store with st_bindings = bindings } }))) =
+  match w.w_query name query acc.ac_store.st_bindings with
+  | RErr _ -> ()
+  | ROk _ -> ()
+
+/// Under `PureRead` one stage is planned the same under every staging
+/// arrow: `r_query_stage` is a registry member the pure-read plan never
+/// reads. The skeleton is `plan_stage_pure`'s.
+let plan_stage_pure_read (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                         (w: witness t b v o q a eff d) (reg: registry t v o q p) (f': string -> q -> (p & v))
+                         (node_id: string) (s: stage a v o q) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (requires reg.r_query_posture == PureRead)
+      (ensures plan_stage w reg node_id s acc == plan_stage w ({ reg with r_query_stage = f' }) node_id s acc) =
+  match s with
+  | SCompute _ -> ()
+  | SEffect e ->
+    let cap = capability e in
+    if not (reg.r_gate cap) then ()
+    else
+      (match reg.r_policy e with
+       | OSome _ -> ()
+       | ONone ->
+         (match e with
+          | RunQuery name query ->
+            (match w.w_query name query acc.ac_store.st_bindings with
+             | RErr _ -> ()
+             | ROk _ -> ())
+          | ApplyOps ops ->
+            (match plan_ops w cap reg.r_op_perform ops acc.ac_store.st_tree acc.ac_staged with
+             | RErr _ -> ()
+             | ROk _ ->
+               (match reg.r_op_perform with
+                | ONone -> ()
+                | OSome _ -> ()))
+          | HostCall fn _ into ->
+            (match reg.r_lookup fn with
+             | ONone -> ()
+             | OSome _ ->
+               (match slot_refused w into with
+                | OSome _ -> ()
+                | ONone -> ()))
+          | EmitPatch _ -> ()
+          | Notify _ _ -> ()
+          | Report f ->
+            (match reg.r_record f with
+             | RErr _ -> ()
+             | ROk _ -> ())))
+
+/// **`pure_read_reads_no_stage`.** Under `PureRead` the WHOLE plan is the
+/// same under every staging arrow — "exactly as before" as an equation: a
+/// host that declares a pure read, or registers no evaluator, plans as it
+/// planned before the staging arrow existed, whatever the arrow answers.
+let rec pure_read_reads_no_stage (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                                 (w: witness t b v o q a eff d) (reg: registry t v o q p) (f': string -> q -> (p & v))
+                                 (node_id: string) (stages: list (stage a v o q)) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (requires reg.r_query_posture == PureRead)
+      (ensures plan w reg node_id stages acc == plan w ({ reg with r_query_stage = f' }) node_id stages acc)
+      (decreases stages) =
+  match stages with
+  | [] -> ()
+  | s :: rest ->
+    if acc.ac_halted then pure_read_reads_no_stage w reg f' node_id rest acc
+    else begin
+      plan_stage_pure_read w reg f' node_id s acc;
+      pure_read_reads_no_stage w reg f' node_id rest (plan_stage w reg node_id s acc)
+    end
+
+/// **`staged_read_stages_one_call`.** Under `Reaching`, an admitted read
+/// stages exactly ONE call on top of the staged list — capability
+/// `RunQuery`, the token and the argument `r_query_stage` answers for the
+/// name and the query, landing in the read's QUERY slot — records
+/// `TReached "RunQuery"` on the trail, and touches nothing else: the
+/// store does not move, `ac_performed` is not extended (the read has not
+/// run), no finding, no diagnostic. D34's staging, as an equation; the
+/// `TReached` step is what `Undo.first_refused` refuses at.
+let staged_read_stages_one_call (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                                (w: witness t b v o q a eff d) (reg: registry t v o q p)
+                                (name: string) (query: q) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (requires reg.r_query_posture == Reaching /\ admitted_effect reg (RunQuery #v #o #q name query))
+      (ensures
+        plan_effect w reg (RunQuery #v #o #q name query) acc ==
+          { acc with
+            ac_staged = staged_read "RunQuery" reg.r_query_stage name query :: acc.ac_staged;
+            ac_trail = TReached "RunQuery" :: acc.ac_trail }) = ()
+
+/// **`staged_read_asks_no_evaluator`.** A read's stage under `Reaching` is
+/// planned the same under EVERY evaluator: `w_query` is never asked while
+/// planning a staged read. The equation that says the evaluator a host
+/// could not declare a pure read runs only once the plan completed.
+let staged_read_asks_no_evaluator (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                                  (w: witness t b v o q a eff d) (q': string -> q -> b -> res b)
+                                  (reg: registry t v o q p) (node_id: string)
+                                  (name: string) (query: q) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (requires reg.r_query_posture == Reaching)
+      (ensures
+        plan_stage w reg node_id (SEffect (RunQuery #v #o #q name query)) acc ==
+        plan_stage ({ w with w_query = q' }) reg node_id (SEffect (RunQuery #v #o #q name query)) acc) =
+  let e : server_effect v o q = RunQuery name query in
+  if not (reg.r_gate (capability e)) then ()
+  else
+    (match reg.r_policy e with
+     | OSome _ -> ()
+     | ONone -> ())
+
+/// **`report_records_and_moves_nothing`.** An admitted report whose
+/// recorder answers `ROk x` extends `ac_performed` with `Report` and
+/// `ac_findings` with `x`, and touches NOTHING else: not the store, not
+/// the staged list, not the trail, not the patches, the notifications,
+/// the client effects or the diagnostics. A report stages nothing, trails
+/// nothing and moves no state (D45), as an equation.
+let report_records_and_moves_nothing (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                                     (w: witness t b v o q a eff d) (reg: registry t v o q p)
+                                     (f: finding) (x: finding) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (requires admitted_effect reg (Report #v #o #q f) /\ reg.r_record f == ROk x)
+      (ensures
+        plan_effect w reg (Report #v #o #q f) acc ==
+          { acc with
+            ac_performed = report_capability :: acc.ac_performed;
+            ac_findings = x :: acc.ac_findings }) = ()
+
+/// **`report_refused_halts`.** A recorder's refusal — under the durable
+/// interpreter, a resume that diverged at the report's ordinal — halts
+/// the handler under `Report` with the recorder's reason, and records no
+/// finding: the halt is the plan-time halt every arm shares.
+let report_refused_halts (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                         (w: witness t b v o q a eff d) (reg: registry t v o q p)
+                         (f: finding) (reason: string) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (requires admitted_effect reg (Report #v #o #q f) /\ reg.r_record f == RErr reason)
+      (ensures plan_effect w reg (Report #v #o #q f) acc == halt report_capability reason acc) = ()
+
+/// The finding ONE stage records: an admitted report's recorder answer,
+/// and nothing for any other stage. Ghost.
+[@@ noextract_to "FSharp"]
+let stage_findings (#t: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#p: Type0)
+                   (reg: registry t v o q p) (s: stage a v o q) : list finding =
+  match s with
+  | SEffect (Report f) ->
+    if admitted_effect reg (Report #v #o #q f) then
+      (match reg.r_record f with
+       | ROk x -> [x]
+       | RErr _ -> [])
+    else []
+  | _ -> []
+
+/// The findings a program records, in PROGRAM order: each stage's, in
+/// stage order, up to the halt — stated over the plan's own walk. Ghost.
+[@@ noextract_to "FSharp"]
+let rec reported (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                 (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
+                 (stages: list (stage a v o q)) (acc: accumulator t b v o eff d p)
+  : Tot (list finding) (decreases stages) =
+  match stages with
+  | [] -> []
+  | s :: rest ->
+    if acc.ac_halted then []
+    else app (stage_findings reg s) (reported w reg node_id rest (plan_stage w reg node_id s acc))
+
+/// One stage appends exactly its own finding, at the END of the findings
+/// in plan order: no arm but an admitted report touches `ac_findings`.
+let plan_stage_findings (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                        (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
+                        (s: stage a v o q) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (ensures
+        rev (plan_stage w reg node_id s acc).ac_findings ==
+        app (rev acc.ac_findings) (stage_findings reg s)) =
+  app_nil (rev acc.ac_findings);
+  match s with
+  | SCompute _ -> ()
+  | SEffect e ->
+    let cap = capability e in
+    if not (reg.r_gate cap) then ()
+    else
+      (match reg.r_policy e with
+       | OSome _ -> ()
+       | ONone ->
+         (match e with
+          | RunQuery name query ->
+            (match reg.r_query_posture with
+             | Reaching -> ()
+             | PureRead ->
+               (match w.w_query name query acc.ac_store.st_bindings with
+                | RErr _ -> ()
+                | ROk _ -> ()))
+          | ApplyOps ops ->
+            (match plan_ops w cap reg.r_op_perform ops acc.ac_store.st_tree acc.ac_staged with
+             | RErr _ -> ()
+             | ROk _ ->
+               (match reg.r_op_perform with
+                | ONone -> ()
+                | OSome _ -> ()))
+          | HostCall fn _ into ->
+            (match reg.r_lookup fn with
+             | ONone -> ()
+             | OSome _ ->
+               (match slot_refused w into with
+                | OSome _ -> ()
+                | ONone -> ()))
+          | EmitPatch _ -> ()
+          | Notify _ _ -> ()
+          | Report f ->
+            (match reg.r_record f with
+             | RErr _ -> ()
+             | ROk _ -> ())))
+
+/// The plan's findings are what it started with followed by the
+/// program's, in program order.
+let rec plan_findings (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                      (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
+                      (stages: list (stage a v o q)) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (ensures
+        rev (plan w reg node_id stages acc).ac_findings ==
+        app (rev acc.ac_findings) (reported w reg node_id stages acc))
+      (decreases stages) =
+  match stages with
+  | [] -> app_nil (rev acc.ac_findings)
+  | s :: rest ->
+    if acc.ac_halted then begin
+      plan_findings w reg node_id rest acc;
+      app_nil (rev acc.ac_findings)
+    end
+    else begin
+      plan_stage_findings w reg node_id s acc;
+      plan_findings w reg node_id rest (plan_stage w reg node_id s acc);
+      app_assoc (rev acc.ac_findings) (stage_findings reg s)
+                (reported w reg node_id rest (plan_stage w reg node_id s acc))
+    end
+
+/// **`findings_in_program_order`.** The outcome's findings — on commit
+/// AND on rollback — are exactly the findings the plan recorded, each
+/// admitted report's in stage order up to the halt, and the perform phase
+/// adds none: a host reading the outcome's findings reads the program's
+/// reports in the order the program made them (D45), and a finding
+/// survives the rollback.
+let findings_in_program_order (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                              (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
+                              (stages: list (stage a v o q)) (s: store t b)
+  : Lemma
+      (ensures (run w reg node_id stages s).oc_findings == reported w reg node_id stages (start s)) =
+  let planned = plan w reg node_id stages (start s) in
+  plan_findings w reg node_id stages (start s);
+  if planned.ac_halted then ()
+  else perform_spec w reg (rev planned.ac_staged) planned
 
 (* ───────────────────────────────────────────────────────────────────
    THE OP-CHANNEL GUARD AND THE PERFORMER'S STATE (Phase 1974), AND THE
@@ -2357,22 +2809,6 @@ let decide (#v: Type0) (#p: Type0) (dur: durable v p) (k: nat) (call: staged_cal
        else if dur.d_reinvoke then Invoke true
        else Undecided)
 
-/// One staged call's success, recorded and landed — the `ROk` clause of
-/// `perform`, named so the replay below can reuse it for a SERVED answer
-/// as well as an invoked one.
-let land (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
-         (w: witness t b v o q a eff d) (call: staged_call v p) (result: v)
-         (acc: accumulator t b v o eff d p)
-  : accumulator t b v o eff d p =
-  let recorded = { acc with ac_externally = call.sc_capability :: acc.ac_externally } in
-  match call.sc_into with
-  | ONone -> recorded
-  | OSome key ->
-    { recorded with
-      ac_store =
-        { recorded.ac_store with
-          st_bindings = w.w_assign key result recorded.ac_store.st_bindings } }
-
 /// F#: `DurableOutcome` less the handler outcome — the four ordinal lists
 /// a durable run reports, beside the accumulator the perform phase left.
 noeq type replay_result (t: Type0) (b: Type0) (v: Type0) (o: Type0) (eff: Type0) (d: Type0) (p: Type0) = {
@@ -2425,28 +2861,6 @@ let rec replay (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: 
         | ROk result ->
           let r = replay w reg dur (k + 1) rest (land w call result acc) in
           { r with rp_invoked = k :: r.rp_invoked; rp_overrides = app overrides r.rp_overrides }))
-
-/// F#: the two outcome constructors of `Handler.runWith`, as `run` writes
-/// them, over whatever accumulator the perform phase left.
-let finish (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
-           (s: store t b) (final: accumulator t b v o eff d p)
-  : outcome t b v o eff d =
-  if final.ac_halted then
-    { oc_store = s;
-      oc_committed = false;
-      oc_performed = rev final.ac_externally;
-      oc_patches = [];
-      oc_notifications = [];
-      oc_client_effects = [];
-      oc_diagnostics = rev final.ac_diagnostics }
-  else
-    { oc_store = final.ac_store;
-      oc_committed = true;
-      oc_performed = app (rev final.ac_performed) (rev final.ac_externally);
-      oc_patches = rev final.ac_patches;
-      oc_notifications = rev final.ac_notifications;
-      oc_client_effects = rev final.ac_client_effects;
-      oc_diagnostics = rev final.ac_diagnostics }
 
 /// F#: `DurableOutcome`.
 type durable_outcome (t: Type0) (b: Type0) (v: Type0) (o: Type0) (eff: Type0) (d: Type0) = {
@@ -2893,3 +3307,158 @@ let resumed_plan_observes_entry (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) 
         plan (mk (ROk x)) reg node_id stages (start s)) =
   entry_read_served dur k subject x live1;
   entry_read_served dur k subject x live2
+
+(* ───────────────────────────────────────────────────────────────────
+   THE STAGED READ ON RESUME, AND THE JOURNALED FINDING (Phase 2212;
+   D34, D44, D45).
+
+   A reaching read is a staged call, so the durable discipline above
+   already decides it: what is new is stated — the read's ordinal served,
+   the evaluator not asked, the record landed in the QUERY slot. A
+   finding is recorded while PLANNING, through the recorder the durable
+   interpreter installs as `RecordFinding` (`Durable.runGuarded`'s
+   `journalFinding`): the same wrapper the entry read goes through, at an
+   ordinal of its own in the one cursor sequence, under `Report` with the
+   finding's content address as its subject, declared idempotent and
+   asked no operator refusal, the finding ENCODED as the recorded value
+   and the record DECODED back. `journal_finding` is that wrapper's
+   answer, clause for clause with `wrapAt` under those settings. The
+   codec (`Finding.encode` / `Finding.decode`) and the content address
+   (`Finding.subject`) are the host's and arrive as arrows; every theorem
+   below that needs a property of them names it as a hypothesis.
+   ─────────────────────────────────────────────────────────────────── *)
+
+/// **`staged_read_not_asked_on_resume`.** A staged read the journal
+/// records as COMPLETED at its ordinal, under the read's identity
+/// (`RunQuery`, no subject — `journalQuery`'s), followed by calls the
+/// journal has nothing for, is SERVED: its ordinal is reported replayed,
+/// the performer is invoked at exactly the ordinals of the calls after
+/// it that the perform phase asks — never at the read's, so the
+/// evaluator is not asked again — and the recorded answer is landed in
+/// the read's QUERY slot through `w_land_query`, over the bindings as of
+/// the landing, with the rest performed from there. D34's "asked only
+/// once", on resume, as an equation.
+let staged_read_not_asked_on_resume (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                                    (w: witness t b v o q a eff d) (reg: registry t v o q p) (dur: durable v p)
+                                    (k: nat) (c: staged_call v p) (slot: string) (x: v)
+                                    (rest: list (staged_call v p)) (acc: accumulator t b v o eff d p)
+  : Lemma
+      (requires
+        c.sc_into == LQuery slot /\
+        dur.d_journal.j_recorded k == OSome (c.sc_capability, dur.d_subject c) /\
+        dur.d_journal.j_step k == JValue x /\
+        unrun_from dur (k + 1) rest)
+      (ensures
+        (let r = replay w reg dur k (c :: rest) acc in
+         r.rp_replayed == [k] /\
+         r.rp_invoked == ordinals (k + 1) (asked reg.r_perf rest) /\
+         r.rp_indeterminate == [] /\
+         r.rp_overrides == [] /\
+         r.rp_acc == perform w reg rest (land w c x acc) /\
+         (land w c x acc).ac_store.st_bindings == w.w_land_query slot x acc.ac_store.st_bindings)) =
+  resume_performs_only_the_rest w reg dur k [c] rest acc
+
+/// F#: the refusal `wrapAt` answers a call whose recorded identity at the
+/// ordinal is not its own, for a call that is NOT the plan's entry read:
+/// `durable-replay-divergence` — unless the RECORD there is an entry
+/// read, in which case the resume reads where the recorded run read and
+/// the refusal names that read (`DurableCode.entryReadDiverged` over the
+/// recorded subject, the empty string where it had none).
+let diverged_refusal (recorded: string & opt string) : string =
+  let (cap, subject) = recorded in
+  if cap = read_entry_capability then
+    entry_read_refusal (match subject with
+                        | OSome s -> s
+                        | ONone -> "")
+  else replay_divergence
+
+/// F#: `Durable.runGuarded`'s `journalFinding` — the `RecordFinding` the
+/// durable interpreter installs, at the ordinal `k` the cursor holds when
+/// the plan reports: `subject` is `Finding.subject` (the content address of
+/// the finding's canonical form), `enc` / `dec` are `Finding.encode` /
+/// `Finding.decode`. The divergence check first, then the recorded value
+/// decoded, the recorded refusal, and the live record — the finding
+/// encoded and decoded back — where the journal has nothing or could not
+/// decide (a recording repeats freely, so the indeterminate window closes
+/// by recording again).
+let journal_finding (#v: Type0) (dur: journal v) (k: nat)
+                    (subject: finding -> string) (enc: finding -> v) (dec: v -> res finding)
+                    (f: finding)
+  : res finding =
+  let identity = (report_capability, OSome (subject f)) in
+  match dur.j_recorded k with
+  | OSome recorded ->
+    if not (recorded = identity) then RErr (diverged_refusal recorded)
+    else
+      (match dur.j_step k with
+       | JValue x -> dec x
+       | JRefusal r -> RErr r
+       | JUnrun -> dec (enc f)
+       | JIndeterminate -> dec (enc f))
+  | ONone ->
+    (match dur.j_step k with
+     | JValue x -> dec x
+     | JRefusal r -> RErr r
+     | JUnrun -> dec (enc f)
+     | JIndeterminate -> dec (enc f))
+
+/// **`finding_served`.** A finding the journal records as COMPLETED at its
+/// ordinal, under the finding's own identity (`Report` with its content
+/// address), is answered the RECORD, decoded — whatever the live finding's
+/// text and whatever the codec does with it: the resumed plan carries the
+/// finding the recorded run reported, and reports nothing of its own.
+let finding_served (#v: Type0) (dur: journal v) (k: nat)
+                   (subject: finding -> string) (enc: finding -> v) (dec: v -> res finding)
+                   (f: finding) (x: v)
+  : Lemma
+      (requires
+        dur.j_recorded k == OSome (report_capability, OSome (subject f)) /\
+        dur.j_step k == JValue x)
+      (ensures journal_finding dur k subject enc dec f == dec x) = ()
+
+/// **`finding_diverged_refused`.** A report at an ordinal whose recorded
+/// identity is NOT this finding's — another finding's address, a staged
+/// call's identity, an entry read's — is refused, whatever value the
+/// journal holds there: under `durable-replay-divergence`, or naming the
+/// entry read where the record is one. A resume that would report
+/// something else where the recorded run reported is a typed refusal,
+/// never a record served for another finding.
+let finding_diverged_refused (#v: Type0) (dur: journal v) (k: nat)
+                             (subject: finding -> string) (enc: finding -> v) (dec: v -> res finding)
+                             (f: finding) (recorded: string & opt string)
+  : Lemma
+      (requires
+        dur.j_recorded k == OSome recorded /\
+        recorded =!= (report_capability, OSome (subject f)))
+      (ensures journal_finding dur k subject enc dec f == RErr (diverged_refusal recorded)) = ()
+
+/// **`different_finding_refused`.** The corollary D45 claims: where the
+/// recorded run reported `g`, a resume that would report `f` at the same
+/// ordinal is refused under `durable-replay-divergence` whenever the two
+/// findings have different content addresses. Conditional on the address
+/// telling the two apart, which is `Finding.subject`'s to guarantee (a
+/// SHA-256 over the canonical form) and not this model's.
+let different_finding_refused (#v: Type0) (dur: journal v) (k: nat)
+                              (subject: finding -> string) (enc: finding -> v) (dec: v -> res finding)
+                              (f: finding) (g: finding)
+  : Lemma
+      (requires
+        dur.j_recorded k == OSome (report_capability, OSome (subject g)) /\
+        subject g =!= subject f)
+      (ensures journal_finding dur k subject enc dec f == RErr replay_divergence) = ()
+
+/// **`finding_unrun_is_live`.** With nothing recorded at the ordinal — a
+/// first run, or `Journal.none` — the recorder answers the finding ENCODED
+/// and DECODED back: the live record. Under a codec that round-trips
+/// (`dec (enc f) == ROk f`, the host's `Finding` codec law), that is the
+/// finding itself, which is what `FindingRecorder.live` answers outside a
+/// durable run — the durable recorder with nothing recorded is the live
+/// one, conditional on the codec.
+let finding_unrun_is_live (#v: Type0) (dur: journal v) (k: nat)
+                          (subject: finding -> string) (enc: finding -> v) (dec: v -> res finding)
+                          (f: finding)
+  : Lemma
+      (requires dur.j_recorded k == ONone /\ dur.j_step k == JUnrun)
+      (ensures
+        journal_finding dur k subject enc dec f == dec (enc f) /\
+        (dec (enc f) == ROk f ==> journal_finding dur k subject enc dec f == ROk f)) = ()

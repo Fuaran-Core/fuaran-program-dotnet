@@ -147,6 +147,8 @@ $modules = @(
                Subject = "every journal shape the crash fixtures leave, against Durable.runWith at the toy witness, with three go-red bends" }
             @{ Project = "Fuaran.Program.Tests"; List = "Phase 2165 - the durable tier at the toy witness: the entry read, the prefix, per-kind facets and composed contracts"; MinCases = 22
                Subject = "the plan's entry read journaled, served on resume and refused naming the read, the extracted entry_read beside the reader runReading hands a witness over six journal shapes with a go-red bend, the op prefix at the performer and the contract, per-kind facets, composed contracts" }
+            @{ Project = "Fuaran.Program.Tests"; List = "Phase 2212 - the staged read and the report as oracle at the toy witness"; MinCases = 4
+               Subject = "the staged read journaled at its ordinal and served on resume beside Durable.run over the staged-read corpus, an undecodable query record refused at the read, and the extracted journal_finding beside the durable recorder over nine journal shapes with a go-red bend" }
         )
     }
     @{

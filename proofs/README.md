@@ -1125,6 +1125,26 @@ The denial sink (`OnDenied`) is a unit-returning observer and is not modelled.
     (Phase 2165).
 24. **A plan built over the served read is the plan built over the recorded value, for two worlds at
     once** — `resumed_plan_observes_entry` (Phase 2165).
+25. **Under a pure read an admitted read is asked while planning and lands there — the arm as it
+    was — and the whole plan is the same under every staging arrow** —
+    `pure_read_plans_while_planning`, `pure_read_reads_no_stage` (Phase 2212, D47).
+26. **Under a reaching evaluator an admitted read stages exactly one call, landing in its query
+    slot, records `TReached "RunQuery"`, and touches nothing else; its stage is the same under every
+    evaluator** — `staged_read_stages_one_call`, `staged_read_asks_no_evaluator` (Phase 2212).
+27. **A completed staged read is served on resume: its ordinal replayed, the performer invoked only
+    after it, the record landed in the query slot** — `staged_read_not_asked_on_resume` (Phase 2212).
+28. **An admitted report records its finding and touches nothing else, or halts on the recorder's
+    refusal** — `report_records_and_moves_nothing`, `report_refused_halts` (Phase 2212).
+29. **The outcome's findings are the plan's, in program order, on commit and on rollback; the perform
+    phase adds none** — `findings_in_program_order` (Phase 2212).
+30. **The journaled finding is served from its record, refused where the record is another's
+    (naming the entry read where the record is one), and live where there is none** —
+    `finding_served`, `finding_diverged_refused`, `different_finding_refused`,
+    `finding_unrun_is_live` (Phase 2212), over `journal_finding`, the durable recorder at an ordinal
+    on the entry read's terms.
+31. **A staged read is `staged-query` in both closed defect vocabularies and a report in neither;
+    the undo of a staged read is refused at it** — `staged_read_named_in_both_vocabularies`,
+    `report_names_no_defect`, `staged_read_undo_refused` (`Undo.fst`, Phase 2212).
 
 Since Phase 1976 the op view is taken to EXHAUSTION (`op_view o`, `views`), as the action view has
 been since Phase 1898: `plan_ops` plans the views (`plan_views` / `plan_view` / `plan_repeat`, and
@@ -1206,6 +1226,20 @@ lose.
   the planned state and the op; the Staging and EffectGate models' tokens carry the state and the op
   only. Every performer the oracles stage reads none of the prefix, so the model's side hands the
   entry prefix. The prefix's content is pinned by `DurableInterpreterTests` (F-RECEIPTS), not proved.
+- **A served query record decodes** (Phase 2212). `w_land_query` is total: a value the journal serves
+  at a staged read's ordinal that no longer decodes as a table is read as the refusal production's
+  `decodeAnswer` turns it into, at the snapshot (`plainJournal` in the host), which halts the handler
+  at the read with the ordinal replayed on both sides. The host's second durable test runs that shape.
+- **A report's ordinal is outside the threaded cursor** (Phase 2212). A report is recorded while
+  planning through the one cursor (D45); the model addresses it by its own ordinal, as it addresses
+  the entry read, so the whole-run durable differential covers staged-read programs with no report,
+  and the finding is compared recorder to recorder over nine journal shapes.
+- **The codec and the content address are the host's** (Phase 2212). `finding_unrun_is_live` answers
+  the finding itself only under `dec (enc f) == ROk f`, and `different_finding_refused` only where the
+  two addresses differ; both are `Finding`'s to guarantee, and both are named as hypotheses.
+- **The replay vocabulary is the effect axis's** (Phase 2212). `replay_defects_of_effect` decides the
+  arms `HandlerWire.replayReasons` decides itself; the op-axis and action-axis walks are
+  `ProgramWire`'s and are compared over effect stages only.
 - **The toolchain**, on the same terms as the fold theorem's.
 
 #### Not claimed

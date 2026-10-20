@@ -3270,7 +3270,7 @@ therefore runs production at `QueryPosture.PureRead` and stays exact. The staged
 (D34) and in the posture (here), is pinned by the suites and not by a theorem. A model of it would
 give `w_query` a posture and stage a reaching read as `plan_stage` stages a host call. This entry
 records the gap rather than closing it, because it predates the entry and the entry does not widen
-it.
+it. _(Closed by D47, Phase 2212: the model stages a reaching read and both postures name it.)_
 
 **Assumptions kept, with the evidence that would falsify each.**
 
@@ -3405,6 +3405,7 @@ specification's main line as well as against this branch: there it simply meets 
   The arm stages nothing, trails nothing and moves no state, so the model's theorems are not
   contradicted. But production's `Report` is pinned by `ReportTests`, not by a theorem. Closing that
   gap is a proof-leg act with its own prover run, and it is recorded here rather than claimed.
+  _(Closed by D47, Phase 2212: the model carries the arm, and the journaled finding is a theorem.)_
 - *A finding cannot carry a value the plan computed.* Its members are literals in the handler, and the
   value channel (D42) binds op operands, not effect members.
 
@@ -3491,3 +3492,134 @@ what the descriptions say.
 **Tidied in the same landing.** Reviewed: `Witness.fs`, `Demanded.fs` and this record. Removed: the
 stale claim in `StateNamespaceDemand.Written`, above. Considered and kept: nothing else in either file
 is made dead or duplicate by this entry.
+
+## D47 — The staging model reaches the staged read and the report: the query posture is the REGISTRY's (D44's sketch amended), a reaching read is staged as a host call is and lands in a query slot, `Report` is a seventh arm carrying a concrete finding, both closed defect vocabularies name `staged-query` in the model, and the journaled finding is modelled at an ordinal as the entry read is; closes D44's and D45's "recorded rather than claimed" paragraphs (2026-10-21)
+
+**2026-10-21. Phase 2212.** Two paths in the server tier were pinned by suites and by no theorem: a
+read under an evaluator its host could not declare a pure read (D34, D44) and a finding (D45). The
+extracted model planned every read while planning, `Undo.fst`'s `stage_defects` answered `[]` for a
+read, the model had no `Report` arm, and the oracle differential ran production at `PureRead` only
+and refused `Report` by name. This entry puts both paths in the model as equations the prover checks
+and the differential exercises, and retires both gap paragraphs (each now points here).
+
+**Premises checked against the tree first.** (1) *D44's sketch — "give `w_query` a posture" —
+places the posture on the WITNESS.* Production reads it off the REGISTRY
+(`ServerEffectRegistry.queryPosture`, `registry.QueryEvaluator |> QueryEvaluator.isStaged`), and the
+registry is where the model keeps every other host declaration the plan phase reads (the gate, the
+policy, the lookup, the op performer). The sketch is amended: the posture is `r_query_posture` on
+the registry, the ONE fact the run and the static postures consult, and `w_query` stays the
+evaluator-and-land arrow it was. (2) *The staged list holds host calls that land in a state slot or
+nowhere.* Production's `Landing` has a third arm, the query slot, landed through `LandQuery` rather
+than `Assign`; the model's `sc_into: opt string` became `landing` (`LNowhere | LState | LQuery`),
+production's own vocabulary, and the witness gained `w_land_query`. (3) *The model had no replay
+vocabulary at all.* "Both closed defect vocabularies" could not be a theorem over one; `Undo.fst` now
+carries the EFFECT-axis half of `HandlerWire.replayReasons` (`replay_defect`,
+`replay_defects_of_effect`), bounded below. (4) *A staged read's answer is a table; the journal
+holds a value.* Production routes a reaching evaluator through `encodeAnswer` into the wrapper and
+`decodeAnswer` out of it (`QueryEvaluator.through`), so the staged token's answer is the encoded
+table and the landing decodes — the model's `w_land_query` is `decodeAnswer` then `LandQuery`.
+
+**The shape, clause for clause.** `plan_effect`'s `RunQuery` arm matches `r_query_posture`:
+`Reaching` stages `staged_read cap reg.r_query_stage name query` — capability `RunQuery`, the token
+and argument the registry answers (production's `fun _ -> evaluator.Evaluate source pipeline
+resolve`, encoded), landing `LQuery name` — records `TReached "RunQuery"` on the trail and extends
+neither the store nor `ac_performed`; `PureRead` is the arm as it was. `r_query_stage` splits the
+staged closure into token and argument exactly as `r_op_perform` does, the third instance of that
+split. `Report f` reads `r_record` (`RecordFinding`, the live recorder or the durable one) and
+extends `ac_performed` and `ac_findings` with nothing else touched; the outcome carries
+`oc_findings` on commit AND on rollback, as production's does. `land` is one function, shared by
+`perform` and the durable `replay`, with the query-slot arm. `Undo.stage_defects` takes the posture
+as a REQUIRED parameter, as production's does (D44: a default is the gap). The finding is a concrete
+record (`f_code`, `f_severity`, `f_message`) rather than a type parameter, because the theorems
+about the arm are about findings.
+
+**The theorems.** Staging: `pure_read_plans_while_planning` (the `PureRead` arm as an equation over
+`w_query`), `pure_read_reads_no_stage` (the whole plan is the same under every staging arrow —
+"exactly as before"), `staged_read_stages_one_call` (the `Reaching` arm as an equation: one call, one
+trail step, nothing else), `staged_read_asks_no_evaluator` (the read's stage is the same under every
+`w_query`), `staged_read_not_asked_on_resume` (a completed read is served, the performer invoked only
+at the ordinals after it, the record landed in the query slot), `report_records_and_moves_nothing`,
+`report_refused_halts`, `findings_in_program_order` (the outcome's findings are the plan's, stage by
+stage, on commit and rollback — the perform phase adds none), `finding_served`,
+`finding_diverged_refused`, `different_finding_refused`, `finding_unrun_is_live`. Undo:
+`staged_read_named_in_both_vocabularies`, `worst_one_way`, `report_names_no_defect`,
+`staged_read_undo_refused` (`StagedQueryPostureTests`' predicate as a theorem: a one-read program
+under `Reaching` commits with the trail `[TReached "RunQuery"]` and its undo is refused
+`undo-one-way-step` at step 0 naming `RunQuery`). Every earlier theorem keeps its statement and
+re-proves; `plan_pure`, `plan_stage_pure` and `perform_spec` gained the new arms and clauses.
+
+**The journaled finding is in reach of the durable model exactly as the entry read is.** Production
+records a finding through `wrapAt` under `Report`, subject the finding's content address, declared
+idempotent, the finding encoded as the value and the record decoded back. `journal_finding` is that
+wrapper's answer at an ordinal `k`, with the codec (`enc`/`dec`) and the address (`subject`) as
+arrows; `diverged_refusal` carries `wrapAt`'s two divergence codes (the entry-read-naming one where
+the record is an entry read). The claim D45 made — served on resume, a different finding refused —
+is `finding_served` and `different_finding_refused`, the latter conditional on the address telling
+the findings apart. What is NOT modelled is the cursor: a report is recorded while planning at an
+ordinal the model does not thread through `plan`, so the whole-run durable differential covers
+staged-read programs with no report, and the finding is compared recorder-to-recorder over nine
+journal shapes. This is D39's one-cursor assumption, inherited unchanged.
+
+**The replay vocabulary is bounded on purpose.** `replay_defects_of_effect` decides the arms
+`HandlerWire.replayReasons` decides on the effect axis itself — the staged read, the host call, the
+notification, and nothing for a report, an `ApplyOps`, an `EmitPatch`. The op-axis arms
+(`ProgramWire.replayDefectsOfOp`) and the action-axis arm (`replayDefectsOfActionIn`) are the wire
+module's walks over the encoded document and stay outside the model; the differential compares the
+two over the corpus's EFFECT stages. Modelling the op-axis walk would be a model of `ProgramWire`,
+which is another phase's subject if it is anyone's.
+
+**The differential.** `ToyStagingOracleTests` draws handlers under a scripted reaching evaluator
+(`stagedReadCases`, eight cases, the declared pure read as the control), reporting programs
+(`reportCases`, six), and runs both through the undo host, where both postures are compared under
+the registry's declaration and the effect-stage replay reasons beside them; the effect-gate corpus
+gains the arm and two shapes (729 triples); a new host list, `Phase 2212 - the staged read and the
+report as oracle at the toy witness`, runs `durable_run` beside `Durable.run` twice over the
+staged-read corpus, exercises the undecodable-record assumption on both sides, and compares
+`journal_finding` with the durable recorder over nine journal shapes with a go-red bend.
+`ToyDurableReplayTests`' hand-built witness and registry gained the new members. The scripted
+performer marks a staged read's own refusal (`refused:RunQuery`) so the claim against the log can
+stop there.
+
+**Assumptions kept, with the evidence that would falsify each.**
+
+- *One cursor.* A report's ordinal precedes every staged call's by the number of plan-phase records
+  before it; the model addresses it by its own ordinal. Falsified by a production run whose
+  `Invoked`/`Replayed` lists do not shift by the report count — the durable host's first test would
+  then diverge on a reporting program, which is why it excludes them today.
+- *The codec round-trips.* `finding_unrun_is_live` answers `dec (enc f)`, the finding itself only
+  under `dec (enc f) == ROk f`. Falsified by a `Finding.encode`/`decode` pair that does not
+  round-trip; `ReportTests` pins the pair.
+- *The content address tells two findings apart.* `different_finding_refused` is conditional on
+  `subject g =!= subject f`. Falsified by a collision in `Finding.subject`'s SHA-256 over the canonical
+  form.
+- *A served query record that no longer decodes is a refusal at the snapshot.* `w_land_query` is
+  total; `plainJournal` reads such a record as `JRefusal query-answer-undecodable`, which halts where
+  production's `decodeAnswer` halts, with the ordinal replayed on both sides. Falsified by production
+  refusing somewhere other than the read, or not counting the ordinal replayed — the host's second
+  test runs that shape on both sides.
+- *The evaluator-blindness of a staged read is per stage.* `staged_read_asks_no_evaluator` is stated
+  over the read's own stage; the lift to a whole plan is by inspection that no other arm names
+  `w_query`. A plan-level equation would need the extensionality lemmas over the op views, which
+  nothing downstream asks for yet.
+- *The model's `decide` names one divergence code.* A staged call at an ordinal where the record
+  holds an ENTRY READ is refused `durable-entry-read-diverged:<read>` by production's `wrapAt` and
+  `durable-replay-divergence` by the model's `decide` (Phase 1980's shape, unchanged here; the
+  finding's `journal_finding` carries both codes). No differential case holds that shape. Recorded
+  as a known imprecision of a shipped theorem's refusal text, not of its verdict; a later phase that
+  threads `diverged_refusal` through `decide` closes it.
+- *A read with no binding channel.* Production halts a `RunQuery` under a composition with no
+  dispatch axis (`NoBindingChannel`); the model has never had that clause, and the toy always has a
+  channel. Pre-existing and unchanged.
+
+**Tidied in the same landing.** `run` is `run_planned` without the plan and `run_planned` answers
+through `finish`, which was duplicated in the durable section — one constructor where there were
+three; `land` was defined twice (once in the durable section) and inlined in six lemma bodies across
+the three modules, and is now one function the lemmas call; the oracle host's `evalErrorKind`
+(production's `QueryFault.describe` is read instead), its hand-written reverse effect mapping
+(`productionEffect`), and the gate mutant's hand-written outcome constructors (`Staging.finish`).
+Considered and kept: `Undo.fst`'s five mutually-recursive lemma groups over the op views, each
+restating the `plan_views` skeleton — the duplication is structural (each proves a different
+property by the same induction) and a shared induction principle would be a redesign.
+
+**Version.** Nothing packed moves: the oracle project is `IsPackable=false` and the hosts are test
+code. `STABILITY.md` is untouched.

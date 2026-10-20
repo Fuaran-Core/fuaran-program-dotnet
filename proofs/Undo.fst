@@ -70,6 +70,20 @@
 /// writes is BoundedFold's `reverse_run` (Phase 1976), proved there and
 /// applied here, never re-proved.
 ///
+/// Since Phase 2212 (DECISIONS.md D47) the static posture reads the
+/// HOST's query posture, as production's does: `stage_defects` takes a
+/// REQUIRED `query_posture` and names a read under a reaching evaluator
+/// `StagedQuery`, graded one-way; `replay_defect` and
+/// `replay_defects_of_effect` are the effect-axis half of
+/// `HandlerWire.replayReasons`, so "both closed vocabularies name
+/// `staged-query`" is a theorem (`staged_read_named_in_both_vocabularies`)
+/// rather than a reading; a report names no defect in either
+/// (`report_names_no_defect`); and `staged_read_undo_refused` is the
+/// static-dynamic agreement `StagedQueryPostureTests` pins, as a theorem
+/// over the model. The posture-bearing theorems (`plan_clear`,
+/// `undo_run_restores`) read the posture off the registry the run is
+/// given, so the static side and the run consult one fact.
+///
 module Undo
 
 open Staging
@@ -89,7 +103,11 @@ noeq type undo_class (t: Type0) (o: Type0) =
   | OneWay : reason: string -> undo_class t o
 
 /// F#: `UndoDefect` — WHY a handler is not provably reversible, a closed
-/// vocabulary of derived facts, as the replay classification's is.
+/// vocabulary of derived facts, as the replay classification's is. One
+/// arm, `StagedQuery` (Phase 2187, D44), is the declared form read under
+/// the HOST's query posture: a read answered by an evaluator the host
+/// could not declare a pure read reached the world (`TReached` on the
+/// trail) and has no inverse.
 type defect =
   | CompensatedOp
   | OneWayOp
@@ -97,6 +115,7 @@ type defect =
   | OutboundNotification
   | EmittedPatch
   | ComputeOutsideFragment
+  | StagedQuery
 
 /// F#: `UndoVerdict`.
 type verdict =
@@ -106,10 +125,11 @@ type verdict =
   | Unknown
 
 /// F#: `Undo.gradeOfDefect`. Two defects are PROOFS that an op or a
-/// stage has a compensation and not an inverse, or neither; two say a
-/// step reached the world with no inverse vocabulary at all; and two —
-/// an emitted patch, a compute stage outside Phase 1976's reversible
-/// fragment — are places this classification does not decide.
+/// stage has a compensation and not an inverse, or neither; three say a
+/// step reached the world with no inverse vocabulary at all (a host
+/// call, a notification, a staged read); and two — an emitted patch, a
+/// compute stage outside Phase 1976's reversible fragment — are places
+/// this classification does not decide.
 let grade (d: defect) : verdict =
   match d with
   | CompensatedOp -> Compensable
@@ -118,6 +138,7 @@ let grade (d: defect) : verdict =
   | OutboundNotification -> OneWayVerdict
   | EmittedPatch -> Unknown
   | ComputeOutsideFragment -> Unknown
+  | StagedQuery -> OneWayVerdict
 
 /// F#: `Undo.worst`. One-way dominates unknown, which dominates
 /// compensable, which dominates reversible: a proof that a step cannot
@@ -196,22 +217,63 @@ let rec distinct_from (seen: list defect) (ds: list defect) : Tot (list defect) 
 /// F#: `Undo.defectsOfStage`. A compute stage is read through Phase
 /// 1976's reversible fragment (`reversible`, production's
 /// `BoundedActions.reversible`, opaque here as the fold is); a read
-/// lands a table and reaches nothing; the op arm reads the member; a
+/// lands a table and reaches nothing — unless the host's evaluator is
+/// staged (`query`, the registry's `r_query_posture`; Phase 2212, D44),
+/// in which case it reached the world; the op arm reads the member; a
 /// host call and a notification reached the world; a patch is the host's
-/// to apply.
+/// to apply; a report (D45) is not an act and contributes nothing.
+/// `query` is REQUIRED, as production's is: a posture computed without
+/// the host's declaration is the posture that silently reads as the fold.
 let stage_defects (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0)
-                  (w: witness t b v o q a eff d) (cls: o -> undo_class t o) (reversible: a -> bool)
+                  (w: witness t b v o q a eff d) (query: query_posture)
+                  (cls: o -> undo_class t o) (reversible: a -> bool)
                   (s: stage a v o q)
   : list defect =
   match s with
   | SCompute action -> if reversible action then [] else [ComputeOutsideFragment]
   | SEffect e ->
     (match e with
-     | RunQuery _ _ -> []
+     | RunQuery _ _ ->
+       (match query with
+        | Reaching -> [StagedQuery]
+        | PureRead -> [])
      | ApplyOps ops -> distinct_from [] (view_defects cls (views w ops))
      | HostCall _ _ _ -> [OpaqueHostCall]
      | EmitPatch _ -> [EmittedPatch]
-     | Notify _ _ -> [OutboundNotification])
+     | Notify _ _ -> [OutboundNotification]
+     | Report _ -> [])
+
+/// F#: `ReplayDefect`, the arms `HandlerWire.replayReasons` decides on the
+/// EFFECT axis itself (Phase 2212): a staged read, a host call, a
+/// notification. The op-axis arms (`ProgramWire.replayDefectsOfOp` over
+/// an `ApplyOps`'s or an `EmitPatch`'s ops) and the action-axis arm
+/// (`replayDefectsOfActionIn` over a compute stage) are the wire module's
+/// walks over the encoded document and are not modelled; a differential
+/// host compares the two over a corpus whose ops and actions carry none.
+type replay_defect =
+  | ReplayStagedQuery
+  | ReplayOpaqueHostCall
+  | ReplayOutboundNotification
+
+/// F#: `HandlerWire.replayReasons`'s `ofEffect`, clause for clause: a
+/// read under a reaching evaluator is a reach a re-run repeats (D44); a
+/// host call and a notification reach outside; a report records a
+/// finding and reaches nothing — re-running it records the same finding,
+/// and the durable tier serves it (D45). A query posture is REQUIRED
+/// here for the reason it is in `stage_defects`.
+let replay_defects_of_effect (#v: Type0) (#o: Type0) (#q: Type0)
+                             (query: query_posture) (e: server_effect v o q)
+  : list replay_defect =
+  match e with
+  | RunQuery _ _ ->
+    (match query with
+     | Reaching -> [ReplayStagedQuery]
+     | PureRead -> [])
+  | ApplyOps _ -> []
+  | EmitPatch _ -> []
+  | HostCall _ _ _ -> [ReplayOpaqueHostCall]
+  | Notify _ _ -> [ReplayOutboundNotification]
+  | Report _ -> []
 
 /// One stage's defects, positioned at its ordinal.
 let rec positioned (k: nat) (ds: list defect) : Tot (list (nat & defect)) (decreases ds) =
@@ -222,18 +284,20 @@ let rec positioned (k: nat) (ds: list defect) : Tot (list (nat & defect)) (decre
 /// F#: `Undo.reasons` — every defect, positioned by its stage ordinal, in
 /// stage order.
 let rec reasons_from (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0)
-                     (w: witness t b v o q a eff d) (cls: o -> undo_class t o) (reversible: a -> bool)
+                     (w: witness t b v o q a eff d) (query: query_posture)
+                     (cls: o -> undo_class t o) (reversible: a -> bool)
                      (stages: list (stage a v o q)) (k: nat)
   : Tot (list (nat & defect)) (decreases stages) =
   match stages with
   | [] -> []
-  | s :: rest -> app (positioned k (stage_defects w cls reversible s)) (reasons_from w cls reversible rest (k + 1))
+  | s :: rest -> app (positioned k (stage_defects w query cls reversible s)) (reasons_from w query cls reversible rest (k + 1))
 
 let reasons (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0)
-            (w: witness t b v o q a eff d) (cls: o -> undo_class t o) (reversible: a -> bool)
+            (w: witness t b v o q a eff d) (query: query_posture)
+            (cls: o -> undo_class t o) (reversible: a -> bool)
             (stages: list (stage a v o q))
   : list (nat & defect) =
-  reasons_from w cls reversible stages 0
+  reasons_from w query cls reversible stages 0
 
 let rec defects_of (rs: list (nat & defect)) : Tot (list defect) (decreases rs) =
   match rs with
@@ -243,10 +307,11 @@ let rec defects_of (rs: list (nat & defect)) : Tot (list defect) (decreases rs) 
 /// F#: `Undo.posture` — the verdict the reasons carry: no reason is the
 /// only proof of `Reversible`.
 let posture (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0)
-            (w: witness t b v o q a eff d) (cls: o -> undo_class t o) (reversible: a -> bool)
+            (w: witness t b v o q a eff d) (query: query_posture)
+            (cls: o -> undo_class t o) (reversible: a -> bool)
             (stages: list (stage a v o q))
   : verdict =
-  verdict_of (defects_of (reasons w cls reversible stages))
+  verdict_of (defects_of (reasons w query cls reversible stages))
 
 (* ───────────────────────────────────────────────────────────────────
    THE UNDO RUN — `Undo.run`: the refusal, the inverse plan, the one
@@ -787,9 +852,12 @@ let plan_stage_rchain (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0
        | ONone ->
          (match e with
           | RunQuery name query ->
-            (match w.w_query name query acc.ac_store.st_bindings with
-             | RErr _ -> ()
-             | ROk _ -> ())
+            (match reg.r_query_posture with
+             | Reaching -> ()
+             | PureRead ->
+               (match w.w_query name query acc.ac_store.st_bindings with
+                | RErr _ -> ()
+                | ROk _ -> ()))
           | ApplyOps ops ->
             let r : res (t & list (staged_call v p)) =
               plan_ops w cap reg.r_op_perform ops acc.ac_store.st_tree acc.ac_staged in
@@ -807,7 +875,11 @@ let plan_stage_rchain (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0
                 | OSome _ -> ()
                 | ONone -> ()))
           | EmitPatch _ -> ()
-          | Notify _ _ -> ()))
+          | Notify _ _ -> ()
+          | Report f ->
+            (match reg.r_record f with
+             | RErr _ -> ()
+             | ROk _ -> ())))
 
 /// The plan phase preserves the reversed chain, stage by stage.
 let rec plan_rchain (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
@@ -842,17 +914,7 @@ let rec perform_keeps (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0
   | call :: rest ->
     (match reg.r_perf call.sc_performer call.sc_args with
      | RErr _ -> ()
-     | ROk result ->
-       let recorded = { acc with ac_externally = call.sc_capability :: acc.ac_externally } in
-       let landed =
-         (match call.sc_into with
-          | ONone -> recorded
-          | OSome key ->
-            { recorded with
-              ac_store =
-                { recorded.ac_store with
-                  st_bindings = w.w_assign key result recorded.ac_store.st_bindings } }) in
-       perform_keeps w reg rest landed)
+     | ROk result -> perform_keeps w reg rest (land w call result acc))
 
 /// `rev` is an involution.
 let rec rev_app (#x: Type0) (xs: list x) (ys: list x)
@@ -1149,7 +1211,7 @@ let plan_stage_clear (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0)
   : Lemma
       (requires
         clear cls acc.ac_trail /\
-        stage_defects w cls reversible s == [] /\
+        stage_defects w reg.r_query_posture cls reversible s == [] /\
         (match s with
          | SCompute action -> OSome? (w.w_undo_compute node_id action acc.ac_store.st_bindings)
          | _ -> True))
@@ -1165,9 +1227,12 @@ let plan_stage_clear (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0)
        | ONone ->
          (match e with
           | RunQuery name query ->
-            (match w.w_query name query acc.ac_store.st_bindings with
-             | RErr _ -> ()
-             | ROk _ -> ())
+            (match reg.r_query_posture with
+             | Reaching -> ()
+             | PureRead ->
+               (match w.w_query name query acc.ac_store.st_bindings with
+                | RErr _ -> ()
+                | ROk _ -> ()))
           | ApplyOps ops ->
             distinct_nil [] (view_defects cls (views w ops));
             let r : res (t & list (staged_call v p)) =
@@ -1185,7 +1250,11 @@ let plan_stage_clear (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0)
                   clear_app cls (rev (edits #t #b #o (snd recorded))) acc.ac_trail))
           | HostCall _ _ _ -> ()
           | EmitPatch _ -> ()
-          | Notify _ _ -> ()))
+          | Notify _ _ -> ()
+          | Report f ->
+            (match reg.r_record f with
+             | RErr _ -> ()
+             | ROk _ -> ())))
 
 /// Every compute stage the plan runs finds a restorer — the run-time
 /// half of reversibility, which the static posture cannot see (a trace
@@ -1207,20 +1276,21 @@ let rec restorers_found (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Typ
 
 /// Every stage's defects are empty: the posture is `Reversible`.
 let no_reasons (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0)
-                   (w: witness t b v o q a eff d) (cls: o -> undo_class t o) (reversible: a -> bool)
+                   (w: witness t b v o q a eff d) (query: query_posture)
+                   (cls: o -> undo_class t o) (reversible: a -> bool)
                    (stages: list (stage a v o q)) (k: nat)
   : Lemma
-      (requires reasons_from w cls reversible stages k == [])
+      (requires reasons_from w query cls reversible stages k == [])
       (ensures
         (match stages with
          | [] -> True
-         | s :: rest -> stage_defects w cls reversible s == [] /\ reasons_from w cls reversible rest (k + 1) == []))
+         | s :: rest -> stage_defects w query cls reversible s == [] /\ reasons_from w query cls reversible rest (k + 1) == []))
       (decreases stages) =
   match stages with
   | [] -> ()
   | s :: rest ->
-    app_nil_both (positioned k (stage_defects w cls reversible s)) (reasons_from w cls reversible rest (k + 1));
-    (match stage_defects w cls reversible s with
+    app_nil_both (positioned k (stage_defects w query cls reversible s)) (reasons_from w query cls reversible rest (k + 1));
+    (match stage_defects w query cls reversible s with
      | [] -> ()
      | _ :: _ -> ())
 
@@ -1231,14 +1301,14 @@ let rec plan_clear (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (
   : Lemma
       (requires
         clear cls acc.ac_trail /\
-        reasons_from w cls reversible stages k == [] /\
+        reasons_from w reg.r_query_posture cls reversible stages k == [] /\
         restorers_found w reg node_id stages acc)
       (ensures clear cls (plan w reg node_id stages acc).ac_trail)
       (decreases stages) =
   match stages with
   | [] -> ()
   | s :: rest ->
-    no_reasons w cls reversible stages k;
+    no_reasons w reg.r_query_posture cls reversible stages k;
     if acc.ac_halted then plan_clear w reg node_id cls reversible rest (k + 1) acc
     else begin
       plan_stage_clear w reg node_id cls reversible s acc;
@@ -1378,7 +1448,7 @@ let undo_run_restores (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0
                       (stages: list (stage a v o q)) (s: store t b)
   : Lemma
       (requires
-        posture w cls reversible stages == Reversible /\
+        posture w reg.r_query_posture cls reversible stages == Reversible /\
         restorers_found w reg node_id stages (start s) /\
         (let (out, steps) = run_planned w reg node_id stages s in
          out.oc_committed /\
@@ -1396,8 +1466,8 @@ let undo_run_restores (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0
   let (out, steps) = run_planned w reg node_id stages s in
   let planned = plan w reg node_id stages (start s) in
   // The posture's reading reaches the trail: every step is clear.
-  verdict_reversible (defects_of (reasons w cls reversible stages));
-  defects_of_nil (reasons w cls reversible stages);
+  verdict_reversible (defects_of (reasons w reg.r_query_posture cls reversible stages));
+  defects_of_nil (reasons w reg.r_query_posture cls reversible stages);
   plan_clear w reg node_id cls reversible stages 0 (start s);
   perform_keeps w reg (rev planned.ac_staged) planned;
   rev_rev planned.ac_trail;
@@ -1588,3 +1658,73 @@ let undo_residual_is_prefix (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q:
          (ROk?.value undone).oc_store == post /\
          (ROk?.value undone).oc_performed == take k (caps (rev planned.ac_staged)))) =
   residual_is_prefix w reg node_id [SEffect (ApplyOps (inverse_plan cls (rev steps)))] post k
+
+(* ───────────────────────────────────────────────────────────────────
+   THE STAGED READ AND THE REPORT IN BOTH STATIC POSTURES, AND AT THE
+   UNDO (Phase 2212; D44, D45).
+   ─────────────────────────────────────────────────────────────────── *)
+
+/// **`staged_read_named_in_both_vocabularies`.** A read under a reaching
+/// evaluator is `staged-query` in BOTH closed defect vocabularies — the
+/// undo's and the replay's — and under a pure read it is in neither, as
+/// it was before the seam. The host's one declaration, read by both
+/// postures the same way.
+let staged_read_named_in_both_vocabularies (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0)
+                                           (w: witness t b v o q a eff d) (cls: o -> undo_class t o) (reversible: a -> bool)
+                                           (name: string) (query: q)
+  : Lemma
+      (ensures
+        stage_defects w Reaching cls reversible (SEffect #a #v #o #q (RunQuery name query)) == [StagedQuery] /\
+        replay_defects_of_effect Reaching (RunQuery #v #o #q name query) == [ReplayStagedQuery] /\
+        stage_defects w PureRead cls reversible (SEffect #a #v #o #q (RunQuery name query)) == [] /\
+        replay_defects_of_effect PureRead (RunQuery #v #o #q name query) == []) = ()
+
+/// **`staged_read_is_one_way`.** The undo posture of a handler holding a
+/// reaching read is `one-way`: `staged-query` grades one-way, and one-way
+/// dominates every other verdict — so the verdict is one-way whatever
+/// the other stages contribute.
+let rec worst_one_way (ds: list defect)
+  : Lemma (requires mem StagedQuery ds) (ensures verdict_of ds == OneWayVerdict) (decreases ds) =
+  match ds with
+  | [] -> ()
+  | d :: rest -> if StagedQuery? d then () else worst_one_way rest
+
+/// **`report_names_no_defect`.** A report contributes nothing to either
+/// posture: no undo defect (there is no inverse to run) and no replay
+/// reason (a re-run records the same finding, and the durable tier
+/// serves it). A handler's postures are what they would be without its
+/// reports.
+let report_names_no_defect (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0)
+                           (w: witness t b v o q a eff d) (query: query_posture)
+                           (cls: o -> undo_class t o) (reversible: a -> bool) (f: finding)
+  : Lemma
+      (ensures
+        stage_defects w query cls reversible (SEffect #a #v #o #q (Report f)) == [] /\
+        replay_defects_of_effect query (Report #v #o #q f) == []) = ()
+
+/// **`staged_read_undo_refused`.** The static posture and the run AGREE
+/// on a staged read — `StagedQueryPostureTests`' predicate, as a theorem
+/// over the model: a one-read program under a reaching evaluator, the
+/// read admitted and its staged call answered, commits with the trail
+/// holding exactly `TReached "RunQuery"`, and the undo of that run is
+/// refused `undo-one-way-step` at step 0 naming `RunQuery` — the step the
+/// static posture called `staged-query`. Under a pure read the same
+/// program's trail is empty and the posture names no defect
+/// (`staged_read_named_in_both_vocabularies`).
+let staged_read_undo_refused (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
+                             (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
+                             (cls: o -> undo_class t o) (canonical: t -> string)
+                             (name: string) (query: q) (s: store t b)
+  : Lemma
+      (requires
+        reg.r_query_posture == Reaching /\
+        admitted_effect reg (RunQuery #v #o #q name query) /\
+        (let call = staged_read "RunQuery" reg.r_query_stage name query in
+         ROk? (reg.r_perf call.sc_performer call.sc_args)))
+      (ensures
+        (let (out, steps) = run_planned w reg node_id [SEffect #a #v #o #q (RunQuery name query)] s in
+         out.oc_committed == true /\
+         steps == [TReached "RunQuery"] /\
+         undo_run w reg node_id cls canonical s.st_tree out.oc_committed steps out.oc_store ==
+           RErr (render { rf_code = "undo-one-way-step"; rf_step = 0; rf_reason = "RunQuery" }))) =
+  staged_read_stages_one_call w reg name query (start s)

@@ -283,11 +283,12 @@ let ghost_trace (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a:
    ─────────────────────────────────────────────────────────────────── *)
 
 /// The results the performer answered `ROk` before its first `RErr`,
-/// each with the token it answered for and the slot it lands in: the
-/// values the perform phase hands to `Assign`.
+/// each with the token it answered for and the landing it declared: the
+/// values the perform phase hands to `Assign` — or, for a staged read
+/// (Phase 2212), to `w_land_query`.
 [@@ noextract_to "FSharp"]
 let rec landed (#v: Type0) (#p: Type0) (perf: p -> v -> res v) (calls: list (staged_call v p))
-  : Tot (list (p & opt string & v)) (decreases calls) =
+  : Tot (list (p & landing & v)) (decreases calls) =
   match calls with
   | [] -> []
   | c :: rest ->
@@ -297,7 +298,7 @@ let rec landed (#v: Type0) (#p: Type0) (perf: p -> v -> res v) (calls: list (sta
 
 /// Every landed result whose token carries a contract honours it.
 [@@ noextract_to "FSharp"]
-let rec all_honour (#v: Type0) (#p: Type0) (ct: p -> opt (contract v)) (xs: list (p & opt string & v))
+let rec all_honour (#v: Type0) (#p: Type0) (ct: p -> opt (contract v)) (xs: list (p & landing & v))
   : Tot bool (decreases xs) =
   match xs with
   | [] -> true
@@ -306,18 +307,21 @@ let rec all_honour (#v: Type0) (#p: Type0) (ct: p -> opt (contract v)) (xs: list
      | ONone -> all_honour ct rest
      | OSome c -> c.ct_holds result && all_honour ct rest)
 
-/// `Assign` folded over the landed results that declared a slot — what
-/// the perform phase does to the bindings, stated without `perform`.
+/// The landings folded over the landed results — `Assign` for a state
+/// slot, `w_land_query` for a query slot (Phase 2212), nothing for a call
+/// that lands nowhere: what the perform phase does to the bindings,
+/// stated without `perform`.
 [@@ noextract_to "FSharp"]
 let rec fold_assign (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
-                    (w: witness t b v o q a eff d) (xs: list (p & opt string & v)) (bindings: b)
+                    (w: witness t b v o q a eff d) (xs: list (p & landing & v)) (bindings: b)
   : Tot b (decreases xs) =
   match xs with
   | [] -> bindings
   | (_, into, result) :: rest ->
     (match into with
-     | ONone -> fold_assign w rest bindings
-     | OSome key -> fold_assign w rest (w.w_assign key result bindings))
+     | LNowhere -> fold_assign w rest bindings
+     | LState key -> fold_assign w rest (w.w_assign key result bindings)
+     | LQuery slot -> fold_assign w rest (w.w_land_query slot result bindings))
 
 /// The first refusal, as the capability and the reason the perform
 /// phase records — or nothing when every call was answered.
@@ -533,9 +537,12 @@ let plan_stage_admitted (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Typ
        | ONone ->
          (match e with
           | RunQuery name query ->
-            (match w.w_query name query acc.ac_store.st_bindings with
-             | RErr _ -> ()
-             | ROk _ -> ())
+            (match reg.r_query_posture with
+             | Reaching -> ()
+             | PureRead ->
+               (match w.w_query name query acc.ac_store.st_bindings with
+                | RErr _ -> ()
+                | ROk _ -> ()))
           | ApplyOps ops ->
             plan_ops_admitted w reg.r_gate cap reg.r_op_perform ops acc.ac_store.st_tree acc.ac_staged
           | HostCall fn _ into ->
@@ -546,7 +553,11 @@ let plan_stage_admitted (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Typ
                 | OSome _ -> ()
                 | ONone -> ()))
           | EmitPatch _ -> ()
-          | Notify _ _ -> ()))
+          | Notify _ _ -> ()
+          | Report f ->
+            (match reg.r_record f with
+             | RErr _ -> ()
+             | ROk _ -> ())))
 
 let rec plan_admitted (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) (#a: Type0) (#eff: Type0) (#d: Type0) (#p: Type0)
                       (w: witness t b v o q a eff d) (reg: registry t v o q p) (node_id: string)
@@ -599,16 +610,7 @@ let rec perform_admitted (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Ty
     (match reg.r_perf call.sc_performer call.sc_args with
      | RErr _ -> ()
      | ROk result ->
-       let recorded = { acc with ac_externally = call.sc_capability :: acc.ac_externally } in
-       let landed =
-         (match call.sc_into with
-          | ONone -> recorded
-          | OSome key ->
-            { recorded with
-              ac_store =
-                { recorded.ac_store with
-                  st_bindings = w.w_assign key result recorded.ac_store.st_bindings } }) in
-       perform_admitted w reg rest landed)
+       perform_admitted w reg rest (land w call result acc))
 
 /// The bindings the perform phase leaves are the landed results folded
 /// through `Assign`, and nothing else reaches them: a result the
@@ -628,16 +630,7 @@ let rec perform_store (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0
     (match reg.r_perf call.sc_performer call.sc_args with
      | RErr _ -> ()
      | ROk result ->
-       let recorded = { acc with ac_externally = call.sc_capability :: acc.ac_externally } in
-       let landed =
-         (match call.sc_into with
-          | ONone -> recorded
-          | OSome key ->
-            { recorded with
-              ac_store =
-                { recorded.ac_store with
-                  st_bindings = w.w_assign key result recorded.ac_store.st_bindings } }) in
-       perform_store w reg rest landed)
+       perform_store w reg rest (land w call result acc))
 
 /// The diagnostics the perform phase appends: exactly the first refusal
 /// as `PerformFailed`, or nothing.
@@ -659,16 +652,7 @@ let rec perform_diag (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0)
     (match reg.r_perf call.sc_performer call.sc_args with
      | RErr _ -> ()
      | ROk result ->
-       let recorded = { acc with ac_externally = call.sc_capability :: acc.ac_externally } in
-       let landed =
-         (match call.sc_into with
-          | ONone -> recorded
-          | OSome key ->
-            { recorded with
-              ac_store =
-                { recorded.ac_store with
-                  st_bindings = w.w_assign key result recorded.ac_store.st_bindings } }) in
-       perform_diag w reg rest landed)
+       perform_diag w reg rest (land w call result acc))
 
 (* ───────────────────────────────────────────────────────────────────
    The return contract — what the wrapper lands and what it refuses.
@@ -938,7 +922,7 @@ let op_token_checked (#t: Type0) (#o: Type0) (#v: Type0) (#p: Type0)
 [@@ noextract_to "FSharp"]
 let rec op_receipts_honour (#t: Type0) (#o: Type0) (#v: Type0) (#p: Type0)
                            (f: t -> o -> (p & v)) (c: op_contract t o v)
-                           (xs: list (p & opt string & v))
+                           (xs: list (p & landing & v))
   : Tot prop (decreases xs) =
   match xs with
   | [] -> True
@@ -948,7 +932,7 @@ let rec op_receipts_honour (#t: Type0) (#o: Type0) (#v: Type0) (#p: Type0)
 
 let rec all_honour_ops (#t: Type0) (#o: Type0) (#v: Type0) (#p: Type0)
                        (f: t -> o -> (p & v)) (ct: p -> opt (contract v)) (c: op_contract t o v)
-                       (xs: list (p & opt string & v))
+                       (xs: list (p & landing & v))
   : Lemma
       (requires op_contract_keyed f ct c /\ all_honour ct xs)
       (ensures op_receipts_honour f c xs)
@@ -1076,16 +1060,7 @@ let rec perform_ext (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: Type0) 
     (match reg.r_perf call.sc_performer call.sc_args with
      | RErr _ -> ()
      | ROk result ->
-       let recorded = { acc with ac_externally = call.sc_capability :: acc.ac_externally } in
-       let landed =
-         (match call.sc_into with
-          | ONone -> recorded
-          | OSome key ->
-            { recorded with
-              ac_store =
-                { recorded.ac_store with
-                  st_bindings = w.w_assign key result recorded.ac_store.st_bindings } }) in
-       perform_ext w reg perf' rest landed)
+       perform_ext w reg perf' rest (land w call result acc))
 
 /// **`uncontracted_is_direct`.** A performer registered with NO contract —
 /// host functions and op performer alike — runs exactly as it did before

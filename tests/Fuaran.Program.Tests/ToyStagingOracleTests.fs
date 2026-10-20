@@ -28,6 +28,14 @@ module Fuaran.Program.Tests.ToyStagingOracleTests
 //  toy: an apply that can refuse (the toy's relabel is total), an op-channel
 //  guard, and an undo classing some ops compensable and one-way. Each
 //  composition is named and explained where it is declared.
+//
+//  Since fuaran#2212 the models reach the two arms the suites alone used to
+//  pin: a read under a REACHING query evaluator (staged like a host call,
+//  D34/D44) and the `Report` arm (D45). The corpus draws handlers under a
+//  staging evaluator posture and reporting programs, the effect mapping
+//  carries `Report`, the postures compare both closed defect vocabularies,
+//  and a durable host at the end of the file runs the journaled read and the
+//  journaled finding beside `Durable.run`.
 // ============================================================================
 
 open System
@@ -127,22 +135,37 @@ let private modelRes (value: Result<'T, string>) : Staging.res<'T> =
     | Ok v -> Staging.ROk v
     | Error e -> Staging.RErr e
 
-/// Production reduces an evaluation error to its DISCRIMINATOR before it
-/// reaches a diagnostic (`Handler.evalErrorKind`, private, one arm per case
-/// and every arm its case name). The case name IS that mapping, read off the
-/// union rather than restated arm by arm — so a production arm whose text
-/// stopped being its name would surface here as a divergence rather than
-/// being copied into agreement.
-let private evalErrorKind (error: Fuaran.Compute.EvalError) : string =
-    let case, _ =
-        Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(error, typeof<Fuaran.Compute.EvalError>)
+/// The model's finding is production's, member for member (Phase 2212).
+let private modelFinding (finding: Finding) : Staging.finding =
+    { f_code = finding.Code
+      f_severity = finding.Severity
+      f_message = finding.Message }
 
-    case.Name
+let private productionFinding (finding: Staging.finding) : Finding =
+    { Code = finding.f_code
+      Severity = finding.f_severity
+      Message = finding.f_message }
+
+/// The host's query posture as the model reads it (Phase 2212, D44).
+let private modelPosture (posture: QueryPosture) : Staging.query_posture =
+    match posture with
+    | QueryPosture.PureRead -> Staging.PureRead
+    | QueryPosture.Reaching -> Staging.Reaching
+
+/// The evaluator production asks: the registry's, or the in-memory fold where
+/// the host registered none (Phase 1905, D34) — the member `Handler.runEffect`
+/// reads, so a declared pure read is asked through the host's own evaluator
+/// here too, and a reaching one is what the staged call closes over.
+let private evaluatorOf (registry: ServerEffectRegistry) : QueryEvaluator =
+    registry.QueryEvaluator |> Option.defaultValue QueryEvaluator.inMemory
 
 let private modelWitness
     (witness: ToyWitness)
+    (registry: ServerEffectRegistry)
     (resolve: string -> Result<Table, Fuaran.Compute.EvalError>)
     : ModelWitness =
+    let evaluator = evaluatorOf registry
+
     { w_compute =
         fun nodeId action bindings ->
             let outcome = BoundedActions.runInert witness nodeId action bindings
@@ -165,13 +188,32 @@ let private modelWitness
                     (BoundedActions.runReversed witness nodeId (BoundedActions.reverse witness action trace) b).Store)
             else
                 Staging.ONone
+      // The pure read: production's evaluator asked, its fault described as
+      // the halt reason, its table landed — `QueryFault.describe` is the one
+      // mapping, read from production rather than restated arm by arm, so an
+      // arm whose text moved would surface here as a divergence.
       w_query =
         fun name (source, pipeline) bindings ->
-            Fuaran.Compute.DataFrame.evalSource resolve source
-            |> Result.bind (Fuaran.Compute.DataFrame.evalPipelineWith resolve pipeline)
+            evaluator.Evaluate source pipeline resolve
             |> Result.map (fun table -> witness.Dispatch.Store.LandQuery name table bindings)
-            |> Result.mapError evalErrorKind
+            |> Result.mapError QueryFault.describe
             |> modelRes
+      // A staged read's answer landed (Phase 2212): the value the durable
+      // wrapper carries — the table in the column codec's canonical form —
+      // decoded and landed in its query slot, production's `decodeAnswer`
+      // then `LandQuery`. The model's arrow is TOTAL, and a value that does
+      // not decode cannot reach it: an invoked evaluator answers through
+      // `encodeAnswer`, and a served record that does not decode is read as
+      // a refusal at the journal snapshot (`plainJournal`, below) — the
+      // model's stated assumption — so the arm below is unreachable and
+      // says so rather than inventing a landing.
+      w_land_query =
+        fun slot value bindings ->
+            match QueryEvaluator.decodeAnswer (Ok value) with
+            | Ok table -> witness.Dispatch.Store.LandQuery slot table bindings
+            | Error _ ->
+                invalidOp
+                    "unreachable: a staged read's answer that does not decode is a snapshot refusal, never a landing"
       w_apply = fun op tree -> witness.State.Stream.Apply op tree |> modelRes
       // The production `View`, taken to exhaustion — the model's `w_op_view`.
       // The toy's op is only ever an edit or (under the guard composition) a
@@ -232,10 +274,24 @@ let private modelEffect (effect: ServerEffect<ToyOp>) : Staging.server_effect<JV
     | ServerEffect.HostCall(fn, args, into) -> Staging.HostCall(fn, args, modelOpt into)
     | ServerEffect.EmitPatch ops -> Staging.EmitPatch ops
     | ServerEffect.Notify(channel, payload) -> Staging.Notify(channel, payload)
-    // The staging model has no report arm (DECISIONS.md D45): a finding stages
-    // nothing, trails nothing and moves no state, so the differential draws no
-    // program that reports one, and `ReportTests` pins the arm instead.
-    | ServerEffect.Report _ -> invalidArg (nameof effect) "the staging model has no Report arm (D45)"
+    | ServerEffect.Report finding -> Staging.Report(modelFinding finding)
+
+/// `modelEffect` reversed, for the checks whose vocabulary is production's.
+let private productionEffect (effect: Staging.server_effect<JVal, ToyOp, Query>) : ServerEffect<ToyOp> =
+    match effect with
+    | Staging.RunQuery(name, (source, pipeline)) -> ServerEffect.RunQuery(name, source, pipeline)
+    | Staging.ApplyOps ops -> ServerEffect.ApplyOps ops
+    | Staging.HostCall(fn, args, into) ->
+        ServerEffect.HostCall(
+            fn,
+            args,
+            (match into with
+             | Staging.OSome key -> Some key
+             | Staging.ONone -> None)
+        )
+    | Staging.EmitPatch ops -> ServerEffect.EmitPatch ops
+    | Staging.Notify(channel, payload) -> ServerEffect.Notify(channel, payload)
+    | Staging.Report finding -> ServerEffect.Report(productionFinding finding)
 
 let private modelStage (stage: ToyStage) : ModelStage =
     match stage with
@@ -248,31 +304,38 @@ let private modelStage (stage: ToyStage) : ModelStage =
 /// the toy's state axis, because the policy's vocabulary is production's.
 let private modelRegistry
     (performance: OpPerformance<ToyNode, ToyOp>)
+    (resolve: string -> Result<Table, Fuaran.Compute.EvalError>)
     (registry: ServerEffectRegistry)
     : ModelRegistry =
+    let evaluator = evaluatorOf registry
+
     { r_gate = registry.Gate
       r_policy =
         fun effect ->
-            let production =
-                match effect with
-                | Staging.RunQuery(name, (source, pipeline)) -> ServerEffect.RunQuery(name, source, pipeline)
-                | Staging.ApplyOps ops -> ServerEffect.ApplyOps ops
-                | Staging.HostCall(fn, args, into) ->
-                    ServerEffect.HostCall(
-                        fn,
-                        args,
-                        (match into with
-                         | Staging.OSome key -> Some key
-                         | Staging.ONone -> None)
-                    )
-                | Staging.EmitPatch ops -> ServerEffect.EmitPatch ops
-                | Staging.Notify(channel, payload) -> ServerEffect.Notify(channel, payload)
-
-            match ServerArgumentPolicy.check witness.State registry production with
+            match ServerArgumentPolicy.check witness.State registry (productionEffect effect) with
             | Ok() -> Staging.ONone
             | Error defect -> Staging.OSome(ServerArgumentPolicy.describe defect)
       r_lookup = fun fn -> Map.tryFind fn registry.HostFunctions |> modelOpt
       r_perf = fun performer args -> performer args |> modelRes
+      // The host's declaration, off the registry (Phase 2212, D44): the one
+      // fact the run and the static postures consult.
+      r_query_posture = modelPosture (ServerEffectRegistry.queryPosture registry)
+      // What a reaching read is staged AS (Phase 2212): production's own
+      // closure over the evaluator, the source, the pipeline and the
+      // resolver, answering through `encodeAnswer` — the value the durable
+      // wrapper journals — with an inert argument, the shape `r_op_perform`
+      // already takes.
+      r_query_stage =
+        fun _ (source, pipeline) ->
+            (fun (_: JVal) -> QueryEvaluator.encodeAnswer (evaluator.Evaluate source pipeline resolve)), JObj []
+      // The recorder (Phase 2212, D45): production's own, over the model's
+      // finding — the finding itself here, the journaled record under the
+      // durable host at the end of this file.
+      r_record =
+        fun finding ->
+            registry.RecordFinding(productionFinding finding)
+            |> Result.map modelFinding
+            |> modelRes
       // The op performer, split as the model splits it: the TOKEN is
       // production's own closure over the state as of the op and the op, the
       // argument inert — the shape production stages.
@@ -315,14 +378,15 @@ let private productionShaped (outcome: ModelOutcome) : ToyOutcome =
       // Nor any typed receipts (Phase 2197, D43): its performers return a
       // detail, and the projection below does not compare them.
       Receipts = []
-      // Nor any findings (Phase 2195, D45): the model has no report arm.
-      Findings = [] }
+      // The findings, in program order (Phase 2212, D45).
+      Findings = outcome.oc_findings |> List.map productionFinding }
 
 /// The comparable projection: the tree by the toy codec's canonical bytes
 /// (labels included), the store — whose one channel is where the toy lands a
 /// query too, so the query slots are compared here rather than apart — the
 /// verdict, the audit trail, the patches, the notifications, the effects by
-/// the toy's shipped emitter, and the diagnostics.
+/// the toy's shipped emitter, the diagnostics, and the findings in order
+/// (Phase 2212).
 let private projectionOf (outcome: ToyOutcome) =
     {| Tree = render outcome.Store.Tree
        State = outcome.Store.Bindings |> Map.map (fun _ v -> sprintf "%A" v)
@@ -331,7 +395,8 @@ let private projectionOf (outcome: ToyOutcome) =
        Patches = outcome.Patches |> List.map (sprintf "%A")
        Notifications = outcome.Notifications
        Effects = outcome.ClientEffects |> List.map ToyWire.encodeEffect
-       Diagnostics = outcome.Diagnostics |> List.map (sprintf "%A") |}
+       Diagnostics = outcome.Diagnostics |> List.map (sprintf "%A")
+       Findings = outcome.Findings |}
 
 let private runModel
     (witness: ToyWitness)
@@ -343,8 +408,8 @@ let private runModel
     (store: ToyServerStore)
     : ToyOutcome =
     Staging.run
-        (modelWitness witness resolve)
-        (modelRegistry performance registry)
+        (modelWitness witness registry resolve)
+        (modelRegistry performance resolve registry)
         nodeId
         (handler.Stages |> List.map modelStage)
         { st_tree = store.Tree
@@ -367,6 +432,11 @@ type private Scripted =
     {
         Host: string -> Performer
         Op: ToyNode -> ToyOp -> Result<JVal, string>
+        /// The REACHING evaluator (Phase 2212): the in-memory fold behind the
+        /// same counter, under `RunQuery`, so a staged read is a position of
+        /// the one staged list and a failure position counts it beside the
+        /// host calls and the ops.
+        Query: QueryEvaluator
         /// The state the op performer was handed with each op, canonically
         /// rendered, in invocation order — compared across the two sides, so
         /// the model's `staged_from` and production's staged op agree on
@@ -396,6 +466,19 @@ let private scripted (log: Log) (failAt: int option) : Scripted =
         fun state _ ->
             handed.Add(render state)
             ask "ApplyOps" |> Result.map (fun () -> JObj [])
+      Query =
+        QueryEvaluator.reaching (fun source pipeline resolve ->
+            match ask "RunQuery" with
+            | Error reason -> Error(QueryFault.Host reason)
+            | Ok() ->
+                // The fold's OWN refusal — an unresolvable source — is a
+                // perform-phase failure the script did not choose; the log
+                // marks it so the claim against the log can stop there.
+                match QueryEvaluator.fold source pipeline resolve with
+                | Ok table -> Ok table
+                | Error fault ->
+                    log.Add "refused:RunQuery"
+                    Error fault)
       Handed = handed }
 
 type private StagingCase =
@@ -414,6 +497,10 @@ type private StagingCase =
         PerformOps: bool
         /// Whether this case runs under the guard composition.
         Guarded: bool
+        /// Whether this case registers the scripted REACHING evaluator (Phase
+        /// 2212), making `RunQuery` a staged arm; `false` is the host's
+        /// declared posture — the fold, or whatever `Shape` registers.
+        StagedReads: bool
     }
 
 let private witnessOf (case: StagingCase) : ToyWitness =
@@ -425,10 +512,14 @@ let private performanceOf (case: StagingCase) (s: Scripted) : OpPerformance<ToyN
     else
         OpPerformance.InMemory
 
-let private registryFor (case: StagingCase) (performer: string -> Performer) : ServerEffectRegistry =
+let private registryFor (case: StagingCase) (s: Scripted) : ServerEffectRegistry =
     case.Functions
-    |> List.fold (fun r fn -> ServerEffectRegistry.register fn (performer fn) r) ServerEffectRegistry.denyAll
+    |> List.fold (fun r fn -> ServerEffectRegistry.register fn (s.Host fn) r) ServerEffectRegistry.denyAll
     |> ServerEffectRegistry.permissive
+    |> (if case.StagedReads then
+            ServerEffectRegistry.withQueryEvaluator s.Query
+        else
+            id)
     |> case.Shape
 
 /// One run of one case, on both sides, at one failure position.
@@ -450,7 +541,7 @@ let private runCase (case: StagingCase) (failAt: int option) : Run =
     let production =
         Handler.runWith
             (witnessOf case)
-            (registryFor case productionScript.Host)
+            (registryFor case productionScript)
             (performanceOf case productionScript)
             case.Resolve
             "call"
@@ -461,7 +552,7 @@ let private runCase (case: StagingCase) (failAt: int option) : Run =
         runModel
             (witnessOf case)
             (performanceOf case modelScript)
-            (registryFor case modelScript.Host)
+            (registryFor case modelScript)
             case.Resolve
             "call"
             case.Handler
@@ -475,13 +566,16 @@ let private runCase (case: StagingCase) (failAt: int option) : Run =
       ModelHanded = List.ofSeq modelScript.Handed }
 
 /// `Performed`'s external suffix — what the handler CLAIMS ran outside: its
-/// host calls, and, under a registered op performer, its ops. In memory an
-/// `ApplyOps` entry is the plan phase's and is not a claim about the outside.
+/// host calls; under a registered op performer, its ops; under a reaching
+/// evaluator, its reads (Phase 2212). In memory an `ApplyOps` entry is the
+/// plan phase's and is not a claim about the outside, and under a pure read
+/// neither is a `RunQuery` entry.
 let private claimedExternal (case: StagingCase) (outcome: ToyOutcome) =
     outcome.Performed
     |> List.filter (fun c ->
         c.StartsWith("host:", StringComparison.Ordinal)
-        || (case.PerformOps && c = "ApplyOps"))
+        || (case.PerformOps && c = "ApplyOps")
+        || (case.StagedReads && c = "RunQuery"))
 
 /// The whole comparison, as a reported divergence or nothing. Three checks:
 /// the two outcomes project equal; the two performers were asked the same
@@ -520,11 +614,25 @@ let private divergence (case: StagingCase) (failAt: int option) (run: Run) : str
     else
         // What ran, per the log, minus the refused call — the log records an
         // invocation the moment it is asked, and a refused one is asked and
-        // not performed.
+        // not performed: the scripted refusal at the position, or a staged
+        // read's own refusal, which the evaluator marks (Phase 2212).
+        let isMarker (e: string) =
+            e.StartsWith("refused:", StringComparison.Ordinal)
+
+        let asked =
+            let before = run.ProductionLog |> List.takeWhile (not << isMarker)
+
+            // Everything asked before a marked refusal, less the asked call
+            // the marker refuses; the whole log when nothing was marked.
+            if List.length before < List.length run.ProductionLog then
+                List.truncate (List.length before - 1) before
+            else
+                before
+
         let ran =
             match failAt with
-            | Some k when k < List.length run.ProductionLog -> List.take k run.ProductionLog
-            | _ -> run.ProductionLog
+            | Some k when k < List.length asked -> List.take k asked
+            | _ -> asked
 
         if claimedExternal case run.Production <> ran then
             Some(
@@ -597,11 +705,37 @@ let private case
       Shape = id
       Resolve = Fuaran.Compute.DataFrame.noResolve
       PerformOps = false
-      Guarded = false }
+      Guarded = false
+      StagedReads = false }
 
 let private shaped (shape: ServerEffectRegistry -> ServerEffectRegistry) (c: StagingCase) = { c with Shape = shape }
 let private performingOps (c: StagingCase) = { c with PerformOps = true }
 let private guarded (c: StagingCase) = { c with Guarded = true }
+let private stagedReads (c: StagingCase) = { c with StagedReads = true }
+
+/// A host that DECLARES its evaluator a pure read (Phase 2212): the fold
+/// under a declaration, asked while planning exactly as the absent case is.
+let private declaredPureRead (c: StagingCase) =
+    c
+    |> shaped (ServerEffectRegistry.withQueryEvaluator (QueryEvaluator.pureRead QueryEvaluator.fold))
+
+/// A finding, in the host's vocabulary the reporting cases declare below.
+let private finding (code: string) (severity: string) (message: string) : Finding =
+    { Code = code
+      Severity = severity
+      Message = message }
+
+let private report (code: string) (severity: string) (message: string) : ToyStage =
+    Effect(ServerEffect.Report(finding code severity message))
+
+/// The host's finding vocabulary, as the `Report` capability's bound (D45) —
+/// `ReportTests`' shape: a code or a severity outside it is refused by the
+/// argument policy while planning.
+let private findingVocabulary: ServerEffectRegistry -> ServerEffectRegistry =
+    ServerEffectRegistry.constrain
+        "Report"
+        [ ServerConstraintClause.AllowList(Finding.CodeMember, [ "started"; "archived"; "note-missing" ])
+          ServerConstraintClause.AllowList(Finding.SeverityMember, [ "info"; "problem" ]) ]
 
 let private loopOrigin = "handler loop"
 let private durableOrigin = "durable interpreter"
@@ -712,6 +846,152 @@ let private durableCases: StagingCase list =
             Effect(ServerEffect.HostCall("audit", JStr "a", None))
             Effect(ServerEffect.EmitPatch [])
             Effect(ServerEffect.Notify("audit", JStr "a")) ] ]
+
+let private stagedOrigin = "staged read"
+
+/// Handlers under a STAGING evaluator posture (Phase 2212; D34, D44): the
+/// host registers the scripted reaching evaluator, so every read is a staged
+/// call — asked after the plan, in plan order beside the host calls, a
+/// position the scripted performer fails at — and lands its table then. The
+/// declared-pure-read case is the control: a declaration is not a staging.
+let private stagedReadCases: StagingCase list =
+    [ case
+          stagedOrigin
+          "a staged read, a state write, a host call, a patch and a notification"
+          [ "audit" ]
+          loopStore
+          [ Effect(ServerEffect.RunQuery("rows", Embedded rows, limitTwo))
+            Compute(Put("status", Some(JStr "written"), None))
+            Effect(ServerEffect.HostCall("audit", JStr "note", Some "audited"))
+            Effect(ServerEffect.EmitPatch [ touch "call" ])
+            Effect(ServerEffect.Notify("channel", JStr "note")) ]
+      |> stagedReads
+      case
+          stagedOrigin
+          "two staged reads around a host call"
+          [ "audit" ]
+          loopStore
+          [ Effect(ServerEffect.RunQuery("rows", Embedded rows, limitTwo))
+            Effect(ServerEffect.HostCall("audit", JStr "note", Some "audited"))
+            Effect(ServerEffect.RunQuery("again", Embedded rows, [])) ]
+      |> stagedReads
+      case
+          stagedOrigin
+          "a staged read of an unresolvable source fails in the perform phase, not the plan"
+          [ "audit" ]
+          loopStore
+          [ Effect(ServerEffect.HostCall("audit", JStr "note", None))
+            Effect(ServerEffect.RunQuery("rows", Ref "elsewhere", []))
+            Effect(ServerEffect.Notify("channel", JStr "never")) ]
+      |> stagedReads
+      case
+          stagedOrigin
+          "a staged read, then the plan fails: nothing is asked"
+          [ "audit" ]
+          loopStore
+          [ Effect(ServerEffect.RunQuery("rows", Embedded rows, limitTwo))
+            Effect(ServerEffect.ApplyOps [ absent ]) ]
+      |> stagedReads
+      case
+          stagedOrigin
+          "a later compute stage reads the slot a staged read lands in only after the plan"
+          [ "audit" ]
+          loopStore
+          [ Effect(ServerEffect.RunQuery("rows", Embedded rows, limitTwo))
+            Compute(Put("echo", None, Some(Read "rows")))
+            Effect(ServerEffect.HostCall("audit", JStr "note", None)) ]
+      |> stagedReads
+      case
+          stagedOrigin
+          "a staged read beside performed ops"
+          [ "audit" ]
+          durableStore
+          [ Effect(ServerEffect.RunQuery("rows", Embedded rows, limitTwo))
+            Effect(ServerEffect.ApplyOps [ touch "refresh" ])
+            Effect(ServerEffect.HostCall("audit", JStr "refreshed", None))
+            Effect(ServerEffect.ApplyOps [ touch "readout" ]) ]
+      |> stagedReads
+      |> performingOps
+      case
+          stagedOrigin
+          "the gate refuses the staged read"
+          [ "audit" ]
+          loopStore
+          [ Effect(ServerEffect.HostCall("audit", JStr "note", None))
+            Effect(ServerEffect.RunQuery("rows", Embedded rows, limitTwo)) ]
+      |> stagedReads
+      |> shaped (ServerEffectRegistry.withGate (fun cap -> cap <> "RunQuery"))
+      case
+          stagedOrigin
+          "a DECLARED pure read is asked while planning, exactly as the fold is"
+          [ "audit" ]
+          loopStore
+          [ Effect(ServerEffect.RunQuery("rows", Embedded rows, limitTwo))
+            Effect(ServerEffect.HostCall("audit", JStr "note", Some "audited"))
+            Effect(ServerEffect.RunQuery("again", Ref "elsewhere", [])) ]
+      |> declaredPureRead ]
+
+let private reportOrigin = "report"
+
+/// Reporting programs (Phase 2212, D45): a finding before and after the work,
+/// a finding that survives a plan-phase refusal, one the argument policy
+/// refuses, one the gate refuses, and reports between staged calls at every
+/// failure position.
+let private reportCases: StagingCase list =
+    [ case
+          reportOrigin
+          "a report before and after an op and a host call"
+          [ "audit" ]
+          durableStore
+          [ report "started" "info" "archiving"
+            Effect(ServerEffect.ApplyOps [ touch "refresh" ])
+            Effect(ServerEffect.HostCall("audit", JStr "note", Some "audited"))
+            report "archived" "info" "archived" ]
+      |> shaped findingVocabulary
+      case
+          reportOrigin
+          "a report, then the plan refuses: the finding survives the rollback"
+          [ "audit" ]
+          loopStore
+          [ report "note-missing" "problem" "nothing to archive"
+            Effect(ServerEffect.ApplyOps [ absent ])
+            report "archived" "info" "never" ]
+      |> shaped findingVocabulary
+      case
+          reportOrigin
+          "a report outside the host's vocabulary is refused by the argument policy"
+          [ "audit" ]
+          loopStore
+          [ Effect(ServerEffect.HostCall("audit", JStr "note", None))
+            report "unknown-code" "info" "refused while planning" ]
+      |> shaped findingVocabulary
+      case
+          reportOrigin
+          "the gate refuses the report"
+          [ "audit" ]
+          loopStore
+          [ Effect(ServerEffect.HostCall("audit", JStr "note", None))
+            report "started" "info" "denied" ]
+      |> shaped (ServerEffectRegistry.withGate (fun cap -> cap <> "Report"))
+      case
+          reportOrigin
+          "reports between two host calls, under a staged read"
+          [ "first"; "second" ]
+          loopStore
+          [ report "started" "info" "one"
+            Effect(ServerEffect.HostCall("first", JStr "a", Some "landed"))
+            report "started" "info" "two"
+            Effect(ServerEffect.RunQuery("rows", Embedded rows, limitTwo))
+            Effect(ServerEffect.HostCall("second", JStr "b", None))
+            report "archived" "info" "three" ]
+      |> shaped findingVocabulary
+      |> stagedReads
+      case
+          reportOrigin
+          "a report under an unconstrained host: every token admitted"
+          []
+          loopStore
+          [ report "anything" "whatever" "an unconstrained host bounds nothing" ] ]
 
 /// The plan-halt arms the two suites' staging cases do not reach, so every
 /// `halt` and `deny` in the model is exercised against production's.
@@ -847,6 +1127,7 @@ let private positions (case: StagingCase) : int option list =
             match stage with
             | Effect(ServerEffect.HostCall _) -> 1
             | Effect(ServerEffect.ApplyOps ops) when case.PerformOps -> List.length ops
+            | Effect(ServerEffect.RunQuery _) when case.StagedReads -> 1
             | _ -> 0)
 
     None :: [ for k in 0 .. staged - 1 -> Some k ]
@@ -879,7 +1160,14 @@ let stagingTests =
               // A corpus whose every run committed — or whose every run halted
               // while planning — would report the same green while exercising
               // none of the perform phase.
-              let all = loopCases @ durableCases @ planHaltCases @ opCases @ guardCases
+              let all =
+                  loopCases
+                  @ durableCases
+                  @ planHaltCases
+                  @ opCases
+                  @ guardCases
+                  @ stagedReadCases
+                  @ reportCases
 
               let verdicts =
                   [ for c in all do
@@ -965,6 +1253,98 @@ let stagingTests =
                   Expect.isFalse run.Production.Committed (sprintf "%s: committed" c.Name)
                   Expect.isEmpty run.ProductionLog (sprintf "%s: a performer ran" c.Name)
                   Expect.isEmpty run.Production.Performed (sprintf "%s: something is reported performed" c.Name)
+          }
+
+          test "the oracle agrees with production on STAGED READS at every failure position (Phase 2212, D34/D44)" {
+              expectNoDivergence "the extracted model and production" (divergences stagedReadCases)
+
+              // The read is a staged call in plan order beside the host call:
+              // asked after the plan, landing then.
+              let staged = runCase stagedReadCases.[0] None
+              Expect.isTrue staged.Production.Committed "staged: committed"
+
+              Expect.equal
+                  staged.ProductionLog
+                  [ "RunQuery"; "host:audit" ]
+                  "staged: the read was asked in the perform phase, before the host call"
+
+              Expect.equal
+                  staged.Production.Performed
+                  [ "EmitPatch"; "Notify"; "RunQuery"; "host:audit" ]
+                  "staged: the plan-phase arms, then the staged calls in plan order"
+
+              Expect.isTrue
+                  (Map.containsKey "rows" staged.Production.Store.Bindings)
+                  "staged: the table landed in its query slot"
+
+              // Failing AT the read: nothing after it ran, nothing landed.
+              let atRead = runCase stagedReadCases.[0] (Some 0)
+              Expect.isFalse atRead.Production.Committed "at the read: rolled back"
+              Expect.equal atRead.ProductionLog [ "RunQuery" ] "at the read: the host call was never asked"
+              Expect.isEmpty atRead.Production.Performed "at the read: nothing performed"
+
+              Expect.equal
+                  (List.last atRead.Production.Diagnostics)
+                  (ServerDiagnostic.PerformFailed("RunQuery", "scripted refusal at position 0"))
+                  "at the read: the failure names the read's capability"
+
+              // A declared pure read is NOT staged: asked while planning, no
+              // position of the staged list, its unresolvable sibling a plan
+              // halt rather than a perform failure.
+              let declared = runCase (List.last stagedReadCases) None
+              Expect.equal declared.ProductionLog [] "declared: nothing was asked of the scripted performer"
+              Expect.isFalse declared.Production.Committed "declared: the unresolvable read halted the plan"
+
+              Expect.isTrue
+                  (declared.Production.Diagnostics
+                   |> List.exists (fun d ->
+                       match d with
+                       | ServerDiagnostic.Failed("RunQuery", _) -> true
+                       | _ -> false))
+                  "declared: the halt is the plan phase's, under RunQuery"
+          }
+
+          test "the oracle agrees with production on REPORTING programs at every failure position (Phase 2212, D45)" {
+              expectNoDivergence "the extracted model and production" (divergences reportCases)
+
+              // Findings land in program order, on commit and on rollback.
+              let committed = runCase reportCases.[0] None
+              Expect.isTrue committed.Production.Committed "committed: the verb committed"
+
+              Expect.equal
+                  committed.Production.Findings
+                  [ finding "started" "info" "archiving"; finding "archived" "info" "archived" ]
+                  "committed: both findings, in program order"
+
+              Expect.equal
+                  committed.Production.Performed
+                  [ "Report"; "ApplyOps"; "Report"; "host:audit" ]
+                  "committed: a report is performed in the plan phase and stages nothing"
+
+              let refused = runCase reportCases.[1] None
+              Expect.isFalse refused.Production.Committed "refused: rolled back"
+
+              Expect.equal
+                  refused.Production.Findings
+                  [ finding "note-missing" "problem" "nothing to archive" ]
+                  "refused: the finding before the refusal survives the rollback; the one after it was never reached"
+
+              let outside = runCase reportCases.[2] None
+              Expect.isFalse outside.Production.Committed "outside: refused"
+              Expect.isEmpty outside.Production.Findings "outside: a refused report records nothing"
+              Expect.isEmpty outside.ProductionLog "outside: refused while planning, so the host call was never asked"
+
+              // Failing at every position of a staged list around reports
+              // leaves every finding standing.
+              for failAt in positions reportCases.[4] do
+                  let run = runCase reportCases.[4] failAt
+
+                  Expect.equal
+                      run.Production.Findings
+                      [ finding "started" "info" "one"
+                        finding "started" "info" "two"
+                        finding "archived" "info" "three" ]
+                      (sprintf "around staged calls, failing at %A: the findings are the program's" failAt)
           }
 
           test "the oracle agrees with production on the OP-CHANNEL GUARD and the performer's state (Phase 1974)" {
@@ -1070,14 +1450,16 @@ let stagingTests =
               // returned — on both sides, so the two outcomes still agree with
               // each other. The check that has to catch it is the claim
               // against the log.
-              let lying (log: Log) : string -> Performer =
-                  let honest = (scripted log None).Host
+              let lying (log: Log) : Scripted =
+                  let honest = scripted log None
 
-                  fun name ->
-                      if name = "second" then
-                          (fun _ -> Ok(JStr "ran:second"))
-                      else
-                          honest name
+                  { honest with
+                      Host =
+                          fun name ->
+                              if name = "second" then
+                                  (fun _ -> Ok(JStr "ran:second"))
+                              else
+                                  honest.Host name }
 
               let productionLog = Log()
               let modelLog = Log()
@@ -1290,42 +1672,71 @@ let private undoCases: UndoCase list =
       |> plain ]
 
 type private UndoRun =
-    { Posture: UndoVerdict * UndoReason list
-      ModelPosture: global.Undo.verdict * (bigint * global.Undo.defect) list
-      Plan: string list
-      ModelPlan: string list
-      Production: Result<ToyOutcome, UndoRefusal>
-      ProductionLog: string list
-      Model: Result<ToyOutcome, string>
-      ModelLog: string list }
+    {
+        Posture: UndoVerdict * UndoReason list
+        ModelPosture: global.Undo.verdict * (bigint * global.Undo.defect) list
+        /// The replay reasons of the effect stages, on both sides (Phase 2212).
+        Replay: (int * string) list
+        ModelReplay: (int * string) list
+        Plan: string list
+        ModelPlan: string list
+        Production: Result<ToyOutcome, UndoRefusal>
+        ProductionLog: string list
+        Model: Result<ToyOutcome, string>
+        ModelLog: string list
+    }
+
+let private modelReplayDefectText (d: global.Undo.replay_defect) =
+    match d with
+    | global.Undo.ReplayStagedQuery -> "staged-query"
+    | global.Undo.ReplayOpaqueHostCall -> "opaque-host-call"
+    | global.Undo.ReplayOutboundNotification -> "outbound-notification"
+
+/// The replay reasons of a handler's EFFECT stages, positioned — production's
+/// `HandlerWire.replayReasons` restricted to the stages the model's
+/// `replay_defects_of_effect` decides (Phase 2212): a compute stage's reasons
+/// are the wire module's walk over the encoded action and are outside the
+/// model, so they are outside the comparison.
+let private effectReplayReasons (query: QueryPosture) (w: ToyWitness) (handler: ToyHandler) =
+    HandlerWire.replayReasons query w handler
+    |> List.filter (fun r ->
+        match handler.Stages.[r.Stage] with
+        | Effect _ -> true
+        | Compute _ -> false)
+    |> List.map (fun r -> r.Stage, ProgramWire.replayDefectTag r.Defect)
+
+let private modelEffectReplayReasons (query: Staging.query_posture) (stages: ToyStage list) =
+    stages
+    |> List.mapi (fun index stage ->
+        match stage with
+        | Effect effect ->
+            global.Undo.replay_defects_of_effect query (modelEffect effect)
+            |> List.map (fun d -> index, modelReplayDefectText d)
+        | Compute _ -> [])
+    |> List.concat
 
 let private runUndoCase (u: UndoCase) (failAt: int option) : UndoRun =
     let w = undoWitnessOf u
     let c = u.Case
-    let mw = modelWitness w c.Resolve
     let cls = modelUndoClass w
 
     // The forward run, on both sides, never failing.
     let forwardLog = Log()
     let forwardScript = scripted forwardLog None
+    let forwardRegistry = registryFor c forwardScript
 
     let outcome, plan =
-        Handler.runPlanned
-            w
-            (registryFor c forwardScript.Host)
-            (performanceOf c forwardScript)
-            c.Resolve
-            "call"
-            c.Handler
-            c.Store
+        Handler.runPlanned w forwardRegistry (performanceOf c forwardScript) c.Resolve "call" c.Handler c.Store
 
     let modelForwardLog = Log()
     let modelForwardScript = scripted modelForwardLog None
+    let modelForwardRegistry = registryFor c modelForwardScript
+    let mw = modelWitness w modelForwardRegistry c.Resolve
 
     let modelOutcome, modelSteps =
         Staging.run_planned
             mw
-            (modelRegistry (performanceOf c modelForwardScript) (registryFor c modelForwardScript.Host))
+            (modelRegistry (performanceOf c modelForwardScript) c.Resolve modelForwardRegistry)
             "call"
             (c.Handler.Stages |> List.map modelStage)
             { st_tree = c.Store.Tree
@@ -1339,7 +1750,7 @@ let private runUndoCase (u: UndoCase) (failAt: int option) : UndoRun =
     let production =
         Fuaran.Program.Server.Undo.run
             w
-            (registryFor c undoScript.Host)
+            (registryFor c undoScript)
             (performanceOf c undoScript)
             c.Resolve
             "call"
@@ -1357,7 +1768,7 @@ let private runUndoCase (u: UndoCase) (failAt: int option) : UndoRun =
         match
             global.Undo.undo_run
                 mw
-                (modelRegistry (performanceOf c modelUndoScript) (registryFor c modelUndoScript.Host))
+                (modelRegistry (performanceOf c modelUndoScript) c.Resolve (registryFor c modelUndoScript))
                 "call"
                 cls
                 w.State.Canonical
@@ -1369,12 +1780,19 @@ let private runUndoCase (u: UndoCase) (failAt: int option) : UndoRun =
         | Staging.ROk out -> Ok(productionShaped out)
         | Staging.RErr reason -> Error reason
 
+    // The static postures read the host's declaration off the registry the
+    // run is given (D44), on both sides.
+    let query = ServerEffectRegistry.queryPosture forwardRegistry
+    let modelQuery = modelPosture query
+    let modelStages = c.Handler.Stages |> List.map modelStage
+
     { Posture =
-        Fuaran.Program.Server.Undo.posture QueryPosture.PureRead w c.Handler,
-        Fuaran.Program.Server.Undo.reasons QueryPosture.PureRead w c.Handler
+        Fuaran.Program.Server.Undo.posture query w c.Handler, Fuaran.Program.Server.Undo.reasons query w c.Handler
       ModelPosture =
-        global.Undo.posture mw cls (BoundedActions.reversible w) (c.Handler.Stages |> List.map modelStage),
-        global.Undo.reasons mw cls (BoundedActions.reversible w) (c.Handler.Stages |> List.map modelStage)
+        global.Undo.posture mw modelQuery cls (BoundedActions.reversible w) modelStages,
+        global.Undo.reasons mw modelQuery cls (BoundedActions.reversible w) modelStages
+      Replay = effectReplayReasons query w c.Handler
+      ModelReplay = modelEffectReplayReasons modelQuery c.Handler.Stages
       Plan = plan.Steps |> List.map projectStep
       ModelPlan = modelSteps |> List.map projectModelStep
       Production = production
@@ -1401,6 +1819,7 @@ let private modelDefectText (d: global.Undo.defect) =
     | global.Undo.OutboundNotification -> "outbound-notification"
     | global.Undo.EmittedPatch -> "emitted-patch"
     | global.Undo.ComputeOutsideFragment -> "compute-outside-fragment"
+    | global.Undo.StagedQuery -> "staged-query"
 
 let private undoDivergence (u: UndoCase) (failAt: int option) (run: UndoRun) : string option =
     let where =
@@ -1430,6 +1849,10 @@ let private undoDivergence (u: UndoCase) (failAt: int option) (run: UndoRun) : s
 
     if posture <> modelPosture then
         Some(sprintf "%s: the postures differ\n  production: %A\n  model:      %A" where posture modelPosture)
+    elif run.Replay <> run.ModelReplay then
+        Some(
+            sprintf "%s: the replay reasons differ\n  production: %A\n  model:      %A" where run.Replay run.ModelReplay
+        )
     elif
         List.length run.Plan <> List.length run.ModelPlan
         || not (List.forall2 sameKind run.Plan run.ModelPlan)
@@ -1466,8 +1889,13 @@ let private undoDivergences (cases: UndoCase list) : string list =
               | None -> () ]
 
 let private corpusAsUndo: UndoCase list =
-    loopCases @ durableCases @ opCases @ guardCases
+    loopCases @ durableCases @ opCases @ guardCases @ stagedReadCases @ reportCases
     |> List.map (fun c -> { Case = c; Classed = false })
+
+/// One read, at stage 0 — the handler whose postures turn on the host alone
+/// (Phase 2212; `StagedQueryPostureTests`' subject, at the oracle).
+let private oneRead: StagingCase =
+    case stagedOrigin "one read" [] loopStore [ Effect(ServerEffect.RunQuery("rows", Embedded rows, limitTwo)) ]
 
 [<Tests>]
 let undoOracleTests =
@@ -1496,6 +1924,100 @@ let undoOracleTests =
 
           test "the oracle agrees with production on the undo cases at every failure position of the undo" {
               expectNoDivergence "the extracted model and production" (undoDivergences undoCases)
+          }
+
+          test
+              "a staged read is `staged-query` in BOTH postures and the undo is refused at it; a pure read is in neither (Phase 2212, D44)" {
+              let reaching =
+                  runUndoCase
+                      { Case = stagedReads oneRead
+                        Classed = false }
+                      None
+
+              let pureRead = runUndoCase { Case = oneRead; Classed = false } None
+
+              let declared =
+                  runUndoCase
+                      { Case = declaredPureRead oneRead
+                        Classed = false }
+                      None
+
+              Expect.isNone
+                  (undoDivergence
+                      { Case = stagedReads oneRead
+                        Classed = false }
+                      None
+                      reaching)
+                  "reaching: diverged"
+
+              Expect.isNone (undoDivergence { Case = oneRead; Classed = false } None pureRead) "pure read: diverged"
+
+              Expect.isNone
+                  (undoDivergence
+                      { Case = declaredPureRead oneRead
+                        Classed = false }
+                      None
+                      declared)
+                  "declared: diverged"
+
+              // The undo vocabulary.
+              Expect.equal (verdictText (fst reaching.Posture)) "one-way" "reaching: the undo posture is one-way"
+
+              Expect.equal
+                  (snd reaching.Posture |> List.map (fun r -> r.Stage, defectText r.Defect))
+                  [ 0, "staged-query" ]
+                  "reaching: the one undo reason is the read, staged-query"
+
+              // The replay vocabulary.
+              Expect.equal
+                  reaching.Replay
+                  [ 0, "staged-query" ]
+                  "reaching: the one replay reason is the read, staged-query"
+
+              // The run: the read reached the world, and the undo refuses there.
+              Expect.equal reaching.Plan [ "reached RunQuery" ] "reaching: the trail holds the reached read"
+
+              match reaching.Production with
+              | Error refusal ->
+                  Expect.equal refusal.Code UndoCode.OneWayStep "reaching: refused one-way"
+                  Expect.equal refusal.Reason "RunQuery" "reaching: naming the read"
+              | Ok _ -> failtest "reaching: the undo of a staged read was not refused"
+
+              // Under a pure read — absent or declared — the same program names
+              // nothing, trails nothing, and its undo commits.
+              for label, run in [ "pure read", pureRead; "declared", declared ] do
+                  Expect.equal (verdictText (fst run.Posture)) "reversible" (label + ": reversible")
+                  Expect.isEmpty (snd run.Posture) (label + ": no undo reason")
+                  Expect.isEmpty run.Replay (label + ": no replay reason")
+                  Expect.isEmpty run.Plan (label + ": nothing on the trail")
+
+                  match run.Production with
+                  | Ok outcome -> Expect.isTrue outcome.Committed (label + ": the undo committed")
+                  | Error refusal -> failtest (sprintf "%s: the undo was refused: %A" label refusal)
+          }
+
+          test
+              "a report names no defect in either posture, and the postures of a reporting verb are its work's (Phase 2212, D45)" {
+              let reporting =
+                  { Case = reportCases.[0]
+                    Classed = false }
+
+              let run = runUndoCase reporting None
+              Expect.isNone (undoDivergence reporting None run) "reporting: diverged"
+
+              // The verb's one host call is the whole posture: the two reports
+              // contribute nothing to either vocabulary.
+              Expect.equal
+                  (snd run.Posture |> List.map (fun r -> r.Stage, defectText r.Defect))
+                  [ 2, "opaque-host-call" ]
+                  "reporting: the host call is the only undo reason"
+
+              Expect.equal run.Replay [ 2, "opaque-host-call" ] "reporting: the host call is the only replay reason"
+
+              Expect.equal
+                  (run.Plan |> List.map (fun step -> step.Split(' ').[0]))
+                  [ "edit"; "reached" ]
+                  "reporting: the trail holds the op and the host call, and no step for a report"
           }
 
           test "the oracle agrees with production on the staging corpus, undone" {
@@ -1577,14 +2099,16 @@ let undoOracleTests =
 
               let honest = runUndoCase u None
               let stages = u.Case.Handler.Stages |> List.map modelStage
-              let mw = modelWitness classedWitness u.Case.Resolve
+              let registry = registryFor u.Case (scripted (Log()) None)
+              let mw = modelWitness classedWitness registry u.Case.Resolve
+              let query = modelPosture (ServerEffectRegistry.queryPosture registry)
               let wrongClass = modelUndoClass witness
 
               let misClassed =
                   { honest with
                       ModelPosture =
-                          global.Undo.posture mw wrongClass (BoundedActions.reversible classedWitness) stages,
-                          global.Undo.reasons mw wrongClass (BoundedActions.reversible classedWitness) stages }
+                          global.Undo.posture mw query wrongClass (BoundedActions.reversible classedWitness) stages,
+                          global.Undo.reasons mw query wrongClass (BoundedActions.reversible classedWitness) stages }
 
               Expect.equal (fst honest.Posture) UndoVerdict.Compensable "production reads the declared compensation"
 
@@ -1679,7 +2203,16 @@ let private gateShapes: GateShape list =
         Narrow = ServerEffectRegistry.constrain "Notify" [ ServerConstraintClause.AllowList("channel", [ "other" ]) ] }
       { Label = "permissive, with a four-byte ceiling on audit"
         Gate = (fun _ -> true)
-        Narrow = ServerEffectRegistry.constrain "host:audit" [ ServerConstraintClause.Ceiling 4 ] } ]
+        Narrow = ServerEffectRegistry.constrain "host:audit" [ ServerConstraintClause.Ceiling 4 ] }
+      // A REACHING evaluator (Phase 2212, D34): every read is staged.
+      { Label = "permissive, reaching evaluator"
+        Gate = (fun _ -> true)
+        Narrow = ServerEffectRegistry.withQueryEvaluator (QueryEvaluator.reaching QueryEvaluator.fold) }
+      // The host's finding vocabulary (Phase 2212, D45): a report outside it
+      // is refused by the argument policy.
+      { Label = "permissive, with the finding vocabulary bounded"
+        Gate = (fun _ -> true)
+        Narrow = findingVocabulary } ]
 
 /// One effect per capability the corpus can name, including the unregistered
 /// host function.
@@ -1690,7 +2223,11 @@ let private effects: (string * ServerEffect<ToyOp>) list =
       "host:raw", ServerEffect.HostCall("raw", JStr "note", Some "rawed")
       "host:missing", ServerEffect.HostCall("missing", JStr "note", None)
       "EmitPatch", ServerEffect.EmitPatch [ touch "call" ]
-      "Notify", ServerEffect.Notify("channel", JStr "note") ]
+      "Notify", ServerEffect.Notify("channel", JStr "note")
+      // Two reports under one capability: one inside the finding vocabulary
+      // the bounded shape declares, one outside it.
+      "Report", ServerEffect.Report(finding "archived" "info" "within the vocabulary")
+      "Report", ServerEffect.Report(finding "unknown-code" "info" "outside the vocabulary") ]
 
 let private programs (effect: ServerEffect<ToyOp>) : (string * ToyStage list) list =
     [ "alone", [ Effect effect ]
@@ -1759,7 +2296,7 @@ let private gateModelRegistry (events: Events) (triple: Triple) : GateModelRegis
             events.Add("gate:" + cap)
             triple.Shape.Gate cap)
         |> triple.Shape.Narrow
-        |> modelRegistry OpPerformance.InMemory
+        |> modelRegistry OpPerformance.InMemory Fuaran.Compute.DataFrame.noResolve
 
     let contractOf ((fn, _): GateToken) : Staging.opt<EffectGate.contract<JVal>> =
         contracts
@@ -1775,7 +2312,15 @@ let private gateModelRegistry (events: Events) (triple: Triple) : GateModelRegis
       r_policy = policyBearer.r_policy
       r_lookup = fun fn -> raw |> Map.tryFind fn |> Option.map (fun perf -> fn, perf) |> modelOpt
       r_perf = EffectGate.checked_by contractOf rawBehaviour
-      r_op_perform = Staging.ONone }
+      r_op_perform = Staging.ONone
+      r_query_posture = policyBearer.r_query_posture
+      // A staged read's token under this keying: the registry's closure,
+      // keyed as `RunQuery`, which no contract names.
+      r_query_stage =
+        fun name query ->
+            let token, args = policyBearer.r_query_stage name query
+            ("RunQuery", token), args
+      r_record = policyBearer.r_record }
 
 let private handlerOf (triple: Triple) : ToyHandler =
     { Name = triple.Capability
@@ -1809,7 +2354,7 @@ let private runTripleWith
 
     let model =
         run
-            (modelWitness witness Fuaran.Compute.DataFrame.noResolve)
+            (modelWitness witness (productionRegistry (Events()) triple) Fuaran.Compute.DataFrame.noResolve)
             (gateModelRegistry modelEvents triple)
             "call"
             (triple.Stages |> List.map modelStage)
@@ -1977,25 +2522,7 @@ let private lookupFirstRun
         else
             Staging.perform w reg (Staging.rev planned.ac_staged) planned
 
-    let outcome: ModelOutcome =
-        if final.ac_halted then
-            { oc_store = store
-              oc_committed = false
-              oc_performed = Staging.rev final.ac_externally
-              oc_patches = []
-              oc_notifications = []
-              oc_client_effects = []
-              oc_diagnostics = Staging.rev final.ac_diagnostics }
-        else
-            { oc_store = final.ac_store
-              oc_committed = true
-              oc_performed = Staging.app (Staging.rev final.ac_performed) (Staging.rev final.ac_externally)
-              oc_patches = Staging.rev final.ac_patches
-              oc_notifications = Staging.rev final.ac_notifications
-              oc_client_effects = Staging.rev final.ac_client_effects
-              oc_diagnostics = Staging.rev final.ac_diagnostics }
-
-    productionShaped outcome
+    productionShaped (Staging.finish store final)
 
 // ─── Phase 1984 — the op contract at the handler, keyed on the op token ─────
 //
@@ -2156,7 +2683,7 @@ let private keyedModel
     let bridge =
         ServerEffectRegistry.denyAll
         |> ServerEffectRegistry.permissive
-        |> modelRegistry OpPerformance.InMemory
+        |> modelRegistry OpPerformance.InMemory Fuaran.Compute.DataFrame.noResolve
 
     let raw (token: KeyedToken) (args: JVal) : Staging.res<JVal> =
         match token with
@@ -2178,7 +2705,13 @@ let private keyedModel
             let answer = checkedBehaviour token args
             answers.Add answer
             answer
-      r_op_perform = Staging.OSome(fun state op -> OpToken(state, op), JObj []) }
+      r_op_perform = Staging.OSome(fun state op -> OpToken(state, op), JObj [])
+      r_query_posture = bridge.r_query_posture
+      r_query_stage =
+        fun name query ->
+            let token, args = bridge.r_query_stage name query
+            HostToken("RunQuery", token), args
+      r_record = bridge.r_record }
 
 let private keyedModelStore: ModelStore =
     { st_tree = durableStore.Tree
@@ -2212,7 +2745,7 @@ let private runKeyed (keying: OpKeying) (c: KeyedCase) : KeyedRun =
 
     let model =
         Staging.run
-            (modelWitness witness Fuaran.Compute.DataFrame.noResolve)
+            (modelWitness witness ServerEffectRegistry.denyAll Fuaran.Compute.DataFrame.noResolve)
             (keyedModel keyingFor modelSide (System.Collections.Generic.List<_>()))
             "call"
             (c.Stages |> List.map modelStage)
@@ -2297,7 +2830,10 @@ let private runKeyedDurably (c: KeyedCase) : DurableKeyedRun =
           d_reinvoke = services.ReinvokeIndeterminate }
 
     let keying = if c.Contracted then KeyedOnToken else Uncontracted
-    let mw = modelWitness witness Fuaran.Compute.DataFrame.noResolve
+
+    let mw =
+        modelWitness witness ServerEffectRegistry.denyAll Fuaran.Compute.DataFrame.noResolve
+
     let stages = c.Stages |> List.map modelStage
 
     let runProduction () =
@@ -2426,8 +2962,8 @@ let effectGateTests =
 
               Expect.equal
                   (List.length triples)
-                  441
-                  "the generated corpus is seven effects, three programs, seven gate shapes and three behaviours"
+                  729
+                  "the generated corpus is nine effects, three programs, nine gate shapes and three behaviours"
 
               Expect.isTrue (has (fun _ r -> r.Production.Committed)) "no run committed"
 
@@ -2840,7 +3376,7 @@ let effectGateTests =
                   let staged =
                       let planned =
                           Staging.plan
-                              (modelWitness witness Fuaran.Compute.DataFrame.noResolve)
+                              (modelWitness witness ServerEffectRegistry.denyAll Fuaran.Compute.DataFrame.noResolve)
                               (keyedModel KeyedOnToken (keyedSide c.Behaviour) (System.Collections.Generic.List<_>()))
                               "call"
                               (c.Stages |> List.map modelStage)
@@ -2956,4 +3492,411 @@ let effectGateTests =
                   keyedCases |> List.choose (fun c -> keyedDivergence c (runKeyed misKeyed c))
 
               Expect.isNonEmpty misKeyedDivergences "the mis-keyed model lost no case of the corpus"
+          } ]
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Phase 2212 — the staged read and the report under the DURABLE interpreter.
+//
+//  A staged read is a staged call (D34), so the durable discipline the model
+//  already proves decides it; what this host checks is that it does so beside
+//  `Durable.run` — journaled at its ordinal on a first run, SERVED on the
+//  resume with the evaluator not asked again, its table landed in the query
+//  slot. A finding is recorded while PLANNING through the recorder the
+//  durable interpreter installs (`journalFinding`); the model's
+//  `journal_finding` is that recorder at an ordinal, and it is compared with
+//  production over every journal shape a report's ordinal can hold, with a
+//  go-red bend. The two are compared at different grains for the reason
+//  DECISIONS.md D47 records: production keeps ONE cursor for the plan-phase
+//  reports and the perform-phase calls, and the model addresses a report by
+//  its own ordinal.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// The journal snapshot as the model reads it for the staging corpus
+/// (Phase 2212): `keyedJournal`'s reading, plus the model's stated assumption
+/// about a served query record — a value at a `RunQuery` ordinal that no
+/// longer decodes as a table is read as the REFUSAL production's
+/// `decodeAnswer` turns it into, so the model's total `w_land_query` never
+/// meets it.
+let private plainJournal (entries: JournalEntry list) : Staging.journal<JVal> =
+    let keyed = keyedJournal entries
+
+    { keyed with
+        j_step =
+            fun k ->
+                match keyed.j_step k, Journal.capabilityOf entries (int k) with
+                | Staging.JValue value, Some capability when
+                    capability = Durable.QueryStageCapability
+                    && Result.isError (QueryEvaluator.decodeAnswer (Ok value))
+                    ->
+                    Staging.JRefusal QueryEvaluator.AnswerUndecodable
+                | step, _ -> step }
+
+/// The model's durable reading over the staging corpus's registries, whose
+/// tokens are `Performer` closures: a host call's identity is its capability
+/// alone and a staged read's is `RunQuery` with no subject (`journalQuery`'s),
+/// so no call here carries a subject; the facet is the host function's, or
+/// the query evaluator's for a read. The corpus registers no op performer
+/// here — an op stage's subject is its content address, which a closure
+/// cannot answer, and the keyed host above is where op stages replay.
+let private plainDurable (services: DurableServices) (entries: JournalEntry list) : Staging.durable<JVal, Performer> =
+    { d_journal = plainJournal entries
+      d_subject = fun _ -> Staging.ONone
+      d_idempotent =
+        fun call ->
+            if call.sc_capability = Durable.QueryStageCapability then
+                PerformerFacets.queryEvaluatorFacet services.Performers = IdempotencyFacet.Idempotent
+            else
+                PerformerFacets.facetOf (call.sc_capability.Substring "host:".Length) services.Performers = IdempotencyFacet.Idempotent
+      d_reinvoke = services.ReinvokeIndeterminate }
+
+type private DurableReadRun =
+    { Production: DurableOutcome<ToyNode, ToyStore, ToyOp, ToyEffect>
+      Resumed: DurableOutcome<ToyNode, ToyStore, ToyOp, ToyEffect>
+      Model: ModelDurableOutcome
+      ModelResumed: ModelDurableOutcome
+      ProductionLog: string list
+      ModelLog: string list }
+
+/// One staging case run durably on both sides, twice: a first run against an
+/// empty journal, then a resume against what the first run left. Each side
+/// keeps one scripted performer across its two runs, so its log says how many
+/// times the evaluator was asked in all.
+let private runDurably (c: StagingCase) : DurableReadRun =
+    let journal = Journal.inMemory ()
+    let services = DurableServices.create |> DurableServices.withJournal journal
+
+    let productionLog = Log()
+    let productionScript = scripted productionLog None
+    let registry = registryFor c productionScript
+
+    let run () =
+        Durable.run (witnessOf c) services "inv" registry c.Resolve "call" c.Handler c.Store
+
+    let production = run ()
+    let entries = journal.Read "inv"
+    let resumed = run ()
+
+    let modelLog = Log()
+    let modelScript = scripted modelLog None
+    let modelRegistry' = registryFor c modelScript
+    let mw = modelWitness (witnessOf c) modelRegistry' c.Resolve
+    let mr = modelRegistry OpPerformance.InMemory c.Resolve modelRegistry'
+    let stages = c.Handler.Stages |> List.map modelStage
+
+    let store: ModelStore =
+        { st_tree = c.Store.Tree
+          st_bindings = c.Store.Bindings }
+
+    let model = Staging.durable_run mw mr (plainDurable services []) "call" stages store
+
+    let modelResumed =
+        Staging.durable_run mw mr (plainDurable services entries) "call" stages store
+
+    { Production = production
+      Resumed = resumed
+      Model = model
+      ModelResumed = modelResumed
+      ProductionLog = List.ofSeq productionLog
+      ModelLog = List.ofSeq modelLog }
+
+let private durableReadDivergence (c: StagingCase) (run: DurableReadRun) : string option =
+    let where = sprintf "%s (%s), durably" c.Name c.Origin
+    let ordinals (xs: bigint list) = xs |> List.map int
+
+    let compareOne
+        (leg: string)
+        (production: DurableOutcome<ToyNode, ToyStore, ToyOp, ToyEffect>)
+        (model: ModelDurableOutcome)
+        =
+        let p = projectionOf production.Outcome
+        let m = projectionOf (productionShaped model.do_outcome)
+
+        if p <> m then
+            Some(sprintf "%s (%s): the outcomes differ\n production: %A\n model:      %A" where leg p m)
+        elif
+            (production.Replayed, production.Invoked, production.Indeterminate)
+            <> (ordinals model.do_replayed, ordinals model.do_invoked, ordinals model.do_indeterminate)
+        then
+            Some(
+                sprintf
+                    "%s (%s): the ordinal lists differ\n production: %A\n model:      %A"
+                    where
+                    leg
+                    (production.Replayed, production.Invoked, production.Indeterminate)
+                    (model.do_replayed, model.do_invoked, model.do_indeterminate)
+            )
+        else
+            None
+
+    match compareOne "first run" run.Production run.Model with
+    | Some report -> Some report
+    | None ->
+        match compareOne "resumed" run.Resumed run.ModelResumed with
+        | Some report -> Some report
+        | None ->
+            if run.ProductionLog <> run.ModelLog then
+                Some(
+                    sprintf
+                        "%s: the performers were asked different things across the two runs\n production: %A\n model:      %A"
+                        where
+                        run.ProductionLog
+                        run.ModelLog
+                )
+            else
+                None
+
+/// The staged-read cases the plain durable reading can carry: no op performer
+/// (an op stage's subject is outside a closure token) and no report (a report
+/// moves the one cursor, which the model does not thread — D47).
+let private durableReadCases: StagingCase list =
+    stagedReadCases
+    |> List.filter (fun c ->
+        not c.PerformOps
+        && c.Handler.Stages
+           |> List.forall (fun stage ->
+               match stage with
+               | Effect(ServerEffect.Report _) -> false
+               | _ -> true))
+
+// ─── the journaled finding, shape by shape ──────────────────────────────────
+
+let private journalEntry
+    (step: int)
+    (capability: string)
+    (subject: string option)
+    (phase: JournalPhase)
+    : JournalEntry =
+    { Invocation = "inv"
+      Step = step
+      Capability = capability
+      Subject = subject
+      Phase = phase }
+
+let private reportingRegistry: ServerEffectRegistry =
+    ServerEffectRegistry.denyAll
+    |> ServerEffectRegistry.permissive
+    |> findingVocabulary
+
+let private reportOf (f: Finding) : ToyHandler =
+    { Name = "report"
+      Stages = [ Effect(ServerEffect.Report f) ] }
+
+/// What production's recorder answered the one-report plan, observed through
+/// the outcome: the finding the trace carries on commit, or the reason the
+/// handler halted under `Report`.
+let private productionRecorded (entries: JournalEntry list) (f: Finding) : Result<Finding list, string> =
+    let journal = Journal.inMemory ()
+    entries |> List.iter journal.Append
+    let services = DurableServices.create |> DurableServices.withJournal journal
+
+    let run =
+        Durable.run
+            witness
+            services
+            "inv"
+            reportingRegistry
+            Fuaran.Compute.DataFrame.noResolve
+            "call"
+            (reportOf f)
+            loopStore
+
+    if run.Outcome.Committed then
+        Ok run.Outcome.Findings
+    else
+        run.Outcome.Diagnostics
+        |> List.tryPick (fun d ->
+            match d with
+            | ServerDiagnostic.Failed("Report", reason) -> Some(Error reason)
+            | _ -> None)
+        |> Option.defaultWith (fun () ->
+            failtest (sprintf "the report halted under another diagnostic: %A" run.Outcome.Diagnostics))
+
+/// The model's recorder at the report's ordinal — `journal_finding` over the
+/// same entries, the content address, the codec and the finding production's
+/// own members supply. `subject` is a parameter so a go-red case can hand the
+/// model another address.
+let private modelRecorded
+    (subject: Staging.finding -> string)
+    (entries: JournalEntry list)
+    (f: Finding)
+    : Result<Finding list, string> =
+    match
+        Staging.journal_finding
+            (plainJournal entries)
+            (bigint 0)
+            subject
+            (productionFinding >> Finding.encode)
+            (fun value -> Finding.decode value |> Result.map modelFinding |> modelRes)
+            (modelFinding f)
+    with
+    | Staging.ROk recorded -> Ok [ productionFinding recorded ]
+    | Staging.RErr reason -> Error reason
+
+let private honestSubject: Staging.finding -> string =
+    productionFinding >> Finding.subject
+
+let private archived = finding "archived" "info" "notes/x.md archived"
+let private started = finding "started" "info" "archiving notes/x.md"
+
+let private findingShapes: (string * JournalEntry list) list =
+    let under (f: Finding) = Some(Finding.subject f)
+
+    [ "nothing recorded", []
+      "the finding completed",
+      [ journalEntry 0 "Report" (under archived) JournalPhase.Attempted
+        journalEntry 0 "Report" (under archived) (JournalPhase.Completed(Finding.encode archived)) ]
+      "another finding's record under this finding's identity",
+      [ journalEntry 0 "Report" (under archived) JournalPhase.Attempted
+        journalEntry 0 "Report" (under archived) (JournalPhase.Completed(Finding.encode started)) ]
+      "another finding recorded at the ordinal",
+      [ journalEntry 0 "Report" (under started) JournalPhase.Attempted
+        journalEntry 0 "Report" (under started) (JournalPhase.Completed(Finding.encode started)) ]
+      "an entry read recorded at the ordinal",
+      [ journalEntry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted
+        journalEntry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.Completed(JStr "read")) ]
+      "a host call recorded at the ordinal",
+      [ journalEntry 0 "host:audit" None JournalPhase.Attempted
+        journalEntry 0 "host:audit" None (JournalPhase.Completed(JStr "ran")) ]
+      "the record refused",
+      [ journalEntry 0 "Report" (under archived) JournalPhase.Attempted
+        journalEntry 0 "Report" (under archived) (JournalPhase.Refused "the host could not record") ]
+      "attempted and undecided", [ journalEntry 0 "Report" (under archived) JournalPhase.Attempted ]
+      "a record that is not a finding",
+      [ journalEntry 0 "Report" (under archived) JournalPhase.Attempted
+        journalEntry 0 "Report" (under archived) (JournalPhase.Completed(JStr "junk")) ] ]
+
+[<Tests>]
+let stagedReadAndReportTests =
+    testList
+        "Phase 2212 - the staged read and the report as oracle at the toy witness"
+        [ test
+              "a staged read is journaled at its ordinal and SERVED on resume, beside Durable.run, on every staged-read case" {
+              Expect.isGreaterThanOrEqual (List.length durableReadCases) 5 "the durable read corpus is too small"
+
+              let divergences =
+                  durableReadCases
+                  |> List.choose (fun c -> durableReadDivergence c (runDurably c))
+
+              expectNoDivergence "the extracted durable_run and Durable.run" divergences
+
+              // The read: invoked on the first run, replayed on the second, the
+              // evaluator asked once in all, the same table landed.
+              let run = runDurably stagedReadCases.[0]
+              Expect.isTrue run.Production.Outcome.Committed "first run: committed"
+              Expect.equal run.Production.Invoked [ 0; 1 ] "first run: the read then the host call were invoked"
+              Expect.equal run.Resumed.Replayed [ 0; 1 ] "resumed: both served"
+              Expect.equal run.Resumed.Invoked [] "resumed: nothing invoked"
+
+              Expect.equal
+                  run.ProductionLog
+                  [ "RunQuery"; "host:audit" ]
+                  "across both runs the evaluator was asked exactly once, on the first"
+
+              Expect.equal
+                  run.Resumed.Outcome.Store.Bindings.["rows"]
+                  run.Production.Outcome.Store.Bindings.["rows"]
+                  "resumed: the served table landed in the query slot"
+          }
+
+          test
+              "a resume whose journal holds a query record that no longer decodes is refused at the read, on both sides" {
+              // The model's stated assumption, exercised: production's
+              // `decodeAnswer` refuses the served record; the model's snapshot
+              // reads it as that refusal, and its total landing is never met.
+              let c = stagedReadCases.[0]
+              let journal = Journal.inMemory ()
+              let services = DurableServices.create |> DurableServices.withJournal journal
+              let script = scripted (Log()) None
+              let registry = registryFor c script
+
+              Durable.run (witnessOf c) services "inv" registry c.Resolve "call" c.Handler c.Store
+              |> ignore
+
+              let corrupted =
+                  journal.Read "inv"
+                  |> List.map (fun e ->
+                      match e.Phase with
+                      | JournalPhase.Completed _ when e.Capability = Durable.QueryStageCapability ->
+                          { e with
+                              Phase = JournalPhase.Completed(JStr "not a table") }
+                      | _ -> e)
+
+              let replaced = Journal.inMemory ()
+              corrupted |> List.iter replaced.Append
+              let services' = DurableServices.create |> DurableServices.withJournal replaced
+
+              let production =
+                  Durable.run (witnessOf c) services' "inv" registry c.Resolve "call" c.Handler c.Store
+
+              let modelScript = scripted (Log()) None
+              let mreg = registryFor c modelScript
+
+              let model =
+                  Staging.durable_run
+                      (modelWitness (witnessOf c) mreg c.Resolve)
+                      (modelRegistry OpPerformance.InMemory c.Resolve mreg)
+                      (plainDurable services' corrupted)
+                      "call"
+                      (c.Handler.Stages |> List.map modelStage)
+                      { st_tree = c.Store.Tree
+                        st_bindings = c.Store.Bindings }
+
+              Expect.isFalse production.Outcome.Committed "production: refused"
+
+              Expect.equal
+                  (projectionOf production.Outcome)
+                  (projectionOf (productionShaped model.do_outcome))
+                  "the two outcomes differ on an undecodable query record"
+
+              Expect.equal
+                  (List.last production.Outcome.Diagnostics)
+                  (ServerDiagnostic.PerformFailed("RunQuery", QueryEvaluator.AnswerUndecodable))
+                  "the refusal is the read's, named"
+
+              Expect.equal
+                  production.Replayed
+                  (model.do_replayed |> List.map int)
+                  "the served ordinal is reported replayed on both sides"
+          }
+
+          test
+              "the journaled finding: the extracted journal_finding and Durable.run's recorder agree over every journal shape" {
+              for label, entries in findingShapes do
+                  Expect.equal
+                      (modelRecorded honestSubject entries archived)
+                      (productionRecorded entries archived)
+                      (sprintf "%s: the recorder's answer differs" label)
+
+              // And the shapes land where D45 says: served, diverged, live.
+              Expect.equal (productionRecorded [] archived) (Ok [ archived ]) "nothing recorded: the live finding"
+
+              Expect.equal
+                  (productionRecorded (snd findingShapes.[2]) archived)
+                  (Ok [ started ])
+                  "the record under this identity is SERVED, whatever the live finding says"
+
+              Expect.equal
+                  (productionRecorded (snd findingShapes.[3]) archived)
+                  (Error DurableCode.ReplayDivergence)
+                  "a resume that would report a different finding is refused"
+
+              Expect.equal
+                  (productionRecorded (snd findingShapes.[4]) archived)
+                  (Error(DurableCode.entryReadDiverged "bundle"))
+                  "a report where the recorded run read is refused naming the read"
+
+              Expect.equal
+                  (productionRecorded (snd findingShapes.[8]) archived)
+                  (Error Finding.Malformed)
+                  "a record that is not a finding is refused as malformed"
+          }
+
+          test "the finding comparison can go red: a model handed another content address disagrees with production" {
+              let elsewhere: Staging.finding -> string = fun _ -> "sha256:elsewhere"
+              let entries = snd findingShapes.[1]
+
+              Expect.notEqual
+                  (modelRecorded elsewhere entries archived)
+                  (productionRecorded entries archived)
+                  "the harness did not notice a model keyed on the wrong address"
           } ]

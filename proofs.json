@@ -26,7 +26,7 @@
   "kind": "proofs",
   "version": 1,
   "subject": "Fuaran-Program",
-  "$scope": "the proved models under proofs/: the shared bounded fold — BoundedActions.runBoundedActionWith, the one interpreter every placement runs, over the closed Action union, its State store, its closure-free client effects and its diagnostics (Phase 1715), restated over the generic tier's ActionView and the fold-read members of the ProgramWitness contract (DECISIONS.md D18) and re-proved there before the generic core is written, with the fourteen-arm union kept as the UI witness seen through the view (Phase 1898), and restated over the view's fifth shape — the halting guard Require the second witness needed — before the port that added it, with a fifth theorem that only a guard halts and the UI tier never does (Phase 1967); and the interaction budget — Budget.satAdd/satMul, Budget.actionCascadeCost, Budget.treeCost and the G2 stage of BoundedDriver.step that refuses on them (Phase 1716); and two-phase staging — Handler.run's plan phase, phase boundary and perform phase with the performer abstract, DECISIONS.md D8's law that the residual of a failed handler is exactly the prefix of staged calls that ran (Phase 1717), over a staged list that since Phase 1967 holds ops as well as host calls under a registered op performer, and since Phase 1974 over an ApplyOps arm that carries the op-channel guard and hands the performer the planned state, and since Phase 1980 beside the durable discipline — Durable.runWith's replay over a journal snapshot, which serves a completed prefix, performs only the rest, refuses an undecided step by default and re-invokes it only by name, for an op stage exactly as for a host call (DECISIONS.md D12, restated by D23); and the effect gate — ServerEffectRegistry.Gate consulted before any performer, the policy an operator declares over the trace of performed effects, and the return contract ServerEffectRegistry.registerChecked composes with a performer, proved over the staging model with the performer abstract (Phase 1759), and since Phase 1981 the op performer's receipt and the OpContract OpPerformance.performedChecked composes with it, checked against the planned state and the op before the op is reported as performed (DECISIONS.md D24). Bounded code and bounded cost, the two halves of running an untrusted generated tree on shared infrastructure; bounded residue, what a handler that reaches outside can leave behind; and a constrained boundary, what reaches a performer and what it can hand back.",
+  "$scope": "the proved models under proofs/: the shared bounded fold — BoundedActions.runBoundedActionWith, the one interpreter every placement runs, over the closed Action union, its State store, its closure-free client effects and its diagnostics (Phase 1715), restated over the generic tier's ActionView and the fold-read members of the ProgramWitness contract (DECISIONS.md D18) and re-proved there before the generic core is written, with the fourteen-arm union kept as the UI witness seen through the view (Phase 1898), and restated over the view's fifth shape — the halting guard Require the second witness needed — before the port that added it, with a fifth theorem that only a guard halts and the UI tier never does (Phase 1967); and the interaction budget — Budget.satAdd/satMul, Budget.actionCascadeCost, Budget.treeCost and the G2 stage of BoundedDriver.step that refuses on them (Phase 1716); and two-phase staging — Handler.run's plan phase, phase boundary and perform phase with the performer abstract, DECISIONS.md D8's law that the residual of a failed handler is exactly the prefix of staged calls that ran (Phase 1717), over a staged list that since Phase 1967 holds ops as well as host calls under a registered op performer, and since Phase 1974 over an ApplyOps arm that carries the op-channel guard and hands the performer the planned state, and since Phase 1980 beside the durable discipline — Durable.runWith's replay over a journal snapshot, which serves a completed prefix, performs only the rest, refuses an undecided step by default and re-invokes it only by name, for an op stage exactly as for a host call (DECISIONS.md D12, restated by D23), and since Phase 2212 over a read under a reaching query evaluator, staged as a host call is and landed in its query slot, and the Report arm, recorded while planning and journaled at its ordinal as the entry read is (DECISIONS.md D47, closing D44 and D45); and the effect gate — ServerEffectRegistry.Gate consulted before any performer, the policy an operator declares over the trace of performed effects, and the return contract ServerEffectRegistry.registerChecked composes with a performer, proved over the staging model with the performer abstract (Phase 1759), and since Phase 1981 the op performer's receipt and the OpContract OpPerformance.performedChecked composes with it, checked against the planned state and the op before the op is reported as performed (DECISIONS.md D24). Bounded code and bounded cost, the two halves of running an untrusted generated tree on shared infrastructure; bounded residue, what a handler that reaches outside can leave behind; and a constrained boundary, what reaches a performer and what it can hand back.",
   "claims": [
     {
       "id": "fold-totality",
@@ -2137,6 +2137,207 @@
         "document": "DECISIONS.md"
       },
       "reason": "D42, 'Why the wire does not move': an op is the domain's, encoded by its own Stream.Encode; the specification references the view's shapes and spells none of them; the ReplayDefect vocabulary already carries non-literal-write; the demanded document — which gains the member `values` and moves to version 9 — is deliberately ungoverned by the specification (its section 11.2), and the resolution is journaled under the existing ReadExtent step. The codec families and the driver scenarios pass byte for byte against the specification clone FUARAN_PROGRAM_SPEC names."
+    },
+    {
+      "id": "staged-read-pure-read-plans-while-planning",
+      "level": "proved",
+      "phase": "Phase 2212",
+      "claim": "Under a host whose query posture is PureRead — absent, the in-memory fold, or declared — an admitted read is asked while planning, against the bindings as of its stage, and lands its table there or halts under RunQuery with the evaluator's refusal; nothing is staged, the trail and the tree do not move. The arm exactly as every placement ran it before the evaluator seam, as an equation; and the whole plan is the same under every staging arrow (pure_read_reads_no_stage), so a host with no reaching evaluator plans as it planned before the arrow existed.",
+      "evidence": {
+        "theorem": "pure_read_plans_while_planning",
+        "model": "proofs/Staging.fst",
+        "prover": "proofs/fstar-pin.json",
+        "definitions": [
+          "plan_effect",
+          "query_posture",
+          "r_query_posture",
+          "w_query",
+          "pure_read_reads_no_stage",
+          "plan_stage_pure_read"
+        ],
+        "note": "DECISIONS.md D47: the posture is the REGISTRY's (ServerEffectRegistry.queryPosture), amending D44's sketch which placed it on the witness; a required member, as production's parameter is, so no posture is computed without the host's declaration"
+      }
+    },
+    {
+      "id": "staged-read-stages-one-call",
+      "level": "proved",
+      "phase": "Phase 2212",
+      "claim": "Under a host whose query posture is Reaching, an admitted read stages exactly ONE call on top of the staged list — capability RunQuery, the token and the argument r_query_stage answers for the name and the query (production's closure over the evaluator, the source, the pipeline and the resolver, answering through encodeAnswer), landing in the read's QUERY slot — records TReached RunQuery on the undo trail, and touches nothing else: the store does not move, Performed is not extended, no finding, no diagnostic. And the read's stage is planned the same under EVERY evaluator (staged_read_asks_no_evaluator): the evaluator is not asked while planning.",
+      "evidence": {
+        "theorem": "staged_read_stages_one_call",
+        "model": "proofs/Staging.fst",
+        "prover": "proofs/fstar-pin.json",
+        "definitions": [
+          "staged_read",
+          "landing",
+          "r_query_stage",
+          "plan_effect",
+          "staged_read_asks_no_evaluator",
+          "admitted_effect"
+        ],
+        "note": "D34's staging as an equation; r_query_stage splits the staged closure into token and argument exactly as r_op_perform does, the third instance of that split"
+      }
+    },
+    {
+      "id": "staged-read-not-asked-on-resume",
+      "level": "proved",
+      "phase": "Phase 2212",
+      "claim": "A staged read the journal records as COMPLETED at its ordinal under the read's identity (RunQuery, no subject), followed by calls the journal has nothing for, is SERVED: its ordinal is reported replayed, the performer is invoked at exactly the ordinals of the calls after it that the perform phase asks — never at the read's, so the evaluator is not asked again — and the recorded answer is landed in the read's query slot through w_land_query over the bindings as of the landing, with the rest performed from there.",
+      "evidence": {
+        "theorem": "staged_read_not_asked_on_resume",
+        "model": "proofs/Staging.fst",
+        "prover": "proofs/fstar-pin.json",
+        "definitions": [
+          "replay",
+          "land",
+          "w_land_query",
+          "resume_performs_only_the_rest",
+          "completed_at",
+          "unrun_from"
+        ],
+        "note": "a corollary of the durable discipline (Phase 1980) once a reaching read is a staged call; stated so the claim D34 made of a resume is named"
+      }
+    },
+    {
+      "id": "report-records-and-moves-nothing",
+      "level": "proved",
+      "phase": "Phase 2212",
+      "claim": "An admitted report whose recorder answers extends Performed with Report and the findings with the recorded finding, and touches NOTHING else: not the store, not the staged list, not the undo trail, not the patches, the notifications, the client effects or the diagnostics — a report stages nothing, trails nothing and moves no state; a recorder's refusal halts under Report with the recorder's reason and records no finding. And it names no defect in either static vocabulary (Undo.report_names_no_defect): no undo defect, no replay reason.",
+      "evidence": {
+        "theorem": "report_records_and_moves_nothing",
+        "model": "proofs/Staging.fst",
+        "prover": "proofs/fstar-pin.json",
+        "definitions": [
+          "plan_effect",
+          "finding",
+          "r_record",
+          "report_capability",
+          "report_refused_halts"
+        ],
+        "note": "D45's shape as an equation; the finding is a concrete record rather than a type parameter because the theorems are about findings"
+      }
+    },
+    {
+      "id": "findings-in-program-order",
+      "level": "proved",
+      "phase": "Phase 2212",
+      "claim": "The outcome's findings — on commit AND on rollback — are exactly the findings the plan recorded, each admitted report's recorder answer in stage order up to the halt, and the perform phase adds none: a host reading the outcome's findings reads the program's reports in the order the program made them, and a finding survives the rollback.",
+      "evidence": {
+        "theorem": "findings_in_program_order",
+        "model": "proofs/Staging.fst",
+        "prover": "proofs/fstar-pin.json",
+        "definitions": [
+          "reported",
+          "stage_findings",
+          "plan_findings",
+          "plan_stage_findings",
+          "perform_spec",
+          "finish"
+        ],
+        "note": "perform_spec gained the clauses that the perform phase touches neither the trail nor the findings"
+      }
+    },
+    {
+      "id": "journaled-finding-served-and-diverged",
+      "level": "proved",
+      "phase": "Phase 2212",
+      "claim": "The recorder the durable interpreter installs for a report — the same wrapper the entry read goes through, under Report with the finding's content address as its subject, declared idempotent, the finding encoded as the value and the record decoded back — answers the RECORD, decoded, where the journal holds a completed record under the finding's identity (whatever the live finding says); is refused where the recorded identity at the ordinal is not this finding's — under durable-replay-divergence, or naming the entry read where the record is one — so a resume that would report a DIFFERENT finding (a different content address) is refused; and answers the finding encoded and decoded back where nothing is recorded, which is the finding itself under a codec that round-trips.",
+      "evidence": {
+        "theorem": "finding_served",
+        "model": "proofs/Staging.fst",
+        "prover": "proofs/fstar-pin.json",
+        "definitions": [
+          "journal_finding",
+          "diverged_refusal",
+          "finding_diverged_refused",
+          "different_finding_refused",
+          "finding_unrun_is_live",
+          "entry_read_refusal",
+          "replay_divergence"
+        ],
+        "note": "D45's journaled-finding claim, in reach of the durable model exactly as the entry read is (Phase 2165): at an ordinal, with the one-cursor assumption inherited; the codec and the content address are the host's arrows and every theorem that needs a property of them names it as a hypothesis"
+      }
+    },
+    {
+      "id": "staged-read-named-in-both-vocabularies",
+      "level": "proved",
+      "phase": "Phase 2212",
+      "claim": "A read under a reaching evaluator is staged-query in BOTH closed defect vocabularies — the undo's (Undo.stage_defects, graded one-way, which dominates every other verdict) and the replay's (replay_defects_of_effect) — and under a pure read it is in neither, as it was before the seam; a report names no defect in either. The host's one declaration, read the same way by both postures.",
+      "evidence": {
+        "theorem": "staged_read_named_in_both_vocabularies",
+        "model": "proofs/Undo.fst",
+        "prover": "proofs/fstar-pin.json",
+        "definitions": [
+          "stage_defects",
+          "replay_defect",
+          "replay_defects_of_effect",
+          "grade",
+          "worst_one_way",
+          "report_names_no_defect"
+        ],
+        "note": "the replay vocabulary modelled is the EFFECT-axis half of HandlerWire.replayReasons; the op-axis and action-axis walks (ProgramWire.replayDefectsOfOp, replayDefectsOfActionIn) are the wire module's and stay outside the model — the differential compares the two over the corpus's effect stages"
+      }
+    },
+    {
+      "id": "staged-read-undo-refused",
+      "level": "proved",
+      "phase": "Phase 2212",
+      "claim": "The static posture and the run AGREE on a staged read: a one-read program under a reaching evaluator, the read admitted and its staged call answered, commits with the undo trail holding exactly TReached RunQuery, and the undo of that run is refused undo-one-way-step at step 0 naming RunQuery — the step the static posture called staged-query; under a pure read the same program's trail is empty and the posture names no defect.",
+      "evidence": {
+        "theorem": "staged_read_undo_refused",
+        "model": "proofs/Undo.fst",
+        "prover": "proofs/fstar-pin.json",
+        "definitions": [
+          "run_planned",
+          "undo_run",
+          "first_refused",
+          "staged_read_stages_one_call"
+        ],
+        "note": "StagedQueryPostureTests' predicate, as a theorem over the model; the posture-bearing theorems (plan_clear, undo_run_restores) read the posture off the registry the run is given, so the static side and the run consult one fact"
+      }
+    },
+    {
+      "id": "staged-read-and-report-oracle-at-the-toy-witness",
+      "level": "tested",
+      "phase": "Phase 2212",
+      "claim": "The extracted model and production agree over handlers under a scripted REACHING evaluator (eight cases, the declared pure read as the control) at every failure position of a staged list that now counts the reads, over reporting programs (six cases: findings before and after the work, a finding surviving a plan-phase refusal, one the argument policy refuses, one the gate refuses, reports between staged calls) and their findings in program order, over both static postures read under the registry's declaration with the effect-stage replay reasons beside them, over the effect-gate corpus widened by the arm and two shapes (729 triples); durable_run and Durable.run agree twice over the staged-read corpus — the read invoked on the first run, served on the resume, the evaluator asked once in all, the table landed — and on a journal whose query record no longer decodes; and journal_finding and the durable recorder agree over nine journal shapes a report's ordinal can hold, with a go-red bend that hands the model another content address.",
+      "evidence": {
+        "family": "Phase 2212 - the staged read and the report as oracle at the toy witness",
+        "host": "tests/Fuaran.Program.Tests/ToyStagingOracleTests.fs",
+        "cases": [
+          "a staged read is journaled at its ordinal and SERVED on resume, beside Durable.run, on every staged-read case",
+          "a resume whose journal holds a query record that no longer decodes is refused at the read, on both sides",
+          "the journaled finding: the extracted journal_finding and Durable.run's recorder agree over every journal shape",
+          "the finding comparison can go red: a model handed another content address disagrees with production"
+        ],
+        "supporting": [
+          "Phase 1717 - the proved staging as oracle at the toy witness",
+          "Phase 1977 - the proved undo as oracle at the toy witness",
+          "Phase 1759 - the proved effect gate as oracle at the toy witness"
+        ],
+        "runner": "proofs/check.ps1 (step 6) and run.ps1 (the Fuaran.Program.Tests project)"
+      },
+      "note": "the whole-run durable differential covers staged-read programs with no report and no op performer: a report moves production's ONE cursor, which the model does not thread (D47, the one-cursor assumption), and an op stage's subject is its content address, which a closure token cannot answer (the keyed host is where op stages replay)"
+    },
+    {
+      "id": "staged-read-undecodable-record-is-a-snapshot-refusal",
+      "level": "assumed",
+      "phase": "Phase 2212",
+      "claim": "A value the journal serves at a staged read's ordinal decodes as a table. The model's w_land_query is total; a served record that no longer decodes is read as the refusal production's decodeAnswer turns it into (query-answer-undecodable) at the journal SNAPSHOT, which halts the handler at the read with the ordinal reported replayed, exactly as production halts it.",
+      "evidence": {
+        "assumption": "the host's journal reading (plainJournal in ToyStagingOracleTests) maps such a record to JRefusal query-answer-undecodable; an invoked evaluator's answer is encodeAnswer's and always decodes"
+      },
+      "mitigation": "the host's second test corrupts a query record and runs the resume on both sides, asserting the same outcome, the read's PerformFailed named, and the same replayed ordinals"
+    },
+    {
+      "id": "report-ordinal-outside-the-threaded-cursor",
+      "level": "assumed",
+      "phase": "Phase 2212",
+      "claim": "A report's ordinal precedes every staged call's by the number of plan-phase records before it: production keeps ONE cursor for the plan-phase reports and the perform-phase calls, and the model addresses a report by its own ordinal k while durable_run replays the staged list from 0 — D39's one-cursor assumption, inherited unchanged.",
+      "evidence": {
+        "assumption": "the whole-run durable differential excludes reporting programs; the finding is compared recorder to recorder at its own ordinal"
+      },
+      "mitigation": "ReportTests pins the sequence on production (a report at ordinal 0, the staged calls after it); a production run whose Invoked/Replayed lists did not shift by the report count would be the falsifier"
     }
   ]
 }
