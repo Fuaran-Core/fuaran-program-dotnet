@@ -1127,7 +1127,7 @@ The denial sink (`OnDenied`) is a unit-returning observer and is not modelled.
     once** — `resumed_plan_observes_entry` (Phase 2165).
 25. **Under a pure read an admitted read is asked while planning and lands there — the arm as it
     was — and the whole plan is the same under every staging arrow** —
-    `pure_read_plans_while_planning`, `pure_read_reads_no_stage` (Phase 2212, D47).
+    `pure_read_plans_while_planning`, `pure_read_reads_no_stage` (Phase 2212, D48).
 26. **Under a reaching evaluator an admitted read stages exactly one call, landing in its query
     slot, records `TReached "RunQuery"`, and touches nothing else; its stage is the same under every
     evaluator** — `staged_read_stages_one_call`, `staged_read_asks_no_evaluator` (Phase 2212).

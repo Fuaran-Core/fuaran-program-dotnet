@@ -90,6 +90,16 @@ open Fuaran.Program.Bounded
 //  resume is SERVED the recorded finding, and one that would report a
 //  different finding at that ordinal is the divergence the wrapper refuses.
 //
+//  ── A DERIVED VIEW is journaled as derived (Phase 2220, D47) ───────────────
+//  A projection the plan computes from a value it holds — an index over the
+//  relation it read — is neither a read nor an act. `runDeriving` hands the
+//  witness a `DerivationRecorder` beside its entry reader: the run computes
+//  each view once per input content, and the first computation is journaled
+//  at its ordinal under `Derive`, the subject `<view>@<input key>`, the value
+//  the derivation and never the view. A resume is served the record and
+//  recomputes the view from the SERVED input; `Durable.derivations` reads the
+//  run's derivations off the journal alone.
+//
 //  The consequence a reader should carry away is the one the facets state: this
 //  interpreter's exactly-once claim is about what IT performs — and, since
 //  Phase 2165, about what its plan READ. What a caller does with a returned
@@ -290,6 +300,203 @@ type Reads(reader: EntryReader) =
     /// How many decodes the codecs actually ran this run — the memo's evidence.
     member _.Decodes: int = decodes
 
+// ============================================================================
+//  A DERIVED VIEW is computed once per input value and journaled AS DERIVED
+//  (Phase 2220, D47).
+//
+//  A read is the world's answer; a derived view is not a read. It is a PURE
+//  projection over a value the run already holds — an index over a tree the
+//  plan read, a component map over a relation — which several later steps of
+//  the same program consult. Without it each step re-derives the projection,
+//  or the host caches it outside the program, where neither the journal nor a
+//  replay can see it.
+//
+//  `Derivations` is the run's ledger of them, beside `Reads`: a view is keyed
+//  by its NAME and the CONTENT key of its input, computed at most once per run,
+//  and each computation is journaled at its ordinal under `Derive` — the view
+//  and the input's key, never the value, because the value is a pure function
+//  of an input the journal already holds (the read that produced it), so a
+//  resume recomputes it from the SERVED input exactly as `Reads` re-decodes the
+//  served content (D41). A derived view over an unavailable read is
+//  unavailable for the same reason, naming the same read, and is never
+//  computed.
+// ============================================================================
+
+/// One derivation a run made: the view's NAME and the CONTENT key of the input
+/// it was derived from — both log-safe, neither the value.
+type Derivation = { View: string; Input: string }
+
+module Derivation =
+
+    /// The member a recorded derivation's view is journaled under.
+    [<Literal>]
+    let ViewMember = "view"
+
+    /// The member a recorded derivation's input key is journaled under.
+    [<Literal>]
+    let InputMember = "input"
+
+    /// The tier's refusal of a served record that is not a derivation.
+    [<Literal>]
+    let Malformed = "the journal's recorded derivation is not a derivation"
+
+    /// The derivation's journal SUBJECT: `<view>@<input key>`, so a resume that
+    /// would derive another view, or the same view over another input, at a
+    /// derivation's ordinal is the divergence the durable tier refuses.
+    let subject (derivation: Derivation) : string =
+        derivation.View + "@" + derivation.Input
+
+    /// The record of a derivation.
+    let encode (derivation: Derivation) : Fuaran.Core.JVal =
+        Fuaran.Core.JObj
+            [ ViewMember, Fuaran.Core.JStr derivation.View
+              InputMember, Fuaran.Core.JStr derivation.Input ]
+
+    /// The derivation a record holds, or `Malformed`.
+    let decode (recorded: Fuaran.Core.JVal) : Result<Derivation, string> =
+        match recorded with
+        | Fuaran.Core.JObj [ v, Fuaran.Core.JStr view; i, Fuaran.Core.JStr input ] when
+            v = ViewMember && i = InputMember
+            ->
+            Ok { View = view; Input = input }
+        | _ -> Error Malformed
+
+/// How a run RECORDS a derivation (Phase 2220, D47): handed the derivation, it
+/// answers the derivation the run's trace carries. Outside a durable run that
+/// is the derivation itself (`DerivationRecorder.live`); `Durable.runDeriving`
+/// hands the witness one that journals it at its ordinal under `Derive` and
+/// serves the record on resume — the shape `EntryReader` and
+/// `FindingRecorder` have, for the same reason.
+type DerivationRecorder = Derivation -> Result<Derivation, string>
+
+module DerivationRecorder =
+
+    /// The recorder outside a durable run: the derivation, as made.
+    let live: DerivationRecorder = Ok
+
+    /// The capability a derivation is journaled under — never `ReadEntry`: a
+    /// derivation reads nothing, and the journal says so.
+    [<Literal>]
+    let Capability = "Derive"
+
+/// A pure view of an input value (Phase 2220, D47): its NAME, the CONTENT key
+/// of an input — equal inputs must have equal keys, and two inputs that differ
+/// must not share one, so a key is a content address, never a reference or a
+/// metadata stamp — and the derivation itself, a pure function of the input.
+type DerivedView<'T, 'V> =
+    { Name: string
+      Key: 'T -> string
+      Derive: 'T -> 'V }
+
+module DerivedView =
+
+    /// A view keyed by a SHA-256 over the input's canonical form — the content
+    /// address `Durable.opSubject` and a finding's subject use. `canonical`
+    /// must render equal inputs to equal text.
+    let ofContent (name: string) (canonical: 'T -> string) (derive: 'T -> 'V) : DerivedView<'T, 'V> =
+        { Name = name
+          Key = fun input -> ProgramWire.ContentAddressPrefix + Fuaran.Core.Hash.sha256Hex (canonical input)
+          Derive = derive }
+
+/// **The derived views of ONE run** (Phase 2220, D47), over the run's
+/// `DerivationRecorder` — built per run beside the run's `Reads`, inside the
+/// `witnessOf` a host hands `Durable.runDeriving` (or over
+/// `DerivationRecorder.live` outside a durable run):
+///
+///   * `Of(view, input)` answers the view of `input`, computing it only the
+///     first time the run asks for that view over an input with that content
+///     key; that first computation is recorded through the recorder (journaled
+///     under `Derive`) before it runs. An `Error` is the TIER's — the
+///     derivation diverged on a resume, or one view name was asked at two
+///     value types — and the plan halts on it.
+///   * `OfRead(view, read)` is the same over a TYPED read (D41): an
+///     unavailable read derives nothing and answers `Read.Unavailable` with the
+///     read's own reason, so the commit step's refusal still names the read
+///     that could not answer.
+///   * The input's key is computed once per input VALUE the run hands it: the
+///     run remembers, by reference, the key of an input object it has keyed,
+///     so a step that consults the view of a tree it already keyed computes no
+///     second content address. The reference is a cache of the key, never the
+///     key itself — the journal and the memo only ever see the content key.
+///   * `Derived` lists the run's derivations in the order first made, and
+///     `Computations` counts what the views actually computed.
+///
+/// Mutable for the reason `Reads` is; deterministic under replay for the same
+/// reason: the same served inputs, consulted in the same order, rebuild the
+/// same ledger.
+[<Sealed>]
+type Derivations(recorder: DerivationRecorder) =
+    let memo = System.Collections.Generic.Dictionary<string, obj>()
+
+    let keys =
+        System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<obj, string>>()
+
+    let derived = ResizeArray<Derivation>()
+    let mutable computations = 0
+
+    let keyOf (view: DerivedView<'T, 'V>) (input: 'T) : string =
+        let boxed = box input
+
+        if isNull boxed || typeof<'T>.IsValueType then
+            view.Key input
+        else
+            let known =
+                match keys.TryGetValue view.Name with
+                | true, known -> known
+                | _ ->
+                    let fresh =
+                        System.Collections.Generic.Dictionary<obj, string>(HashIdentity.Reference)
+
+                    keys[view.Name] <- fresh
+                    fresh
+
+            match known.TryGetValue boxed with
+            | true, key -> key
+            | _ ->
+                let key = view.Key input
+                known[boxed] <- key
+                key
+
+    /// The run's derived views over `recorder`.
+    static member Over(recorder: DerivationRecorder) : Derivations = Derivations recorder
+
+    /// The view of `input`, computed at most once per run per input content.
+    member _.Of(view: DerivedView<'T, 'V>, input: 'T) : Result<'V, string> =
+        let derivation =
+            { View = view.Name
+              Input = keyOf view input }
+
+        let slot = Derivation.subject derivation
+
+        match memo.TryGetValue slot with
+        | true, (:? 'V as known) -> Ok known
+        | true, _ -> Error("derived view " + view.Name + " was asked at two value types")
+        | _ ->
+            recorder derivation
+            |> Result.bind (fun recorded ->
+                if recorded <> derivation then
+                    Error(Derivation.Malformed + ": " + Derivation.subject recorded)
+                else
+                    computations <- computations + 1
+                    let value = view.Derive input
+                    memo[slot] <- box value
+                    derived.Add derivation
+                    Ok value)
+
+    /// The view of a TYPED read: unavailable, naming the read, when the read
+    /// was; otherwise `Of` over the value read.
+    member this.OfRead(view: DerivedView<'T, 'V>, read: Read<'T>) : Result<Read<'V>, string> =
+        match read with
+        | Read.Unavailable why -> Ok(Read.Unavailable why)
+        | Read.Available value -> this.Of(view, value) |> Result.map Read.Available
+
+    /// The run's derivations so far, in the order first made.
+    member _.Derived: Derivation list = List.ofSeq derived
+
+    /// How many derivations the views actually computed this run — the memo's
+    /// evidence.
+    member _.Computations: int = computations
+
 /// A step re-invoked despite the journal being unable to say whether it already
 /// ran.
 ///
@@ -441,6 +648,38 @@ module Durable =
     [<Literal>]
     let FindingCapability = FindingRecorder.Capability
 
+    /// The capability a derivation is journaled under (Phase 2220, D47) —
+    /// `DerivationRecorder.Capability`, restated beside the others.
+    [<Literal>]
+    let DeriveCapability = DerivationRecorder.Capability
+
+    /// The completed records one capability left in an invocation's journal,
+    /// in ordinal order, each through `decode` — the trace readers below share
+    /// it (Phase 2220 folded the second copy into this one). A step attempted
+    /// with no recorded result contributes nothing.
+    let private completedRecords
+        (capability: string)
+        (decode: Fuaran.Core.JVal -> Result<'T, string>)
+        (journal: EffectJournal)
+        (invocation: string)
+        : Result<'T list, string> =
+        let recorded = journal.Read invocation
+
+        recorded
+        |> List.filter (fun entry -> entry.Capability = capability)
+        |> List.map (fun entry -> entry.Step)
+        |> List.distinct
+        |> List.sort
+        |> List.fold
+            (fun acc step ->
+                acc
+                |> Result.bind (fun made ->
+                    match Journal.stepOf recorded step with
+                    | JournaledStep.Value value -> decode value |> Result.map (fun record -> record :: made)
+                    | _ -> Ok made))
+            (Ok [])
+        |> Result.map List.rev
+
     /// **The findings an invocation reported, read off its journal ALONE**
     /// (Phase 2195, D45): every completed `Report` step, in ordinal order,
     /// which is program order — so a host derives the invocation's outcome
@@ -451,23 +690,15 @@ module Durable =
     /// finding is recorded in the same step it is attempted and a step that
     /// never completed reported nothing.
     let findings (journal: EffectJournal) (invocation: string) : Result<Finding list, string> =
-        let recorded = journal.Read invocation
+        completedRecords FindingCapability Finding.decode journal invocation
 
-        recorded
-        |> List.filter (fun entry -> entry.Capability = FindingCapability)
-        |> List.map (fun entry -> entry.Step)
-        |> List.distinct
-        |> List.sort
-        |> List.fold
-            (fun acc step ->
-                acc
-                |> Result.bind (fun found ->
-                    match Journal.stepOf recorded step with
-                    | JournaledStep.Value value ->
-                        Finding.decode value |> Result.map (fun finding -> finding :: found)
-                    | _ -> Ok found))
-            (Ok [])
-        |> Result.map List.rev
+    /// **The derivations an invocation made, read off its journal ALONE**
+    /// (Phase 2220, D47): every completed `Derive` step, in ordinal order —
+    /// so a replay, or anyone reading the trace, sees a derived view AS
+    /// derived, keyed by its input, and never as a read. A derive step whose
+    /// record is not a derivation is refused with `Derivation.Malformed`.
+    let derivations (journal: EffectJournal) (invocation: string) : Result<Derivation list, string> =
+        completedRecords DeriveCapability Derivation.decode journal invocation
 
     /// The EFFECT KINDS an op names (Phase 2165, D39): the argument names its
     /// reach declares, Program's own `destination` argument aside, distinct
@@ -510,9 +741,10 @@ module Durable =
     /// 2165, D39): a witness that reads the world in its plan phase closes
     /// over the reader it is handed, so the read is journaled at its ordinal
     /// and served on replay; a witness that reads nothing ignores it, which is
-    /// what `runWith` passes.
+    /// what `runWith` passes. It is handed this run's DERIVATION RECORDER
+    /// too (Phase 2220, D47), for the derived views its plan consults.
     let internal runGuarded
-        (witnessOf: EntryReader -> ProgramWitness<'Node, 'Op, 'Walk, 'Position>)
+        (witnessOf: EntryReader -> DerivationRecorder -> ProgramWitness<'Node, 'Op, 'Walk, 'Position>)
         (services: DurableServices)
         (invocation: string)
         (registry: ServerEffectRegistry)
@@ -733,7 +965,26 @@ module Durable =
                     (Fuaran.Core.JObj [])
                 |> Result.bind Finding.decode
 
-        let witness = witnessOf journalEntry
+        // A DERIVATION (Phase 2220, D47) through the same wrapper: journaled
+        // at its ordinal under `Derive`, the subject `<view>@<input key>`, the
+        // recorded value the derivation itself — never the derived value,
+        // which is recomputed from the served input on a resume, as a typed
+        // read's decode is (D41). Recording repeats freely, so an
+        // indeterminate window over it closes by recording again. A
+        // recomputation that derives another view, or over another input,
+        // here is the divergence the wrapper already refuses.
+        let journalDerivation: DerivationRecorder =
+            fun derivation ->
+                wrapAt
+                    DeriveCapability
+                    (Some(Derivation.subject derivation))
+                    IdempotencyFacet.Idempotent
+                    (fun () -> None)
+                    (fun _ -> Ok(Derivation.encode derivation))
+                    (Fuaran.Core.JObj [])
+                |> Result.bind Derivation.decode
+
+        let witness = witnessOf journalEntry journalDerivation
 
         let journalling =
             { registry with
@@ -818,7 +1069,7 @@ module Durable =
         (store: ServerStore<'Node, 'Store>)
         : DurableOutcome<'Node, 'Store, 'Op, 'Effect> =
         runGuarded
-            (fun _ -> witness)
+            (fun _ _ -> witness)
             services
             invocation
             registry
@@ -842,6 +1093,39 @@ module Durable =
     /// built over `EntryReader.live`.
     let runReading
         (witnessOf: EntryReader -> ProgramWitness<'Node, 'Op, 'Walk, 'Position>)
+        (services: DurableServices)
+        (invocation: string)
+        (registry: ServerEffectRegistry)
+        (performance: OpPerformance<'Node, 'Op>)
+        (resolve: string -> Result<Fuaran.Core.Table, Fuaran.Compute.EvalError>)
+        (nodeId: string)
+        (handler: Handler<'Action, 'Op>)
+        (store: ServerStore<'Node, 'Store>)
+        : DurableOutcome<'Node, 'Store, 'Op, 'Effect>
+              when 'Position :> IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>
+        =
+        runGuarded
+            (fun entry _ -> witnessOf entry)
+            services
+            invocation
+            registry
+            performance
+            (fun () -> None)
+            resolve
+            nodeId
+            handler
+            store
+
+    /// **`runReading` for a witness whose plan also consults DERIVED VIEWS**
+    /// (Phase 2220, D47). `witnessOf` is handed this run's `EntryReader` and
+    /// its `DerivationRecorder`, and builds the run's `Reads` and
+    /// `Derivations` over them: each view is computed at most once per run per
+    /// input content, journaled at its ordinal under `Derive`, and recomputed
+    /// on a resume from the served inputs — `Durable.derivations` reads them
+    /// back off the journal. Outside a durable run the same witness is built
+    /// over `EntryReader.live` and `DerivationRecorder.live`.
+    let runDeriving
+        (witnessOf: EntryReader -> DerivationRecorder -> ProgramWitness<'Node, 'Op, 'Walk, 'Position>)
         (services: DurableServices)
         (invocation: string)
         (registry: ServerEffectRegistry)
@@ -913,7 +1197,7 @@ module Durable =
                     // by the journal exactly as its host calls are.
                     let durable =
                         runGuarded
-                            (fun _ -> host.Witness)
+                            (fun _ _ -> host.Witness)
                             services
                             (sprintf "%s/%d" invocation ordinal)
                             (ServerServices.effects host)
@@ -1145,7 +1429,7 @@ module DurableControls =
 
         { Durable =
             Durable.runGuarded
-                (fun _ -> witness)
+                (fun _ _ -> witness)
                 services
                 invocation
                 controlled

@@ -3506,7 +3506,7 @@ let effectGateTests =
 //  `journal_finding` is that recorder at an ordinal, and it is compared with
 //  production over every journal shape a report's ordinal can hold, with a
 //  go-red bend. The two are compared at different grains for the reason
-//  DECISIONS.md D47 records: production keeps ONE cursor for the plan-phase
+//  DECISIONS.md D48 records: production keeps ONE cursor for the plan-phase
 //  reports and the perform-phase calls, and the model addresses a report by
 //  its own ordinal.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3647,7 +3647,7 @@ let private durableReadDivergence (c: StagingCase) (run: DurableReadRun) : strin
 
 /// The staged-read cases the plain durable reading can carry: no op performer
 /// (an op stage's subject is outside a closure token) and no report (a report
-/// moves the one cursor, which the model does not thread — D47).
+/// moves the one cursor, which the model does not thread — D48).
 let private durableReadCases: StagingCase list =
     stagedReadCases
     |> List.filter (fun c ->

@@ -251,7 +251,7 @@
 ///     served read is the plan built over the recorded value, for every
 ///     live world — two re-entries against two worlds plan alike.
 ///
-/// And the STAGED READ and the REPORT (Phase 2212, DECISIONS.md D47 —
+/// And the STAGED READ and the REPORT (Phase 2212, DECISIONS.md D48 —
 /// the two arms the suites pinned and no theorem did, D44 and D45). The
 /// registry carries the host's query posture (`r_query_posture`, read
 /// off `ServerEffectRegistry.queryPosture`) and what a reaching read is

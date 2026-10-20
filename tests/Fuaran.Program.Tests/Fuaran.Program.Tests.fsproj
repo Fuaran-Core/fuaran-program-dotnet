@@ -70,6 +70,9 @@
     <Compile Include="TypedReadTests.fs" />
     <Compile Include="ReceiptTests.fs" />
     <Compile Include="ReportTests.fs" />
+    <!-- Phase 2220 (D47): the relation primitives and the derived view. -->
+    <Compile Include="RelationTests.fs" />
+    <Compile Include="DerivedViewTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

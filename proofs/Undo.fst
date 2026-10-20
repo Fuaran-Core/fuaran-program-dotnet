@@ -70,7 +70,7 @@
 /// writes is BoundedFold's `reverse_run` (Phase 1976), proved there and
 /// applied here, never re-proved.
 ///
-/// Since Phase 2212 (DECISIONS.md D47) the static posture reads the
+/// Since Phase 2212 (DECISIONS.md D48) the static posture reads the
 /// HOST's query posture, as production's does: `stage_defects` takes a
 /// REQUIRED `query_posture` and names a read under a reaching evaluator
 /// `StagedQuery`, graded one-way; `replay_defect` and
