@@ -4,12 +4,18 @@
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>true</IsPackable>
     <PackageId>Fuaran.Program</PackageId>
-    <Description>Fuaran.Program — programs as data for Fuaran hosts: a bounded, total logic-tree algebra (sequencing, typed branching, named effects), its interpreters, and the program loop. This package carries the domain identity; the substantive surfaces ship as Fuaran.Program.Bounded (the interpreter), Fuaran.Program.Runtime (the client placement) and Fuaran.Program.Server (the server-logic placement). Apache-2.0 licensed.</Description>
+    <Description>Fuaran.Program — programs as data for Fuaran hosts: a bounded, total logic-tree algebra (sequencing, typed branching, named effects), its interpreters, and the program loop. This package carries the domain identity and the total relation primitives (strongly-connected components, cycle membership, closure and chain ends over a finite relation); the substantive surfaces ship as Fuaran.Program.Bounded (the interpreter), Fuaran.Program.Runtime (the client placement) and Fuaran.Program.Server (the server-logic placement). Apache-2.0 licensed.</Description>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="About.fs" />
+    <!-- Phase 2220 (D47): total recursive questions over a finite relation. -->
+    <Compile Include="Relation.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The linearity law reads the pass's counted work (Relation.work), which is not public surface. -->
+    <InternalsVisibleTo Include="Fuaran.Program.Tests" />
   </ItemGroup>
 </Project>

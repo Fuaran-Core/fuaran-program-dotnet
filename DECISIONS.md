@@ -3491,3 +3491,135 @@ what the descriptions say.
 **Tidied in the same landing.** Reviewed: `Witness.fs`, `Demanded.fs` and this record. Removed: the
 stale claim in `StateNamespaceDemand.Written`, above. Considered and kept: nothing else in either file
 is made dead or duplicate by this entry.
+
+## D47 — Recursive questions over a finite relation are total FUNCTIONS in `Fuaran.Program`, bounded by the input and never by a fuel; a DERIVED VIEW is computed once per input content and journaled under `Derive` as derived, never as a read; neither crosses the wire (2026-10-20)
+
+**2026-10-20. Phase 2220.** A consumer's change, roadmap-engine#752, rebuilt "which phases are ready" and "is
+there a cycle" as one index per tree, one strongly-connected-components pass and one readiness
+predicate, and reported that a Program slice of those verbs needs two constructs Program did not
+offer: a pure view derived once from a value already read, and a fixpoint or SCC primitive over a
+finite relation, because cycle membership is a recursive question that one bounded pass of the
+algebra cannot state. This entry builds both.
+
+**Premises checked against the tree first.** (1) *Neither construct existed.* No source under `src/`
+computed a strongly-connected component, a closure or a fixpoint; the two "fixpoint" mentions
+(`Demanded.fs`, `Schema.fs`) say there is none to reach. The only memo was D41's, and it memoises a
+read's DECODE, keyed by the content read. A projection over the decoded value had no home: each step
+would re-derive it, or the host would cache it where the journal cannot see it. (2) *The algebra never
+states a recursive question itself, and does not need to.* Its expressions are the DOMAIN's: an
+`ExprWitness` resolves a domain's own `'Expr` against the store, and a state witness's `Apply` is the
+domain's code. A recursive question is therefore asked by a witness, in the host language, of a value
+it holds. What it lacked was a total, bounded answer it did not have to write itself. (3) *752's
+shapes.* `Index.cyclesAmong` is the set of nodes in a component with more than one member or with a
+self-edge; `Index.survivorsAmong` is, per node, the carriers its chains end at, or `None` when one
+reaches a loop; readiness over redirects is "every survivor shipped, or the dependant itself". All
+three are stated below on Program, by a test.
+
+**Decided: the relation primitives (`Fuaran.Program.Relation`).** A relation is
+`Map<'N, 'N list>` (`'N: comparison`), that consumer's own shape, so its callers move without
+conversion. Five functions, each one traversal:
+
+- `components : Map<'N,'N list> -> 'N list list`: every strongly-connected component, singletons
+  included, members ascending, components in reverse topological order (each after every component
+  it reaches).
+- `cycles : Map<'N,'N list> -> 'N list list`: the components that are cycles, in the same order.
+- `cyclesAmong : Map<'N,'N list> -> Set<'N>`: every node on a cycle. This is that consumer's
+  `cyclesAmong`, node for node.
+- `reachable : Map<'N,'N list> -> 'N seq -> Set<'N>`: the reflexive-transitive closure from a set of
+  sources.
+- `terminals : Map<'N,'N list> -> ('N -> Set<'N> option)`: per node, the successor-less nodes its
+  chains end at, or `None` when it reaches a cycle. This is that consumer's `survivorsAmong` as a set, and
+  readiness over redirects is a one-line predicate over it.
+
+**Totality is the design, and the bound is the input's.** Each function is Tarjan's pass or a plain
+traversal, written with an explicit frame stack. It finishes each node once and examines each distinct
+edge once, so it terminates on every finite relation. No function takes a bound, a depth or a fuel:
+a fuel the author picks is general recursion with a guess attached, which D1 rules out, and a pass
+bounded by the relation needs none. The call stack is not used for depth, so a chain 200,000 long is
+answered (a test pins it). The pass counts its own work (nodes finished plus edges examined), and the
+linearity law asserts that count is exactly N + E on every relation. That is a falsifiable claim,
+where a timing is not. That consumer's dense diamond (200 layers by 4, 4^200 paths) is the regression:
+N + E work, the same cycle set as 752's test with and without the back edge, under a generous clock.
+**What "linear" does not cover, stated rather than hidden:** the canonical order costs a sort of each
+successor list and of each component's members, and node lookup is a dictionary. The traversal is
+linear; the canonicalisation adds an `E log E` sort.
+
+**The order is a function of the edge SET.** Nodes are visited ascending and successors examined
+ascending with repeats merged. Reordering or repeating a successor list moves no answer, so an answer
+can be journaled, goldened or compared across hosts. A law pins it over 400 seeded relations.
+
+**Laws, each against a reference that follows the definition, not the algorithm.** Over 400 seeded
+random relations with self-edges, repeated edges and target-only nodes: every edge on a cycle has both
+ends in `cyclesAmong` (every cycle is found); `cyclesAmong` equals the nodes that reach themselves by
+one edge or more; two nodes share a component exactly when each reaches the other, and the components
+partition the nodes; the order is reverse topological; `reachable` and `terminals` equal their
+brute-force definitions. Probe run in both directions: breaking the pass's low-link propagation turned
+seven of the relation tests red, and restoring it turned them green.
+
+**Home: `Fuaran.Program`, not `Fuaran.Program.Bounded`.** The functions are pure and FSharp.Core-only,
+which is that package's whole dependency set, so every tier and every domain can reach them without
+taking Core. `Bounded` has no reader of them, and its first reader adds the reference (the rule of
+three applies to abstractions, not to a caller). The linearity law reads the pass's counted work
+through `Relation.work`, which is `internal`, visible to the test assembly only.
+
+**Decided: the derived view (`DerivedView`, `Derivations`, server tier).** A view is
+`{ Name; Key: 'T -> string; Derive: 'T -> 'V }`. The key is the input's CONTENT key, and
+`DerivedView.ofContent` makes it a SHA-256 over a canonical rendering, the content address an op's or
+a finding's journal subject uses. `Derivations` is one run's ledger, built per run beside the run's
+`Reads`, as D41 builds those:
+
+- `Of(view, input)` computes the view only the first time the run asks for that view over an input
+  with that content key. The first computation is recorded through the run's `DerivationRecorder`
+  before it runs.
+- `OfRead(view, read)` is the same over a typed read. An UNAVAILABLE read derives nothing and answers
+  `Read.Unavailable` with the read's own reason, so the commit step's refusal still names the read that
+  could not answer (D41's shape, unchanged). Nothing is computed over nothing.
+- The input's content key is computed once per input OBJECT. The run remembers by reference the key of
+  an input it has already keyed, because hashing a tree at every consult is the walk 752 removed. The
+  reference only caches the key: the memo and the journal see the content key alone, so two equal
+  inputs share one computation and a replay's freshly decoded input finds the same key.
+- One view name asked at two value types is the tier's refusal, never a cast.
+
+**How replay treats it.** `Durable.runDeriving` is `runReading` with a `DerivationRecorder` handed to
+the witness beside the entry reader. The first computation of each view is journaled at its ordinal
+under capability `Derive`, never `ReadEntry`: a derivation reads nothing, and the trace says so. The
+subject is `<view>@<input key>` and the completed value is the derivation `{view, input}`, never the
+derived value. The value is a pure function of an input the journal already holds, because the read
+that produced it is journaled. So a resume is SERVED the record and RECOMPUTES the view from the
+SERVED input, exactly as D41 re-decodes journaled content. It never recomputes from the moved world: a
+test kills the run after the derivation, changes the relation so it has no cycle, and the resumed run's
+index still shows the dead run's cycle. A resume whose plan would derive another view, or the same view
+over another input, at that ordinal is the divergence the wrapper already refuses. `Durable.derivations`
+reads an invocation's derivations off the journal alone, as `Durable.findings` reads its findings; the
+two now share one reader (`completedRecords`). "Computed at most once per run" is per process run: a
+resume is a new run, and it computes each view once more, from served inputs.
+
+**Rejected: journaling the derived VALUE and serving it on resume.** That needs a codec per view, and
+a projection such as an index of closures has none. It would grow the journal by the size of every
+view. And it would serve a value that a code change to the view had made wrong, where recomputing
+serves the current code's answer over the recorded input. That second risk is the host's own: a view
+is versioned with the host, as a read's codec is (D41).
+
+**Rejected: routing a derivation through the entry reader.** The journal would then show a second read
+of something nobody read. That is the conflation the shard names.
+
+**Rejected: a new `ServerEffectRegistry` member for the recorder**, which is how a finding's recorder
+travels. A record gaining a member breaks every full-literal construction (FS0764). The recorder is the
+run's, not the registry's, so it rides `runDeriving`'s witness builder.
+
+**The wire: NEITHER construct crosses it.** The relation primitives are functions a witness calls;
+no program tree names a relation, and no arm, member, refusal class or ordering of the program wire
+moves. The `Derive` journal capability is like `ReadEntry` and `ReadExtent`, which the specification
+does not specify: the effect journal is the durable tier's own record, not a wire family. The program
+wire specification's normative text, schemas, resident emitter and `manifest.json` are unchanged, and
+this repository's codec (`ProgramWire`, `HandlerWire`) is untouched.
+
+**Version.** Additive: new types, modules and functions, one new entry point (`Durable.runDeriving`),
+and no existing type, member or case changed. `runGuarded`'s witness builder takes the recorder, but
+that function is `internal`. `v0.10.0` is tagged, so this cannot ride it: it opens the `0.10.1` draft.
+
+**Tidied in the same landing.** Reviewed: `Durable.fs`, `ServerEffect.fs`, `src/Fuaran.Program/`, this
+record and `STABILITY.md`. Removed: the second copy of the journal-trace reader. `Durable.findings` and
+the new `Durable.derivations` would have repeated the same filter-sort-decode fold, so both read
+through `completedRecords`, and `findings` lost its private copy of the fold. Considered and kept: `ServerEffect.fs`, which
+this phase does not change, and in which nothing is made dead or duplicate by it.

@@ -20,6 +20,34 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
+## 0.10.1 — DRAFT (untagged) — recursive questions over a finite relation, and a derived view computed once per input (Phase 2220)
+
+**Class: additive.** `v0.10.0` is TAGGED, so this ADVANCES `<Version>` to `0.10.1` rather than riding
+it. Every member below is new. No existing type gains a field or a case, and no existing function's
+signature moves. The one signature that did change, `Durable.runGuarded`'s witness builder, is
+`internal`. DECISIONS.md D47 records the design.
+
+### What was added
+
+- **`Fuaran.Program.Relation`** (in the `Fuaran.Program` package, FSharp.Core only): `components`,
+  `cycles`, `cyclesAmong`, `reachable` and `terminals` over a `Map<'N, 'N list>`. Each is total,
+  bounded by the relation rather than by a fuel, linear in nodes plus edges in its traversal, and
+  canonical in its output order.
+- **`Fuaran.Program.Server`**: `Derivation` (and its module), `DerivationRecorder` (`live`,
+  `Capability = "Derive"`), `DerivedView<'T, 'V>` (`DerivedView.ofContent`), the per-run ledger
+  `Derivations` (`Over`, `Of`, `OfRead`, `Derived`, `Computations`), and `Durable.runDeriving`,
+  `Durable.derivations` and `Durable.DeriveCapability`.
+
+### What a consumer pays
+
+Nothing. Adopting the derived view means building the witness through `Durable.runDeriving` in place
+of `runReading`. A run that derives nothing journals nothing new.
+
+### What did not move
+
+- The program wire and the conformance corpus. Neither construct crosses the wire (D47).
+- The journal entries an existing run writes. `Derive` appears only where a witness derives a view.
+
 ## 0.10.0 — RELEASED (tagged `v0.10.0`, 2026-10-17) — the substrate raise to Fuaran.Core 0.38.1
 
 **Class: breaking**, by this file's first rule: the contract every package is BUILT against moved.
