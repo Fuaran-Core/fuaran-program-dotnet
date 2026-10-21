@@ -174,9 +174,10 @@
          binaries no longer find. No member of this repository's own surface changes.
          STABILITY.md holds the slot as a DRAFT until it is tagged. -->
     <!-- 0.10.1 — Phase 2220. ADVANCES rather than rides: v0.10.0 is TAGGED.
-         ADDITIVE: the relation primitives (`Fuaran.Program.Relation`) and the
-         derived view (`DerivedView`, `Derivations`, `Durable.runDeriving`) are
-         new; no existing type, member or case moves (DECISIONS.md D47).
+         ADDITIVE: the derived view (`DerivedView`, `Derivations`,
+         `Durable.runDeriving`) is new; no existing type, member or case moves
+         (DECISIONS.md D47). The relation primitives 2220 also added were deleted
+         before tag by Phase 2382 (D49): they live in Fuaran.Core.Relation.
          STABILITY.md holds the slot as a DRAFT until it is tagged. -->
     <Version>0.10.1</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so

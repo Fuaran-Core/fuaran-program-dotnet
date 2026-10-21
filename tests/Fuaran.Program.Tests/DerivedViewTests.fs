@@ -36,6 +36,43 @@ let private crashing (f: unit -> 'T) : bool =
     with ProcessDied _ ->
         true
 
+/// The two recursive questions the fixtures below ask of a relation, answered by their DEFINITIONS
+/// (reachability by a worklist). The graph questions' one implementation is Core's
+/// `Fuaran.Core.Relation` (Core D205); this repository takes no dependency on it for a test (D49), and
+/// a fixture of a handful of nodes needs no linear pass.
+module private Reach =
+
+    let private successors (relation: Map<string, string list>) (node: string) =
+        Map.tryFind node relation |> Option.defaultValue []
+
+    /// Every node reached from `sources` by zero or more edges.
+    let closure (relation: Map<string, string list>) (sources: string list) : Set<string> =
+        let rec walk (seen: Set<string>) (pending: string list) =
+            match pending with
+            | [] -> seen
+            | node :: rest when seen.Contains node -> walk seen rest
+            | node :: rest -> walk (seen.Add node) (successors relation node @ rest)
+
+        walk Set.empty sources
+
+    /// The nodes that reach themselves by one or more edges.
+    let cyclesAmong (relation: Map<string, string list>) : Set<string> =
+        relation
+        |> Map.keys
+        |> Seq.filter (fun node -> (closure relation (successors relation node)).Contains node)
+        |> Set.ofSeq
+
+    /// Where a chain from `node` ends: the successor-less nodes it reaches, or `None` when it reaches a
+    /// cycle and so never ends.
+    let terminals (relation: Map<string, string list>) (node: string) : Set<string> option =
+        let reached = closure relation [ node ]
+        let onCycle = cyclesAmong relation
+
+        if reached |> Set.exists onCycle.Contains then
+            None
+        else
+            Some(reached |> Set.filter (fun n -> List.isEmpty (successors relation n)))
+
 let private leaf id =
     { Id = id
       Label = Const(JStr "")
@@ -132,8 +169,8 @@ let private indexView (name: string) (keyed: int ref) : DerivedView<Map<string, 
             |> List.map (fun (n, ts) -> n + ":" + String.concat "," ts)
             |> String.concat ";")
         (fun relation ->
-            { Cycles = Relation.cyclesAmong relation
-              Ends = Relation.terminals relation })
+            { Cycles = Reach.cyclesAmong relation
+              Ends = Reach.terminals relation })
 
 let private readMarker = "@read"
 let private cyclesMarker = "@cycles"
@@ -414,8 +451,8 @@ let private planView: DerivedView<Plan, PlanIndex> =
       Key = fun plan -> sprintf "%A" (plan.Deps, plan.Carried, plan.Shipped)
       Derive =
         fun plan ->
-            { DepCycles = Relation.cyclesAmong plan.Deps
-              Survivors = Relation.terminals plan.Carried } }
+            { DepCycles = Reach.cyclesAmong plan.Deps
+              Survivors = Reach.terminals plan.Carried } }
 
 /// Readiness over redirects, roadmap-engine#752's one predicate, as a host states it on
 /// Program: not shipped, not itself carried away, and every dependency either

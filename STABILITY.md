@@ -20,23 +20,28 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.10.1 — DRAFT (untagged) — recursive questions over a finite relation, and a derived view computed once per input (Phase 2220)
+## 0.10.1 — DRAFT (untagged) — a derived view computed once per input (Phase 2220); the relation primitives removed before tag (Phase 2382)
 
 **Class: additive.** `v0.10.0` is TAGGED, so this ADVANCES `<Version>` to `0.10.1` rather than riding
 it. Every member below is new. No existing type gains a field or a case, and no existing function's
 signature moves. The one signature that did change, `Durable.runGuarded`'s witness builder, is
-`internal`. DECISIONS.md D47 records the design.
+`internal`. DECISIONS.md D47 records the design, and D49 the removal below.
 
 ### What was added
 
-- **`Fuaran.Program.Relation`** (in the `Fuaran.Program` package, FSharp.Core only): `components`,
-  `cycles`, `cyclesAmong`, `reachable` and `terminals` over a `Map<'N, 'N list>`. Each is total,
-  bounded by the relation rather than by a fuel, linear in nodes plus edges in its traversal, and
-  canonical in its output order.
 - **`Fuaran.Program.Server`**: `Derivation` (and its module), `DerivationRecorder` (`live`,
   `Capability = "Derive"`), `DerivedView<'T, 'V>` (`DerivedView.ofContent`), the per-run ledger
   `Derivations` (`Over`, `Of`, `OfRead`, `Derived`, `Computations`), and `Durable.runDeriving`,
   `Durable.derivations` and `Durable.DeriveCapability`.
+
+### What was removed before tag
+
+- **`Fuaran.Program.Relation`** (Phase 2220 added it to this draft; Phase 2382 deleted it, D49). The
+  graph questions have one home, `Fuaran.Core.Relation` (Core D205), which ported its law set. The
+  module was never released, so its removal is no change relative to `v0.10.0`, and this draft stays
+  additive. The `Fuaran.Program` package's surface is again exactly its `0.10.0` surface. A caller
+  that compiled against the unreleased draft moves to `Fuaran.Core.Relation`: `Relation.ofMap` over
+  the same map, then the same question; component members come in the pass's order, not ascending.
 
 ### What a consumer pays
 

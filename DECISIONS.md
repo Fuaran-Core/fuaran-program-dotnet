@@ -3516,6 +3516,13 @@ self-edge; `Index.survivorsAmong` is, per node, the carriers its chains end at, 
 reaches a loop; readiness over redirects is "every survivor shipped, or the dependant itself". All
 three are stated below on Program, by a test.
 
+> **Amended by D49 (2026-10-21, Phase 2382) — the relation half moved to Core D205.** The relation
+> primitives below are DELETED from `Fuaran.Program` before `0.10.1` was tagged: the graph questions have one
+> home estate-wide, `Fuaran.Core.Relation` (fuaran-core Phase 552, Core D205), which ported this entry's law
+> set. The paragraphs on the relation primitives, their totality, their order and their home are kept as the
+> record of what was decided and why; they no longer describe this repository. The derived-view half of this
+> entry is unchanged and still ships in `0.10.1`.
+
 **Decided: the relation primitives (`Fuaran.Program.Relation`).** A relation is
 `Map<'N, 'N list>` (`'N: comparison`), that consumer's own shape, so its callers move without
 conversion. Five functions, each one traversal:
@@ -3755,3 +3762,57 @@ property by the same induction) and a shared induction principle would be a rede
 
 **Version.** Nothing packed moves: the oracle project is `IsPackable=false` and the hosts are test
 code. `STABILITY.md` is untouched.
+
+## D49 — `Fuaran.Program.Relation` is DELETED before it ships, not wrapped: the graph questions have one home, `Fuaran.Core.Relation` (Core D205); Program's tests state their recursive questions by definition rather than take that package; the `0.10.1` draft ships the derived view alone; amends D47 (2026-10-21)
+
+**2026-10-21. Phase 2382.** D47 put five total functions over a finite relation in `Fuaran.Program`.
+Its premise check read this repository's `src/` and missed that Core already held an iterative Tarjan in
+`Fuaran.Core.Propagation`. fuaran-core Phase 552 then gave the question one home, `Fuaran.Core.Relation`:
+FSharp.Core-only, Fable-clean, over any comparable node, with this repository's law set ported (Core
+D205). Two implementations of one question is the duplication that package exists to remove.
+
+**Premises checked against the tree first.** (1) *No caller outside this repository's tests.* A search of
+every estate for `Fuaran.Program.Relation` and for the five functions' call shapes found the roadmap
+engine's three call sites already on `Fuaran.Core.Relation` (roadmap-engine Phase 888), its verb host no
+longer taking the `Fuaran.Program` package at all, and nothing else. Program's own tree algebra never
+calls it: a recursive question is asked by a domain's witness, in the host language (D47 premise 2).
+(2) *`0.10.1` is untagged.* `v0.10.0` is the newest tag, local and on the remote, so the module never
+reached a published consumer and its removal breaks no one.
+
+**Decided: delete, do not forward.** A forward would keep a second name for one function, for no caller,
+and would pin `Fuaran.Core.Relation` (first shipped in Core `0.40.0`) into a package whose whole
+dependency set is FSharp.Core. `Relation.fs` and its compile line go; so does the test-assembly
+`InternalsVisibleTo` grant, which existed only for the linearity law's read of `Relation.work`, and the
+package `Description` returns to its pre-D47 wording.
+
+**Decided: Program's `RelationTests` go with it, after a law-by-law comparison with Core's.** Every law is
+in Core's `RelationTests`: every cycle found, cycle membership by self-reach, components by mutual reach
+and as a partition, cycles as the non-trivial components in order, order-and-repeat invariance, reverse
+topological order, the counted work `N + E`, the dense diamond with and without its back edge, the
+200,000-long chain (Core adds the ring that closes it), `reachable` and `terminals` against their
+definitions, and a source outside the relation reached as itself. **One law is deliberately not carried:**
+"members of a component are ascending". Core D205 decided members come out in the pass's POP ORDER, so
+a simple cycle's members reversed are its path, and replaced the law with that one. That is a decided
+difference in the contract, not a gap in the port, and with this module deleted no surface states the
+ascending order any longer.
+
+**Decided: the derived-view tests ask their questions BY DEFINITION, in the test.** `DerivedViewTests`
+stated roadmap-engine#752's shapes (cycle membership, and readiness over redirects through the chain
+ends of carried phases) with `Relation.cyclesAmong` and `Relation.terminals`. They now use a private
+`Reach` module inside the test: a worklist closure, cycle membership as "reaches itself by one edge or
+more", and chain ends as the successor-less nodes reached or `None` when a cycle is reached. The fixtures
+are a handful of nodes, so the linear pass buys nothing there, and the test project takes no
+`Fuaran.Core.Relation` reference: this repository pins the Core spine at `0.38.1`, and a test-only pin of
+one Core package at `0.40.0` would split the substrate the suite compiles against for no gain. The
+derived view itself, its tests' assertions and every journal shape are unchanged.
+
+**Version.** The `0.10.1` draft (`STABILITY.md`) loses `Fuaran.Program.Relation` and keeps the derived
+view. Relative to the tag `v0.10.0` it stays ADDITIVE: the module removed was never released. Had
+`v0.10.1` been tagged first, this would have been a breaking change at the next version.
+
+**Tidied in the same landing.** Reviewed: `Fuaran.Program.fsproj`, `Fuaran.Program.Tests.fsproj`,
+`DerivedViewTests.fs`, this record, `STABILITY.md` and the `0.10.1` comment in `Directory.Build.props`.
+Removed: `Relation.fs` and `RelationTests.fs` whole, the `InternalsVisibleTo` grant they alone needed,
+and the relation clauses of the package description, the version comment and the 0.10.1 draft entry.
+Considered and kept: D47's relation paragraphs, amended in place rather than cut, because they are the
+record of a decision that was taken and reversed.
