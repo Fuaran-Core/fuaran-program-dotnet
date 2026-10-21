@@ -20,10 +20,14 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.10.1 — DRAFT (untagged) — a derived view computed once per input (Phase 2220); the relation primitives removed before tag (Phase 2382)
+## 0.10.2 — a derived view computed once per input (Phase 2220); the relation primitives removed before release (Phase 2382)
 
-**Class: additive.** `v0.10.0` is TAGGED, so this ADVANCES `<Version>` to `0.10.1` rather than riding
-it. Every member below is new. No existing type gains a field or a case, and no existing function's
+**0.10.1 was never released.** It was a draft slot that was packed to a local feed while it still carried
+`Fuaran.Program.Relation`, and one local consumer built against that pack. Its contents then changed, so the
+release names the next patch instead. A released version names one contract. Nothing published carries 0.10.1.
+
+**Class: additive** relative to `v0.10.0`, the last release. `v0.10.0` is TAGGED, so this advanced `<Version>`
+rather than riding it. Every member below is new. No existing type gains a field or a case, and no existing function's
 signature moves. The one signature that did change, `Durable.runGuarded`'s witness builder, is
 `internal`. DECISIONS.md D47 records the design, and D49 the removal below.
 
@@ -34,7 +38,7 @@ signature moves. The one signature that did change, `Durable.runGuarded`'s witne
   `Derivations` (`Over`, `Of`, `OfRead`, `Derived`, `Computations`), and `Durable.runDeriving`,
   `Durable.derivations` and `Durable.DeriveCapability`.
 
-### What was removed before tag
+### What was removed before release
 
 - **`Fuaran.Program.Relation`** (Phase 2220 added it to this draft; Phase 2382 deleted it, D49). The
   graph questions have one home, `Fuaran.Core.Relation` (Core D205), which ported its law set. The

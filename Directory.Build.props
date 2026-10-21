@@ -178,8 +178,10 @@
          `Durable.runDeriving`) is new; no existing type, member or case moves
          (DECISIONS.md D47). The relation primitives 2220 also added were deleted
          before tag by Phase 2382 (D49): they live in Fuaran.Core.Relation.
-         STABILITY.md holds the slot as a DRAFT until it is tagged. -->
-    <Version>0.10.1</Version>
+         0.10.2: the release of the above. 0.10.1 was packed locally while it still
+         carried the relation primitives, so it names a different contract and is
+         never released (RM-VERSION-SURFACE-MOVED). -->
+    <Version>0.10.2</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
          else. Undeclared would read as `local-feed`, under which a pin only this
