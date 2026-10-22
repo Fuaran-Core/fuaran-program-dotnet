@@ -188,8 +188,7 @@
          `Json.parseDetailed` are gone (Core D188, Phase 519). A consumer of
          0.10.2 on Core 0.39.0 or later reaches members its binaries no longer
          find. No member of this repository's own surface changes, and no byte of
-         the program wire moves. STABILITY.md holds the slot as a DRAFT until it
-         is tagged. -->
+         the program wire moves. Released as `v0.11.0`. -->
     <Version>0.11.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing

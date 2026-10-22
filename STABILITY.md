@@ -20,11 +20,11 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.11.0 — DRAFT — the substrate raise to Fuaran.Core 0.40.2 (Phase 2228)
+## 0.11.0 — the substrate raise to Fuaran.Core 0.40.2 (Phase 2228)
 
 **Class: breaking**, by this file's first rule: the contract every package is BUILT against moved.
 The substrate is `Fuaran.Core.*` 0.40.2 (was 0.38.1) and `Fuaran.Compute.DataFrame` 0.41.0 (was
-0.40.0). `0.10.2` is published, so this cannot ride it: it opens the `0.11.0` draft. The surface
+0.40.0). `0.10.2` is published, so this cannot ride it: it opened the `0.11.0` slot, released as `v0.11.0`. The surface
 guard, run over the packed `0.10.2` packages from nuget.org and this tree's packs, reports every
 package's own surface unchanged; the class is the substrate's, exactly as at `0.10.0`.
 
