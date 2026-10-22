@@ -1468,6 +1468,22 @@ module Demanded =
         |> Option.bind (List.tryFind (fun (k, _) -> k = name))
         |> Option.map snd
 
+    /// The strict read, its refusal in the parser's classified form. Core 0.39
+    /// (Phase 519) reports the depth cap as a limit breach rather than as a
+    /// malformed text; this lifts it back to the classified error, with the
+    /// sentence and position the parser gave it before, so no refusal a reader
+    /// here returns moved a byte. `ReadOptions.strict` carries the depth cap and
+    /// no other bound, so the depth breach is the only one it can answer.
+    let internal readStrict (text: string) : Result<Fuaran.Core.JVal, Fuaran.Core.JsonError> =
+        match Fuaran.Core.Json.read Fuaran.Core.ReadOptions.strict text with
+        | Ok value -> Ok value
+        | Error(Fuaran.Core.JsonRefusal.Malformed err) -> Error err
+        | Error(Fuaran.Core.JsonRefusal.LimitExceeded breach) ->
+            Error
+                { Position = breach.Position
+                  Message = "max nesting depth " + string breach.Declared + " exceeded"
+                  Kind = Fuaran.Core.MaxDepthExceeded }
+
     /// The upper bound on member-nulls this reader will erase before refusing.
     ///
     /// A well-formed document carries exactly one — the server tier's absence
@@ -1587,7 +1603,7 @@ module Demanded =
             failWith DemandedDefect.NotJson None "" (err.Message + " at position " + string err.Position)
 
         let rec go (text: string) (erased: string list) =
-            match Fuaran.Core.Json.parseDetailed text with
+            match readStrict text with
             | Ok value -> Ok(value, List.rev erased)
             | Error err when err.Kind = Fuaran.Core.NullNotRepresentable ->
                 if List.length erased >= MaxErasedNulls then

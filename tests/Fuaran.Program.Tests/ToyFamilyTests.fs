@@ -311,16 +311,20 @@ let tests =
                     test "every action in the family round-trips" {
                         for scenario in scenarios do
                             for action in treeActions scenario.Tree do
-                                let encoded = Canon.render (ToyWire.encodeAction action)
+                                let encoded = Canonical.write Rendering.CrossHost (ToyWire.encodeAction action)
 
                                 match ToyWire.parseWith ToyWire.decodeAction encoded with
-                                | Ok back -> Expect.equal (Canon.render (ToyWire.encodeAction back)) encoded encoded
+                                | Ok back ->
+                                    Expect.equal
+                                        (Canonical.write Rendering.CrossHost (ToyWire.encodeAction back))
+                                        encoded
+                                        encoded
                                 | Error e -> failtestf "%s: %s" encoded e
                     }
 
                     test "the op is the bytes the witness's own stream writes, and decodes back" {
                         let op = Relabel("title", "Relabelled")
-                        let bytes = Canon.render (ToyWire.encodeOp op)
+                        let bytes = Canonical.write Rendering.CrossHost (ToyWire.encodeOp op)
                         Expect.equal bytes (witness.State.Stream.Encode op) "one spelling of the op"
                         Expect.equal (ToyWire.parseWith ToyWire.decodeOp bytes) (Ok op) "and it decodes"
 
@@ -339,7 +343,7 @@ let tests =
 
                     test "the state round-trips, and a repeated key is refused" {
                         let store = Map.ofList [ "a", JStr "one"; "n", JInt 2; "sys.k", JBool true ]
-                        let bytes = Canon.render (ToyWire.encodeState store)
+                        let bytes = Canonical.write Rendering.CrossHost (ToyWire.encodeState store)
                         Expect.equal bytes """{"a":"one","n":2,"sys.k":true}""" "members Ordinal, values as they are"
                         Expect.equal (ToyWire.parseWith ToyWire.decodeState bytes) (Ok store) "and it decodes"
                         Expect.isError (ToyWire.parseWith ToyWire.decodeState """{"a":1,"a":2}""") "a repeated key"

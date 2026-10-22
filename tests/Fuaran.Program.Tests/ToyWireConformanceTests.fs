@@ -65,7 +65,7 @@ let private wireWitness: FullWitness<ToyNode, ToyAction, ToyExpr, ToyStore, ToyO
             { toy.State with
                 Stream =
                     { toy.State.Stream with
-                        Encode = fun op -> Canon.render (ToyWire.encodeOp op)
+                        Encode = fun op -> Canonical.write Rendering.CrossHost (ToyWire.encodeOp op)
                         Decode = ToyWire.parseWith ToyWire.decodeOp } }
         Dispatch =
             { toy.Dispatch with
@@ -76,7 +76,7 @@ let private wireWitness: FullWitness<ToyNode, ToyAction, ToyExpr, ToyStore, ToyO
                 Effect =
                     { toy.Dispatch.Effect with
                         Encode = ToyWire.encodeEffect
-                        Decode = fun value -> ToyWire.decodeEffect (Canon.renderOrdered value) } } }
+                        Decode = fun value -> ToyWire.decodeEffect (Canonical.write Rendering.Declared value) } } }
 
 /// The subject this suite certifies at, as the manifest spells it.
 [<Literal>]

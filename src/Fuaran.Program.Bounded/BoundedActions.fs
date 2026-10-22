@@ -891,11 +891,11 @@ module BoundedActions =
         let rec encode (reversed: Reversed<'Expr>) : JVal =
             match reversed with
             | Reversed.Sequence(d, members) ->
-                Canon.typed "Sequence" [ "of", JStr d; "members", JArr(members |> List.map encode) ]
-            | Reversed.Restore(d, key, _) -> Canon.typed "Restore" [ "key", JStr key; "of", JStr d ]
-            | Reversed.Require(d, _) -> Canon.typed "Require" [ "of", JStr d ]
+                Canonical.typed "Sequence" [ "of", JStr d; "members", JArr(members |> List.map encode) ]
+            | Reversed.Restore(d, key, _) -> Canonical.typed "Restore" [ "key", JStr key; "of", JStr d ]
+            | Reversed.Require(d, _) -> Canonical.typed "Require" [ "of", JStr d ]
             | Reversed.Choose(d, _, whenTrue, whenFalse, _) ->
-                Canon.typed "Choose" [ "of", JStr d; "whenFalse", encode whenFalse; "whenTrue", encode whenTrue ]
+                Canonical.typed "Choose" [ "of", JStr d; "whenFalse", encode whenFalse; "whenTrue", encode whenTrue ]
 
     /// Build the inverse of a run from the action and the trace `runTraced`
     /// recorded for it. Total: a program and a trace that do not match (a

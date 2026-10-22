@@ -20,6 +20,39 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
+## 0.11.0 — DRAFT — the substrate raise to Fuaran.Core 0.40.2 (Phase 2228)
+
+**Class: breaking**, by this file's first rule: the contract every package is BUILT against moved.
+The substrate is `Fuaran.Core.*` 0.40.2 (was 0.38.1) and `Fuaran.Compute.DataFrame` 0.41.0 (was
+0.40.0). `0.10.2` is published, so this cannot ride it: it opens the `0.11.0` draft. The surface
+guard, run over the packed `0.10.2` packages from nuget.org and this tree's packs, reports every
+package's own surface unchanged; the class is the substrate's, exactly as at `0.10.0`.
+
+### What changed shape
+
+- **Nothing in this repository's own public surface.** Every type and member signature is as it was
+  at 0.10.2.
+- **What a consumer meets is Core's 0.39.0 and 0.40.0 releases, through this one.** Every canonical
+  byte rule is a named `Rendering`, written through `Canonical.write` (`Canon` is gone: Core D188),
+  and every JSON read goes through `Json.read` under a `ReadOptions` (`Json.parseDetailed` and the
+  tolerant parses are gone; the depth cap is a limit breach rather than a malformed text). Core's
+  `docs/releases/0.39.0.md` and `0.40.0.md` are the edit list.
+- **Why it cannot stay at 0.10.2 for a consumer on the newer substrate:** 0.10.2's packages were
+  compiled against Core 0.38.1 and call `Canon.render`, `Canon.typed` and `Json.parseDetailed`. A
+  graph that resolves Core 0.39.0 or later restores 0.10.2 cleanly and then fails with
+  `MissingMethodException` on any path that renders or parses a program document.
+
+### What did not move
+
+- **The program wire, byte for byte.** Each of the five renderers (`ProgramWire`, `BoundedActions`'
+  reversal encoding, `EffectRegistry`'s denial, `HandlerWire` and the `Journal`'s control entries)
+  writes under `Rendering.CrossHost`, which is the old `Canon.render` (Core's `EncodingProfileVectors`
+  holds a column per rendering), and every scenario of the conformance corpus certifies unchanged.
+- **Every refusal a document parse returns.** The depth cap's breach is lifted back to the classified
+  error the parser gave before, with the same sentence and position, so a `WireRefusal` and a
+  `DemandedDecodeFailure` read exactly as they did.
+- The journal entries an existing run writes, every refusal class and every halt reason.
+
 ## 0.10.2 — a derived view computed once per input (Phase 2220); the relation primitives removed before release (Phase 2382)
 
 **0.10.1 was never released.** It was a draft slot that was packed to a local feed while it still carried

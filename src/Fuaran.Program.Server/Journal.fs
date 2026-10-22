@@ -938,7 +938,7 @@ module Controls =
             | ControlOp.Throttle window -> [ "window", encodeWindow window ]
             | ControlOp.Revoke performer -> [ "performer", Fuaran.Core.JStr performer ]
 
-        Fuaran.Core.Canon.typed (ControlOp.tag entry.Op) (common @ midStage @ specific)
+        Fuaran.Core.Canonical.typed (ControlOp.tag entry.Op) (common @ midStage @ specific)
 
     /// The canonical rendering of one entry.
     let render (entry: ControlEntry) : string = ProgramWire.render (encode entry)

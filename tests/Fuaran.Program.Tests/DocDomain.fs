@@ -63,10 +63,14 @@ module DocRejection =
     /// The canonical JSON a rejection crosses the op channel as.
     let render (r: DocRejection) : string =
         match r with
-        | DocRejection.UnknownBlock id -> Canon.render (Canon.typed "UnknownBlock" [ "block", JStr(BlockId.value id) ])
-        | DocRejection.UnknownPack pack -> Canon.render (Canon.typed "UnknownPack" [ "pack", JStr pack ])
+        | DocRejection.UnknownBlock id ->
+            Canonical.write Rendering.CrossHost (Canonical.typed "UnknownBlock" [ "block", JStr(BlockId.value id) ])
+        | DocRejection.UnknownPack pack ->
+            Canonical.write Rendering.CrossHost (Canonical.typed "UnknownPack" [ "pack", JStr pack ])
         | DocRejection.PackFailed defects ->
-            Canon.render (Canon.typed "PackFailed" [ "defects", JArr(defects |> List.map JStr) ])
+            Canonical.write
+                Rendering.CrossHost
+                (Canonical.typed "PackFailed" [ "defects", JArr(defects |> List.map JStr) ])
 
     /// And back, on the far side.
     let parse (text: string) : DocRejection option =
@@ -198,13 +202,18 @@ let apply (step: DocStep) (doc: Document) : Result<Document, string> =
 let encodeStep (step: DocStep) : string =
     match step with
     | DocStep.SetText(id, text) ->
-        Canon.render (Canon.typed "SetText" [ "block", JStr(BlockId.value id); "text", JStr text ])
-    | DocStep.Bind(field, value) -> Canon.render (Canon.typed "Bind" [ "field", JStr field; "value", JStr value ])
-    | DocStep.Unbind field -> Canon.render (Canon.typed "Unbind" [ "field", JStr field ])
-    | DocStep.RequirePack pack -> Canon.render (Canon.typed "RequirePack" [ "pack", JStr pack ])
-    | DocStep.Render format -> Canon.render (Canon.typed "Render" [ "format", JStr format ])
-    | DocStep.Discard format -> Canon.render (Canon.typed "Discard" [ "format", JStr format ])
-    | DocStep.Commit stream -> Canon.render (Canon.typed "Commit" [ "stream", JStr stream ])
+        Canonical.write
+            Rendering.CrossHost
+            (Canonical.typed "SetText" [ "block", JStr(BlockId.value id); "text", JStr text ])
+    | DocStep.Bind(field, value) ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "Bind" [ "field", JStr field; "value", JStr value ])
+    | DocStep.Unbind field -> Canonical.write Rendering.CrossHost (Canonical.typed "Unbind" [ "field", JStr field ])
+    | DocStep.RequirePack pack ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "RequirePack" [ "pack", JStr pack ])
+    | DocStep.Render format -> Canonical.write Rendering.CrossHost (Canonical.typed "Render" [ "format", JStr format ])
+    | DocStep.Discard format ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "Discard" [ "format", JStr format ])
+    | DocStep.Commit stream -> Canonical.write Rendering.CrossHost (Canonical.typed "Commit" [ "stream", JStr stream ])
 
 /// What a step reaches: an edit the block it addresses; a bind the field; a
 /// guard the pack it names; the tail the host's own store, locally.
@@ -254,11 +263,11 @@ let rec private encodeBlock (b: Block) : JVal =
 /// The document's canonical bytes — the tree AND its context, because both
 /// are the state.
 let canonical (doc: Document) : string =
-    Canon.render (
-        JObj
+    Canonical.write
+        Rendering.CrossHost
+        (JObj
             [ "context", JObj(doc.Context |> Map.toList |> List.map (fun (k, v) -> k, JStr v))
-              "root", encodeBlock doc.Root ]
-    )
+              "root", encodeBlock doc.Root ])
 
 // ─── the witness: state + walk ──────────────────────────────────────────────
 

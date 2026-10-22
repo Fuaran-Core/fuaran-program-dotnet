@@ -90,7 +90,7 @@ module HandlerWire =
         | ServerEffect.RunQuery(name, source, pipeline) ->
             ProgramWire.encodePipeline pipeline
             |> Result.map (fun steps ->
-                Canon.typed
+                Canonical.typed
                     "RunQuery"
                     [ "name", JStr name
                       "pipeline", steps
@@ -99,28 +99,28 @@ module HandlerWire =
         | ServerEffect.ApplyOps ops ->
             ops
             |> ProgramWire.traverse (ProgramWire.encodeOp witness)
-            |> Result.map (fun encoded -> Canon.typed "ApplyOps" [ "ops", JArr encoded ])
+            |> Result.map (fun encoded -> Canonical.typed "ApplyOps" [ "ops", JArr encoded ])
 
         | ServerEffect.EmitPatch ops ->
             ops
             |> ProgramWire.traverse (ProgramWire.encodeOp witness)
-            |> Result.map (fun encoded -> Canon.typed "EmitPatch" [ "ops", JArr encoded ])
+            |> Result.map (fun encoded -> Canonical.typed "EmitPatch" [ "ops", JArr encoded ])
 
         | ServerEffect.HostCall(fn, args, into) ->
             // The capability is NOT emitted. It is derived — `host:` + fn — and
             // a document that carried it would put the untrusted side in charge
             // of a fact this host computes.
             Ok(
-                Canon.typed
+                Canonical.typed
                     "HostCall"
                     ([ "args", args; "fn", JStr fn ]
                      @ (into |> Option.map (fun slot -> [ "into", JStr slot ]) |> Option.defaultValue []))
             )
 
         | ServerEffect.Notify(channel, payload) ->
-            Ok(Canon.typed "Notify" [ "channel", JStr channel; "payload", payload ])
+            Ok(Canonical.typed "Notify" [ "channel", JStr channel; "payload", payload ])
 
-        | ServerEffect.Report finding -> Ok(Canon.typed FindingRecorder.Capability (Finding.members finding))
+        | ServerEffect.Report finding -> Ok(Canonical.typed FindingRecorder.Capability (Finding.members finding))
 
     let decodeEffect
         (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
@@ -233,10 +233,10 @@ module HandlerWire =
         // An action exists only at a composition that fills the dispatch axis,
         // so the fold is there whenever this arm is reached.
         | Compute action ->
-            Ok(Canon.typed "Compute" [ "action", (DispatchPosition.fold witness.Dispatch).Action.Encode action ])
+            Ok(Canonical.typed "Compute" [ "action", (DispatchPosition.fold witness.Dispatch).Action.Encode action ])
         | Effect effect ->
             encodeEffect witness effect
-            |> Result.map (fun e -> Canon.typed "Effect" [ "effect", e ])
+            |> Result.map (fun e -> Canonical.typed "Effect" [ "effect", e ])
 
     let decodeStage
         (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
@@ -276,7 +276,7 @@ module HandlerWire =
         : Result<JVal, WireRefusal> =
         handler.Stages
         |> ProgramWire.traverse (encodeStage witness)
-        |> Result.map (fun stages -> Canon.typed "Handler" [ "name", JStr handler.Name; "stages", JArr stages ])
+        |> Result.map (fun stages -> Canonical.typed "Handler" [ "name", JStr handler.Name; "stages", JArr stages ])
 
     let encodeHandler
         (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
@@ -420,9 +420,9 @@ module HandlerWire =
     let private encodeBounded (diagnostic: BoundedDiagnostic) : JVal =
         match diagnostic with
         | BoundedDiagnostic.UnsupportedOnBoundedPath(nodeId, action) ->
-            Canon.typed "UnsupportedOnBoundedPath" [ "action", JStr action; "nodeId", JStr nodeId ]
+            Canonical.typed "UnsupportedOnBoundedPath" [ "action", JStr action; "nodeId", JStr nodeId ]
         | BoundedDiagnostic.Refused(nodeId, action, reason) ->
-            Canon.typed "Refused" [ "action", JStr action; "nodeId", JStr nodeId; "reason", JStr reason ]
+            Canonical.typed "Refused" [ "action", JStr action; "nodeId", JStr nodeId; "reason", JStr reason ]
 
     let private decodeBounded (value: JVal) : Result<BoundedDiagnostic, WireRefusal> =
         match ProgramWire.tag value with
@@ -444,8 +444,8 @@ module HandlerWire =
 
     let private encodeDenial (denial: ServerEffectDenial) : JVal =
         match denial with
-        | ServerEffectDenial.Unregistered capability -> Canon.typed "Unregistered" [ "capability", JStr capability ]
-        | ServerEffectDenial.GateRefused capability -> Canon.typed "GateRefused" [ "capability", JStr capability ]
+        | ServerEffectDenial.Unregistered capability -> Canonical.typed "Unregistered" [ "capability", JStr capability ]
+        | ServerEffectDenial.GateRefused capability -> Canonical.typed "GateRefused" [ "capability", JStr capability ]
 
     let private decodeDenial (value: JVal) : Result<ServerEffectDenial, WireRefusal> =
         ProgramWire.declaredOnly [ "$type"; "capability" ] value
@@ -458,16 +458,16 @@ module HandlerWire =
 
     let private encodeDiagnostic (diagnostic: ServerDiagnostic) : JVal =
         match diagnostic with
-        | ServerDiagnostic.Bounded inner -> Canon.typed "Bounded" [ "diagnostic", encodeBounded inner ]
-        | ServerDiagnostic.Denied denial -> Canon.typed "Denied" [ "denial", encodeDenial denial ]
+        | ServerDiagnostic.Bounded inner -> Canonical.typed "Bounded" [ "diagnostic", encodeBounded inner ]
+        | ServerDiagnostic.Denied denial -> Canonical.typed "Denied" [ "denial", encodeDenial denial ]
         | ServerDiagnostic.Failed(capability, reason) ->
-            Canon.typed "Failed" [ "capability", JStr capability; "reason", JStr reason ]
+            Canonical.typed "Failed" [ "capability", JStr capability; "reason", JStr reason ]
         | ServerDiagnostic.PerformFailed(capability, reason) ->
-            Canon.typed "PerformFailed" [ "capability", JStr capability; "reason", JStr reason ]
+            Canonical.typed "PerformFailed" [ "capability", JStr capability; "reason", JStr reason ]
         // It carries NO member, and that is the rule rather than an omission:
         // the endpoint it could not resolve is the one string that always comes
         // off the wire.
-        | ServerDiagnostic.HandlerUnregistered -> Canon.typed "HandlerUnregistered" []
+        | ServerDiagnostic.HandlerUnregistered -> Canonical.typed "HandlerUnregistered" []
 
     let private decodeDiagnostic (value: JVal) : Result<ServerDiagnostic, WireRefusal> =
         match ProgramWire.tag value with
@@ -524,7 +524,7 @@ module HandlerWire =
         report.Patches
         |> ProgramWire.traverse (ProgramWire.encodeOp witness)
         |> Result.map (fun patches ->
-            Canon.typed
+            Canonical.typed
                 "HandlerReport"
                 [ "committed", JBool report.Committed
                   "diagnostics", JArr(report.Diagnostics |> List.map encodeDiagnostic)

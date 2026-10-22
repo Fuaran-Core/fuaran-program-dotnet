@@ -111,7 +111,7 @@ module Placeholder =
         let value =
             match element with
             | JStr s -> s
-            | other -> Canon.render other
+            | other -> Canonical.write Rendering.CrossHost other
 
         text.Replace("{" + placeholder + "}", value)
 
@@ -172,8 +172,8 @@ let placeholdersOf (op: CellOp) : string list =
 
 let rec encodeExpr (expr: CellExpr) : JVal =
     match expr with
-    | CellValue cell -> Canon.typed "CellValue" [ "cell", JStr cell ]
-    | Times(inner, factor) -> Canon.typed "Times" [ "expr", encodeExpr inner; "factor", JInt factor ]
+    | CellValue cell -> Canonical.typed "CellValue" [ "cell", JStr cell ]
+    | Times(inner, factor) -> Canonical.typed "Times" [ "expr", encodeExpr inner; "factor", JInt factor ]
 
 let rec decodeExpr (value: JVal) : Result<CellExpr, string> =
     match value with
@@ -195,42 +195,46 @@ let rec encodeOp (op: CellOp) : string =
 
     match op with
     | LetValue(placeholder, expr, body) ->
-        Canon.render (
-            Canon.typed "LetValue" [ "body", ops body; "expr", encodeExpr expr; "placeholder", JStr placeholder ]
-        )
-    | Set(cell, value) -> Canon.render (Canon.typed "Set" [ "cell", JStr cell; "value", JStr value ])
-    | Clear cell -> Canon.render (Canon.typed "Clear" [ "cell", JStr cell ])
-    | Copy(source, target) -> Canon.render (Canon.typed "Copy" [ "source", JStr source; "target", JStr target ])
-    | AppendRow(region, row) -> Canon.render (Canon.typed "AppendRow" [ "region", JStr region; "row", JStr row ])
-    | DropRow region -> Canon.render (Canon.typed "DropRow" [ "region", JStr region ])
-    | Filled cell -> Canon.render (Canon.typed "Filled" [ "cell", JStr cell ])
-    | WhenFilled(cell, body) -> Canon.render (Canon.typed "WhenFilled" [ "body", ops body; "cell", JStr cell ])
+        Canonical.write
+            Rendering.CrossHost
+            (Canonical.typed "LetValue" [ "body", ops body; "expr", encodeExpr expr; "placeholder", JStr placeholder ])
+    | Set(cell, value) ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "Set" [ "cell", JStr cell; "value", JStr value ])
+    | Clear cell -> Canonical.write Rendering.CrossHost (Canonical.typed "Clear" [ "cell", JStr cell ])
+    | Copy(source, target) ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "Copy" [ "source", JStr source; "target", JStr target ])
+    | AppendRow(region, row) ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "AppendRow" [ "region", JStr region; "row", JStr row ])
+    | DropRow region -> Canonical.write Rendering.CrossHost (Canonical.typed "DropRow" [ "region", JStr region ])
+    | Filled cell -> Canonical.write Rendering.CrossHost (Canonical.typed "Filled" [ "cell", JStr cell ])
+    | WhenFilled(cell, body) ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "WhenFilled" [ "body", ops body; "cell", JStr cell ])
     | ForEach(collection, placeholder, body) ->
-        Canon.render (
-            Canon.typed
+        Canonical.write
+            Rendering.CrossHost
+            (Canonical.typed
                 "ForEach"
                 [ "body", ops body
                   "collection", JArr collection
-                  "placeholder", JStr placeholder ]
-        )
+                  "placeholder", JStr placeholder ])
     | ForRange(first, last, placeholder, body) ->
-        Canon.render (
-            Canon.typed
+        Canonical.write
+            Rendering.CrossHost
+            (Canonical.typed
                 "ForRange"
                 [ "body", ops body
                   "first", JInt first
                   "last", JInt last
-                  "placeholder", JStr placeholder ]
-        )
+                  "placeholder", JStr placeholder ])
     | ForRegion(region, ceiling, placeholder, body) ->
-        Canon.render (
-            Canon.typed
+        Canonical.write
+            Rendering.CrossHost
+            (Canonical.typed
                 "ForRegion"
                 [ "body", ops body
                   "ceiling", JInt ceiling
                   "placeholder", JStr placeholder
-                  "region", JStr region ]
-        )
+                  "region", JStr region ])
 
 /// `encodeOp`'s inverse. Total: anything `encodeOp` did not produce is a
 /// refusal naming what it is not.
@@ -396,16 +400,16 @@ let reach (op: CellOp) : OpReach =
     | ForRegion _ -> OpReach.nothing
 
 let canonical (grid: Grid) : string =
-    Canon.render (
-        JObj
+    Canonical.write
+        Rendering.CrossHost
+        (JObj
             [ "cells", JObj(grid.Cells |> Map.toList |> List.map (fun (cell, value) -> cell, JStr value))
               "regions",
               JObj(
                   grid.Regions
                   |> Map.toList
                   |> List.map (fun (r, rows) -> r, JArr(rows |> List.map JStr))
-              ) ]
-    )
+              ) ])
 
 /// The ops that turn one grid into the other: a set for every cell the target
 /// holds differently, a clear for every cell it no longer holds, and per
@@ -499,7 +503,8 @@ let exprWitness: ExprWitness<CellExpr, Grid> =
                 match System.Int32.TryParse s with
                 | true, n -> ExprResolution.Resolved(JInt(n * factor))
                 | _ -> ExprResolution.Errored(sprintf "'%s' is not a number" s)
-            | ExprResolution.Resolved other -> ExprResolution.Errored(sprintf "%s is not a number" (Canon.render other))
+            | ExprResolution.Resolved other ->
+                ExprResolution.Errored(sprintf "%s is not a number" (Canonical.write Rendering.CrossHost other))
             | other -> other
 
     { Resolve = resolve

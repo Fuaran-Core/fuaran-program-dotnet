@@ -25,11 +25,11 @@ open Fuaran.Program.Tests.ToyDomain
 /// An expression, as a `$type`-discriminated object.
 let encodeExpr (expr: ToyExpr) : JVal =
     match expr with
-    | Const value -> Canon.typed "Const" [ "value", value ]
-    | Read key -> Canon.typed "Read" [ "key", JStr key ]
-    | Fail message -> Canon.typed "Fail" [ "message", JStr message ]
-    | Missing -> Canon.typed "Missing" []
-    | Hole placeholder -> Canon.typed "Hole" [ "placeholder", JStr placeholder ]
+    | Const value -> Canonical.typed "Const" [ "value", value ]
+    | Read key -> Canonical.typed "Read" [ "key", JStr key ]
+    | Fail message -> Canonical.typed "Fail" [ "message", JStr message ]
+    | Missing -> Canonical.typed "Missing" []
+    | Hole placeholder -> Canonical.typed "Hole" [ "placeholder", JStr placeholder ]
 
 /// A repeat's bound: a literal count is a bare integer, a parameter bound an
 /// object naming its expression and its declared range.
@@ -37,45 +37,45 @@ let encodeBound (bound: Bound<ToyExpr>) : JVal =
     match bound with
     | Bound.Literal count -> JInt count
     | Bound.Parameter(count, lo, hi) ->
-        Canon.typed "Parameter" [ "count", encodeExpr count; "hi", JInt hi; "lo", JInt lo ]
+        Canonical.typed "Parameter" [ "count", encodeExpr count; "hi", JInt hi; "lo", JInt lo ]
 
 /// An action. A `Ring`'s answer closure has no wire form and is not written:
 /// the wire carries the endpoint and whether the call declares a target, and
 /// nothing a host could recover behaviour from (§10.5).
 let rec encodeAction (action: ToyAction) : JVal =
     match action with
-    | Seq actions -> Canon.typed "Seq" [ "actions", JArr(actions |> List.map encodeAction) ]
+    | Seq actions -> Canonical.typed "Seq" [ "actions", JArr(actions |> List.map encodeAction) ]
     | Put(key, value, from) ->
-        Canon.typed
+        Canonical.typed
             "Put"
             ([ "key", JStr key ]
              @ (value |> Option.map (fun v -> "value", v) |> Option.toList)
              @ (from |> Option.map (fun e -> "from", encodeExpr e) |> Option.toList))
-    | Ring(endpoint, targeted, _) -> Canon.typed "Ring" [ "endpoint", JStr endpoint; "targeted", JBool targeted ]
-    | Need condition -> Canon.typed "Need" [ "condition", encodeExpr condition ]
+    | Ring(endpoint, targeted, _) -> Canonical.typed "Ring" [ "endpoint", JStr endpoint; "targeted", JBool targeted ]
+    | Need condition -> Canonical.typed "Need" [ "condition", encodeExpr condition ]
     | Pick(entry, whenTrue, whenFalse, exit) ->
-        Canon.typed
+        Canonical.typed
             "Pick"
             ([ "entry", encodeExpr entry
                "whenFalse", encodeAction whenFalse
                "whenTrue", encodeAction whenTrue ]
              @ (exit |> Option.map (fun e -> "exit", encodeExpr e) |> Option.toList))
-    | Times(bound, body) -> Canon.typed "Times" [ "body", encodeAction body; "bound", encodeBound bound ]
+    | Times(bound, body) -> Canonical.typed "Times" [ "body", encodeAction body; "bound", encodeBound bound ]
     | ForEach(collection, placeholder, body) ->
-        Canon.typed
+        Canonical.typed
             "ForEach"
             [ "body", encodeAction body
               "collection", JArr collection
               "placeholder", JStr placeholder ]
     | ForEachOf(source, ceiling, placeholder, body) ->
-        Canon.typed
+        Canonical.typed
             "ForEachOf"
             [ "body", encodeAction body
               "ceiling", JInt ceiling
               "placeholder", JStr placeholder
               "source", encodeExpr source ]
-    | Beep volume -> Canon.typed "Beep" [ "volume", JInt volume ]
-    | Hush -> Canon.typed "Hush" []
+    | Beep volume -> Canonical.typed "Beep" [ "volume", JInt volume ]
+    | Hush -> Canonical.typed "Hush" []
 
 /// A node. All four members are always present — an empty `children` or
 /// `handlers` renders `[]` — so a fact has one spelling.
@@ -91,14 +91,15 @@ let rec encodeNode (node: ToyNode) : JVal =
           "label", encodeExpr node.Label ]
 
 /// A tree document's canonical bytes: §2's discipline, members Ordinal.
-let renderNode (node: ToyNode) : string = Canon.render (encodeNode node)
+let renderNode (node: ToyNode) : string =
+    Canonical.write Rendering.CrossHost (encodeNode node)
 
 /// An op. The same bytes the witness's own stream encoder writes, which the
 /// codec test pins, so an op this module encodes and one the core journals
 /// cannot be two spellings.
 let encodeOp (op: ToyOp) : JVal =
     match op with
-    | Relabel(target, label) -> Canon.typed "Relabel" [ "label", JStr label; "target", JStr target ]
+    | Relabel(target, label) -> Canonical.typed "Relabel" [ "label", JStr label; "target", JStr target ]
 
 /// The store: one object, a member per key.
 let encodeState (store: ToyStore) : JVal = JObj(Map.toList store)

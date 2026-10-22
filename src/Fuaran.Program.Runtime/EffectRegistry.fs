@@ -336,12 +336,12 @@ module EffectDenial =
     let encodeWire (d: EffectDenial) : string =
         let doc =
             match d with
-            | EffectDenial.Unregistered name -> Canon.typed "Unregistered" [ "capability", JStr name ]
-            | EffectDenial.GateRefused name -> Canon.typed "GateRefused" [ "capability", JStr name ]
+            | EffectDenial.Unregistered name -> Canonical.typed "Unregistered" [ "capability", JStr name ]
+            | EffectDenial.GateRefused name -> Canonical.typed "GateRefused" [ "capability", JStr name ]
             | EffectDenial.DestinationRefused(name, origin) ->
-                Canon.typed "GateRefused" [ "capability", JStr name; "origin", JStr origin ]
+                Canonical.typed "GateRefused" [ "capability", JStr name; "origin", JStr origin ]
 
-        Canon.render doc
+        Canonical.write Rendering.CrossHost doc
 
     /// Read a denial back from the three positions §5.3 declares — the arm, the
     /// capability, and the origin where one is present.

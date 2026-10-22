@@ -32,7 +32,7 @@ type VerbRefusal = { Code: string; Detail: string }
 /// answer the decision names.
 module VerbRefusal =
     let render (r: VerbRefusal) : string =
-        Canon.render (JObj [ "code", JStr r.Code; "detail", JStr r.Detail ])
+        Canonical.write Rendering.CrossHost (JObj [ "code", JStr r.Code; "detail", JStr r.Detail ])
 
     let parse (text: string) : VerbRefusal option =
         match Json.parse text with
@@ -107,7 +107,7 @@ module Placeholder =
         let value =
             match element with
             | JStr s -> s
-            | other -> Canon.render other
+            | other -> Canonical.write Rendering.CrossHost other
 
         text.Replace("{" + placeholder + "}", value)
 
@@ -172,14 +172,16 @@ let placeholdersOf (op: FileOp) : string list =
 /// ceiling on the arm measures what the handler document would carry.
 let rec encodeOp (op: FileOp) : string =
     match op with
-    | Read path -> Canon.render (Canon.typed "Read" [ "path", JStr path ])
-    | Write(path, content) -> Canon.render (Canon.typed "Write" [ "content", JStr content; "path", JStr path ])
-    | Delete path -> Canon.render (Canon.typed "Delete" [ "path", JStr path ])
-    | Publish target -> Canon.render (Canon.typed "Publish" [ "target", JStr target ])
-    | Retract target -> Canon.render (Canon.typed "Retract" [ "target", JStr target ])
-    | Check(Exists path) -> Canon.render (Canon.typed "Exists" [ "path", JStr path ])
-    | Check(Missing path) -> Canon.render (Canon.typed "Missing" [ "path", JStr path ])
-    | Check(Refused refusal) -> Canon.render (Canon.typed "Refused" [ "refusal", JStr(VerbRefusal.render refusal) ])
+    | Read path -> Canonical.write Rendering.CrossHost (Canonical.typed "Read" [ "path", JStr path ])
+    | Write(path, content) ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "Write" [ "content", JStr content; "path", JStr path ])
+    | Delete path -> Canonical.write Rendering.CrossHost (Canonical.typed "Delete" [ "path", JStr path ])
+    | Publish target -> Canonical.write Rendering.CrossHost (Canonical.typed "Publish" [ "target", JStr target ])
+    | Retract target -> Canonical.write Rendering.CrossHost (Canonical.typed "Retract" [ "target", JStr target ])
+    | Check(Exists path) -> Canonical.write Rendering.CrossHost (Canonical.typed "Exists" [ "path", JStr path ])
+    | Check(Missing path) -> Canonical.write Rendering.CrossHost (Canonical.typed "Missing" [ "path", JStr path ])
+    | Check(Refused refusal) ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "Refused" [ "refusal", JStr(VerbRefusal.render refusal) ])
     | Branch(entry, whenTrue, whenFalse, exit) ->
         let arm (ops: FileOp list) =
             JArr(ops |> List.map (encodeOp >> JStr))
@@ -189,24 +191,26 @@ let rec encodeOp (op: FileOp) : string =
             | Some e -> JStr(encodeOp (Check e))
             | None -> JBool false
 
-        Canon.render (
-            Canon.typed
+        Canonical.write
+            Rendering.CrossHost
+            (Canonical.typed
                 "Branch"
                 [ "entry", JStr(encodeOp (Check entry))
                   "exit", encodedExit
                   "whenFalse", arm whenFalse
-                  "whenTrue", arm whenTrue ]
-        )
+                  "whenTrue", arm whenTrue ])
     | Times(count, body) ->
-        Canon.render (Canon.typed "Times" [ "body", JArr(body |> List.map (encodeOp >> JStr)); "count", JInt count ])
+        Canonical.write
+            Rendering.CrossHost
+            (Canonical.typed "Times" [ "body", JArr(body |> List.map (encodeOp >> JStr)); "count", JInt count ])
     | ForEach(collection, placeholder, body) ->
-        Canon.render (
-            Canon.typed
+        Canonical.write
+            Rendering.CrossHost
+            (Canonical.typed
                 "ForEach"
                 [ "body", JArr(body |> List.map (encodeOp >> JStr))
                   "collection", JArr collection
-                  "placeholder", JStr placeholder ]
-        )
+                  "placeholder", JStr placeholder ])
 
 /// The op decoder (Phase 1982, H1): `encodeOp`'s inverse, so the verb's
 /// handlers round-trip as Program documents. Total: anything `encodeOp` did not
@@ -371,11 +375,11 @@ let reach (op: FileOp) : OpReach =
     | ForEach _ -> OpReach.nothing
 
 let canonical (tree: FileMap) : string =
-    Canon.render (
-        JObj
+    Canonical.write
+        Rendering.CrossHost
+        (JObj
             [ "files", JObj(tree.Files |> Map.toList |> List.map (fun (path, content) -> path, JStr content))
-              "published", JArr(tree.Published |> List.map JStr) ]
-    )
+              "published", JArr(tree.Published |> List.map JStr) ])
 
 /// The targets a publish can be withdrawn from — the domain's declaration of
 /// which publishes carry a compensation (Phase 1977). A publish to `origin`

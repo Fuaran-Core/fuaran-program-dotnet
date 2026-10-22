@@ -204,14 +204,15 @@ module ProgramWire =
     /// re-classified here so it arrives as the specification's own class rather
     /// than as a parse error.
     let parseDocument (json: string) : Result<JVal, WireRefusal> =
-        match Json.parseDetailed json with
+        match Demanded.readStrict json with
         | Ok value -> Ok value
         | Error err when err.Kind = NullNotRepresentable -> refuse RefusalClass.NullMember err.Message
         | Error err -> refuse RefusalClass.MalformedReferencedValue err.Message
 
     /// The canonical rendering of a document: `$type` first (U+0024 sorts before
     /// every lower-case key), members Ordinal-ordered, no trailing newline.
-    let render (value: JVal) : string = Canon.render value
+    let render (value: JVal) : string =
+        Canonical.write Rendering.CrossHost value
 
     // ─── member access ───────────────────────────────────────────────────────
 
@@ -379,7 +380,7 @@ module ProgramWire =
         | Error message -> refuse RefusalClass.MalformedReferencedValue message
 
     let decodeOp (witness: ProgramWitness<'Node, 'Op, 'Walk, 'Dispatch>) (value: JVal) : Result<'Op, WireRefusal> =
-        match witness.State.Stream.Decode(Canon.render value) with
+        match witness.State.Stream.Decode(Canonical.write Rendering.CrossHost value) with
         | Ok op -> Ok op
         | Error code -> refuse RefusalClass.MalformedReferencedValue ("the op does not decode: " + code)
 
@@ -632,7 +633,7 @@ module ProgramWire =
         // OMITTED when absent, never nulled: there is no null on this wire, and
         // an always-emitted member would also change the bytes — and therefore
         // the address — of every reference ever written without one.
-        Canon.typed
+        Canonical.typed
             "LogicTreeRef"
             ([ "ref", JStr reference.Ref; "slot", JStr logicTreeSlot ]
              @ (reference.Hash
@@ -682,7 +683,7 @@ module ProgramWire =
     let MaxIdempotencyKeyLength = 128
 
     let encodeInvocation (invocation: InvocationRecord) : JVal =
-        Canon.typed
+        Canonical.typed
             "Invocation"
             ([ "endpoint", JStr invocation.Endpoint; "nodeId", JStr invocation.NodeId ]
              @ (invocation.IdempotencyKey

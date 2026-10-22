@@ -195,12 +195,12 @@ let view (action: ToyAction) : ActionView<ToyAction, ToyExpr> =
 
 let rec private encodeAction (action: ToyAction) : JVal =
     match action with
-    | Seq actions -> Canon.typed "Seq" [ "ops", JArr(actions |> List.map encodeAction) ]
-    | Put(key, _, _) -> Canon.typed "Put" [ "key", JStr key ]
-    | Ring(endpoint, targeted, _) -> Canon.typed "Ring" [ "endpoint", JStr endpoint; "targeted", JBool targeted ]
-    | Need _ -> Canon.typed "Need" []
+    | Seq actions -> Canonical.typed "Seq" [ "ops", JArr(actions |> List.map encodeAction) ]
+    | Put(key, _, _) -> Canonical.typed "Put" [ "key", JStr key ]
+    | Ring(endpoint, targeted, _) -> Canonical.typed "Ring" [ "endpoint", JStr endpoint; "targeted", JBool targeted ]
+    | Need _ -> Canonical.typed "Need" []
     | Pick(_, whenTrue, whenFalse, exit) ->
-        Canon.typed
+        Canonical.typed
             "Pick"
             [ "exit", JBool(Option.isSome exit)
               "whenFalse", encodeAction whenFalse
@@ -211,15 +211,15 @@ let rec private encodeAction (action: ToyAction) : JVal =
             | Bound.Literal count -> JInt count
             | Bound.Parameter(_, lo, hi) -> JArr [ JInt lo; JInt hi ]
 
-        Canon.typed "Times" [ "body", encodeAction body; "bound", encodedBound ]
+        Canonical.typed "Times" [ "body", encodeAction body; "bound", encodedBound ]
     | ForEach(collection, placeholder, body) ->
-        Canon.typed
+        Canonical.typed
             "ForEach"
             [ "body", encodeAction body
               "collection", JArr collection
               "placeholder", JStr placeholder ]
     | ForEachOf(source, ceiling, placeholder, body) ->
-        Canon.typed
+        Canonical.typed
             "ForEachOf"
             [ "body", encodeAction body
               "ceiling", JInt ceiling
@@ -229,15 +229,15 @@ let rec private encodeAction (action: ToyAction) : JVal =
               (match source with
                | Read key -> JStr key
                | _ -> JStr "") ]
-    | Beep volume -> Canon.typed "Beep" [ "volume", JInt volume ]
-    | Hush -> Canon.typed "Hush" []
+    | Beep volume -> Canonical.typed "Beep" [ "volume", JInt volume ]
+    | Hush -> Canonical.typed "Hush" []
 
 let rec private canonical (node: ToyNode) : string =
-    Canon.render (
-        JObj
+    Canonical.write
+        Rendering.CrossHost
+        (JObj
             [ "id", JStr node.Id
-              "children", JArr(node.Children |> List.map (canonical >> JStr)) ]
-    )
+              "children", JArr(node.Children |> List.map (canonical >> JStr)) ])
 
 let private resolveNode (store: ToyStore) (node: ToyNode) : ToyNode =
     match resolveWith (fun k -> Map.tryFind k store) node.Label with
@@ -281,7 +281,9 @@ let witness: FullWitness<ToyNode, ToyAction, ToyExpr, ToyStore, ToyOp, ToyEffect
                 fun op ->
                     match op with
                     | Relabel(id, label) ->
-                        Canon.render (Canon.typed "Relabel" [ "target", JStr id; "label", JStr label ])
+                        Canonical.write
+                            Rendering.CrossHost
+                            (Canonical.typed "Relabel" [ "target", JStr id; "label", JStr label ])
               Decode = fun _ -> Error "the toy decodes no op" }
           Diff = fun _ _ -> []
           AbsoluteTarget =

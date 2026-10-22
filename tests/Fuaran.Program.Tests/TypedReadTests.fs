@@ -124,7 +124,10 @@ let private recordCodec: ReadCodec<string> =
     { Name = "record-v1"
       Decode =
         fun text ->
-            match Json.parseTolerantOfNull text with
+            match
+                Decoder.parse ReadOptions.tolerantOfNull text
+                |> Result.mapError DecodeError.describe
+            with
             | Error reason -> Error("not a record: " + string reason)
             | Ok(JObj members) ->
                 match List.tryFind (fun (name, _) -> name = "node") members with
