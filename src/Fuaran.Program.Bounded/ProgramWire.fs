@@ -105,6 +105,79 @@ module RefusalClass =
     [<Literal>]
     let ContentAddressMismatch = "content-address-mismatch"
 
+    /// The text is not JSON under the strict grammar §2 cites (Phase 2259): a
+    /// repeated member, content after the root value, a number outside the
+    /// grammar, a bare `NaN`/`Infinity`, a raw control character in a string, an
+    /// unpaired surrogate. Until then a parse refusal was reported as
+    /// `malformed-referenced-value`, which sends the reader to the wrong
+    /// specification: the defect is in this document's own syntax.
+    [<Literal>]
+    let MalformedJson = "malformed-json"
+
+    /// The document is JSON and passes one of §2.10's syntactic limits or one of
+    /// §2.11's program-shape limits (Phase 2259). Never `malformed-json`: the
+    /// input is well-formed and merely past a bound, and calling it malformed
+    /// would send its author to repair the wrong thing.
+    [<Literal>]
+    let LimitExceeded = "limit-exceeded"
+
+/// The program wire's limits (§2.10, §2.11; Phase 2259, DECISIONS.md D50). The
+/// VALUES are this specification's: Core supplies the mechanism that bounds the
+/// parse on the way down and states none (Core D84, refined by D159).
+[<RequireQualifiedAccess>]
+module WireLimits =
+
+    /// §2.10 — the nesting of the JSON document, every `{` and `[` counting.
+    [<Literal>]
+    let JsonDepth = 256
+
+    /// §2.10 — Unicode code points in one decoded string or member key.
+    [<Literal>]
+    let StringLength = 1_048_576
+
+    /// §2.10 — items in one JSON array.
+    [<Literal>]
+    let ArrayLength = 100_000
+
+    /// §2.10 — members in one JSON object.
+    [<Literal>]
+    let ObjectMembers = 100_000
+
+    /// §2.10 — UTF-8 bytes of the whole document.
+    [<Literal>]
+    let DocumentBytes = 33_554_432
+
+    /// §2.11 — the nesting of one action, the action itself counting as 1.
+    [<Literal>]
+    let ActionDepth = 32
+
+    /// §2.11 — the actions one handler declares, across every compute stage.
+    [<Literal>]
+    let ActionsPerProgram = 1_024
+
+    /// §2.11 — a `Repeat`'s literal bound, and a parameter bound's `hi`.
+    [<Literal>]
+    let RepeatBound = 1_024
+
+    /// §2.11 — the elements of an `Each`'s literal collection, and the declared
+    /// ceiling of one over a collection the store holds.
+    [<Literal>]
+    let EachCollection = 1_024
+
+    /// The record Core's read takes: §2.10's five values.
+    let json: JsonLimits =
+        { MaxDepth = JsonDepth
+          MaxStringLength = StringLength
+          MaxArrayLength = ArrayLength
+          MaxObjectMembers = ObjectMembers
+          MaxDocumentBytes = DocumentBytes }
+
+    /// What every program-wire document is read under: no `null` (§2.5) and
+    /// §2.10's limits.
+    let readOptions: ReadOptions =
+        { ReadOptions.strict with
+            Limits = json }
+
 /// The specification's three-valued replay classification. `Unknown` is not a
 /// failure and is never rounded to a neighbour: only a PROOF is a finding, and a
 /// classification that fired on ordinary correct handlers would be one people
@@ -195,19 +268,32 @@ module ProgramWire =
 
     // ─── parsing ─────────────────────────────────────────────────────────────
 
-    /// Parse a wire document under the canonical discipline.
+    /// A limit refusal's detail: the limit's name, its declared value, and where
+    /// it was passed — a position or an ordinal path, never a wire-carried
+    /// string (§4.4).
+    let limitRefusal (limit: string) (declared: int) (at: string) : Result<'T, WireRefusal> =
+        refuse RefusalClass.LimitExceeded ("limit " + limit + " of " + string declared + " exceeded at " + at)
+
+    /// Parse a wire document under §2's strict grammar and §2.10's limits.
     ///
-    /// The parser's default null policy is REJECT, so the specification's
-    /// no-null rule is enforced by the parser at every nesting depth — including
-    /// inside an opaque payload position this codec never decomposes, which is
-    /// the one place a hand-rolled check would have missed it. The rejection is
-    /// re-classified here so it arrives as the specification's own class rather
-    /// than as a parse error.
+    /// The grammar is Core's (§2 cites it): a repeated member, content after the
+    /// root, a number outside the grammar and the rest of its rows are refused
+    /// by the one scanner every Core reader runs, as `malformed-json`. The
+    /// limits are this specification's values, passed to Core's read so each is
+    /// enforced on the way down — nothing past a bound is read or built — and a
+    /// breach is `limit-exceeded` naming the limit and the position, never the
+    /// input. The null policy is REJECT, so the no-null rule is enforced at
+    /// every nesting depth, an opaque payload position included, and arrives as
+    /// the specification's own class rather than as a parse error.
     let parseDocument (json: string) : Result<JVal, WireRefusal> =
-        match Demanded.readStrict json with
+        match Json.read WireLimits.readOptions json with
         | Ok value -> Ok value
-        | Error err when err.Kind = NullNotRepresentable -> refuse RefusalClass.NullMember err.Message
-        | Error err -> refuse RefusalClass.MalformedReferencedValue err.Message
+        | Error(JsonRefusal.Malformed err) when err.Kind = NullNotRepresentable ->
+            refuse RefusalClass.NullMember err.Message
+        | Error(JsonRefusal.Malformed err) ->
+            refuse RefusalClass.MalformedJson (err.Message + " at position " + string err.Position)
+        | Error(JsonRefusal.LimitExceeded breach) ->
+            limitRefusal (JsonLimit.name breach.Limit) breach.Declared ("position " + string breach.Position)
 
     /// The canonical rendering of a document: `$type` first (U+0024 sorts before
     /// every lower-case key), members Ordinal-ordered, no trailing newline.
@@ -357,15 +443,95 @@ module ProgramWire =
         | ActionView.Require _
         | ActionView.Leaf _ -> Ok()
 
+    /// §2.11 — the program-shape limits over one decoded action (Phase 2259),
+    /// read through the witness's view TOP-DOWN, so a breach is refused at the
+    /// first position past a bound and nothing beneath it is walked: the
+    /// action's nesting (the action itself counting as 1), the actions counted
+    /// (`counted` before this one, so a handler holds the sum of its stages to
+    /// one bound), a `Repeat`'s literal bound or a parameter bound's `hi`, and an
+    /// `Each`'s literal elements or its declared ceiling over a stored
+    /// collection. The DECLARED form is measured, not the lowered one: an
+    /// `Each` body counts once, whatever its extent — what a run costs is the
+    /// budget's question (`Budget.actionCascadeCost`), and this is the size of
+    /// the document. The path is ordinal (`action/1/whenTrue/body`): a member's
+    /// index in a sequence and the view's own arm names, never a wire string.
+    /// Returns the count with this action's added.
+    let checkActionShape
+        (action: ActionWitness<'Action, 'Expr, 'Store, 'Effect>)
+        (at: string)
+        (counted: int)
+        (value: 'Action)
+        : Result<int, WireRefusal> =
+        let rec walk (path: string) (depth: int) (counted: int) (a: 'Action) : Result<int, WireRefusal> =
+            if depth > WireLimits.ActionDepth then
+                limitRefusal "actionDepth" WireLimits.ActionDepth path
+            elif counted >= WireLimits.ActionsPerProgram then
+                limitRefusal "actionsPerProgram" WireLimits.ActionsPerProgram path
+            else
+                let counted = counted + 1
+
+                let into (step: string) (child: 'Action) (sofar: int) =
+                    walk (path + "/" + step) (depth + 1) sofar child
+
+                match action.View a with
+                | ActionView.Sequence members ->
+                    members
+                    |> List.indexed
+                    |> List.fold (fun acc (i, m) -> acc |> Result.bind (into (string i) m)) (Ok counted)
+                | ActionView.Choose(_, whenTrue, whenFalse, _) ->
+                    into "whenTrue" whenTrue counted |> Result.bind (into "whenFalse" whenFalse)
+                | ActionView.Repeat(bound, body) ->
+                    let top =
+                        match bound with
+                        | Bound.Literal count -> count
+                        | Bound.Parameter(_, _, hi) -> hi
+
+                    if top > WireLimits.RepeatBound then
+                        limitRefusal "repeatBound" WireLimits.RepeatBound path
+                    else
+                        into "body" body counted
+                | ActionView.Each(collection, _, body) ->
+                    let extent =
+                        match collection with
+                        // Counted only to one past the bound: the elements beyond
+                        // it are never walked.
+                        | Collection.Literal elements ->
+                            elements |> List.truncate (WireLimits.EachCollection + 1) |> List.length
+                        | Collection.Stored(_, ceiling) -> ceiling
+
+                    if extent > WireLimits.EachCollection then
+                        limitRefusal "eachCollection" WireLimits.EachCollection path
+                    else
+                        into "body" body counted
+                | ActionView.Assign _
+                | ActionView.Call _
+                | ActionView.Require _
+                | ActionView.Leaf _ -> Ok counted
+
+        walk at 1 counted value
+
+    /// A limit refusal raised inside a handler's compute stage, re-addressed
+    /// from the action's own path to the handler's (`stages[2].action/…`).
+    let withinStage (index: int) (refusal: WireRefusal) : WireRefusal =
+        let relative = " exceeded at action"
+
+        if refusal.Class = RefusalClass.LimitExceeded && refusal.Detail.Contains relative then
+            { refusal with
+                Detail = refusal.Detail.Replace(relative, " exceeded at stages[" + string index + "].action") }
+        else
+            refusal
+
     /// `decodeAction` over the action witness alone (Phase 1982, H1), for a
     /// path that reads its dispatch position through `IDispatchPosition` and
     /// holds the fold's action witness rather than the whole dispatch axis.
+    /// The decoded action is held to §2.11's program-shape limits (Phase 2259).
     let decodeActionIn
         (action: ActionWitness<'Action, 'Expr, 'Store, 'Effect>)
         (value: JVal)
         : Result<'Action, WireRefusal> =
         refuseResultTarget value
         |> Result.bind (fun () -> action.Decode value)
+        |> Result.bind (fun decoded -> checkActionShape action "action" 0 decoded |> Result.map (fun _ -> decoded))
         |> Result.bind (fun decoded -> refuseViewedResultTarget action decoded |> Result.map (fun () -> decoded))
 
     let decodeAction

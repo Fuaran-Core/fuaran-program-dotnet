@@ -3816,3 +3816,94 @@ Removed: `Relation.fs` and `RelationTests.fs` whole, the `InternalsVisibleTo` gr
 and the relation clauses of the package description, the version comment and the 0.10.1 draft entry.
 Considered and kept: D47's relation paragraphs, amended in place rather than cut, because they are the
 record of a decision that was taken and reversed.
+
+## D50 — The program wire's JSON syntax is Core's, CITED: a parse refusal is `malformed-json`; the wire states its own limit VALUES — five syntactic bounds at the tree wire's section-21 values and four program-shape bounds (action depth 32, 1 024 actions per handler, repeat bound and parameter `hi` 1 024, each collection 1 024) — enforced on the way down and refused as `limit-exceeded` (2026-10-23)
+
+**2026-10-23. Phase 2259** (the device-langsec findings L1 and L2: a repeated member was unspecified,
+and no depth or size was). `PROGRAM_WIRE.md` §2 adopted the tree wire's canonical discipline, which
+said how to WRITE a document and nothing about a repeated member or a bound, so two program hosts were
+free to read different languages from one set of bytes — the parser differential in its classic form.
+
+**Premises checked against the tree first.** (1) *The Core pin must rise to carry fuaran-core#462.* It
+need not: Phase 2228 already raised every `Fuaran.Core.*` pin to 0.40.2, and that release carries both
+#462 (the repeated member, `DuplicateMember`, refused at every reader) and #465 (`JsonLimits` on
+`ReadOptions`, `JsonRefusal.LimitExceeded`). `Directory.Packages.props` does not move. So a repeated
+member was ALREADY refused by this host before this phase, for the wrong reason: every parse refusal
+was reported as `malformed-referenced-value`, the class that sends a reader to the other
+specification. (2) *An escaped lone surrogate is refused by Core.* Confirmed at 0.40.2, once a probe
+whose shell had collapsed `\\u` into a real U+D800 — which UTF-8 then wrote as U+FFFD, a valid
+document — was rerun with the escape intact. (3) *The corpus vectors can live wherever the families
+are.* They cannot, yet: the referenced subject's families, and the two vocabulary-free documents, are
+certified by a host that consumes this repository's RELEASED packages and reads the specification's
+head, so a reject vector naming a new class there turns that host red until it raises. This phase's
+vectors are at the toy subject, which this repository alone certifies.
+
+**Decided: the syntax layer is cited, and its refusal is its own class.** §2 cites Core's
+conformance-corpus section *The JSON-syntax layer every wire cites* and restates no row. Every
+`ProgramWire.parseDocument` refusal Core classes as malformed — the repeated member, trailing content,
+the number grammar, a bare `NaN`, a raw control, an unpaired surrogate, `1e999` — is
+`malformed-json` (`RefusalClass.MalformedJson`), with the parser's sentence and position as the
+detail. `null-member` keeps its class (rule 5 is this wire's own: Core's grammar admits `null`), and so
+do rule 9's undeclared member and rule 6's `$type` dispatch. Row 7: this wire takes Core's answer and
+refuses an overflowing exponent, which the tree wire's section 20 admits — the one difference between
+the two syntax layers, stated beside the citation as Core's rule asks. No conformant encoder emits it.
+
+**Decided: the syntactic limit values are the tree wire's section-21 values** — depth 256, string
+length 1 048 576 code points, 100 000 array items, 100 000 object members, 33 554 432 document bytes —
+passed to Core as `WireLimits.json` through `Json.read`, so each is enforced before what it guards is
+read. A referenced position carries a tree-wire value spliced verbatim: a program wire tighter than
+the tree wire would refuse a value its own specification calls valid (two languages for one value,
+the very differential), and one looser buys nothing, because the value is held to its own wire
+anyway. A constrained device that needs a smaller arena applies an OPERATIONAL ceiling, which the
+specification names deployment policy and never conformance — the same line Core's limits section
+draws. The breach is `limit-exceeded`, never `malformed-json`, and its detail names the limit, the
+value and the POSITION: Core's breach path spells member keys, which are wire-carried, and §4.4 forbids
+echoing them.
+
+**Decided: the program-shape limits, and their values.** Read through the action witness's view
+top-down (`ProgramWire.checkActionShape`), refused at the first position past a bound, before
+anything beneath it is walked:
+
+| Bound | Value | Why this value |
+|---|---|---|
+| `actionDepth` | 32 | The fold recurses once per composition level; 32 is a stack a microcontroller can size, and far above any action the corpus's fixtures and scenarios declare (each nests a handful of levels). At the JSON layer it costs about 70 levels, well inside 256. |
+| `actionsPerProgram` | 1 024 | The DECLARED size of one handler, summed across its compute stages — what a recognizer must hold. Sixteen times `InteractionBudget.defaults.MaxActions` (64), which prices a RUN: a document may declare more than one run takes (a branch's untaken arm), never unboundedly more. |
+| `repeatBound` | 1 024 | A literal bound and a parameter bound's `hi` (the budget prices a parameter at `hi`, D35), so the worst case is bounded by the document alone. |
+| `eachCollection` | 1 024 | A literal collection's elements and a stored collection's declared ceiling (D36's), the same rule as the repeat's. |
+
+The DECLARED form is measured, not the lowered one: an `Each` body counts once. The run's price stays
+the budget's (`Budget.actionCascadeCost`); these bound the document, so a host sizes its recognizer
+before it reads a value. The handler's count is checked twice on purpose — each compute stage alone in
+`decodeActionIn` (so the action entry point is bounded wherever it is called), then the sum in stage
+order in `HandlerWire.decodeHandlerJson`, which names the stage that passes it. The path is ordinal
+(`stages[1].action/0/whenTrue/body`), the view's own arm names and a sequence member's index, so it
+echoes nothing the document chose; `ProgramWire.withinStage` re-addresses a stage's breach from the
+action's path to the handler's.
+
+**Why limits that narrow what decodes are additive.** Every value sits above every document the
+corpus, its three emitters and both certifying hosts produce, and every row of the cited grammar is an
+input no conformant encoder emits. A handler declaring two thousand actions decoded before and is
+refused now; before, no rule bounded it at all, which is a different language at every host. The
+format version stays 3, and the specification's §11.1 says why.
+
+**What the corpus pins, and what this host certifies itself.** Eighteen toy-subject reject vectors: a
+`malformed-json` vector per Core row 1–7 at the handler document, the repeated member nested in an
+opaque value and at the server-effect, client-effect and outcome documents, and a `limit-exceeded`
+vector naming its `limit` for `depth` and every program-shape bound (the actions bound twice: one
+stage, and two stages each within it). This host's suite adds, host-locally: every bound AT its value
+(accepted) and a unit past it; the four syntactic bounds whose breach is megabytes; the stored
+collection's ceiling, which the toy vocabulary of the specification does not spell; the repeated
+member at the invocation and logic-tree-ref documents; and that a breach detail echoes no member.
+
+**Not done here, and why.** The referenced-subject and vocabulary-free corpus vectors wait for the host
+that certifies them to raise past this repository's next release, in the same change-set as those
+vectors (§11.1's fifth artefact). The version slot is opened by the version ledger, not by this
+change: `v0.11.0` is tagged, so this lands as the `0.12.0` draft.
+
+Files reviewed for the tidy: `ProgramWire.fs`, `HandlerWire.fs`, `Directory.Packages.props`, the test
+project, this record and `STABILITY.md`. Removed: `ProgramWire.parseDocument`'s route through
+`Demanded.readStrict`, which lifted the depth breach back into a malformed text — the exact
+misdiagnosis rule 10 forbids. Considered and kept: `Demanded.readStrict` itself (the demanded
+projection's reader, a different document with its own refusal type, outside this phase's files), and
+`Budget.actionCascadeCost` beside `checkActionShape` (one prices a run, the other sizes a document;
+they agree on nothing by construction and should not share a walk).

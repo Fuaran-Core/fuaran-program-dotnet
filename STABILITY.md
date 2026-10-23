@@ -20,6 +20,41 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
+## 0.12.0 — DRAFT, not yet cut — the program wire cites Core's JSON syntax and states its limits (Phase 2259)
+
+**Class: additive surface, narrowed decode.** `v0.11.0` is tagged, so this cannot ride it: the work
+lands for the `0.12.0` slot, which the version ledger opens (`<Version>` still reads `0.11.0` until
+that act). The substrate does not move: `Fuaran.Core.*` 0.40.2 already carries the strict grammar
+(fuaran-core#462) and the limits record (fuaran-core#465). DECISIONS.md D50 records the design.
+
+### What a consumer gains
+
+- **`RefusalClass.MalformedJson`** (`malformed-json`) and **`RefusalClass.LimitExceeded`**
+  (`limit-exceeded`), two new `Literal`s.
+- **`WireLimits`**: the nine values as `Literal`s, `WireLimits.json` (the `JsonLimits` record
+  `parseDocument` reads under) and `WireLimits.readOptions`.
+- **`ProgramWire.checkActionShape`**, **`ProgramWire.limitRefusal`** and **`ProgramWire.withinStage`**.
+
+### What a consumer pays
+
+- **A parse refusal changes class.** `ProgramWire.parseDocument` — and so `HandlerWire.decodeHandler`
+  and `decodeReport` — refuses text the cited grammar refuses as `malformed-json`; it was
+  `malformed-referenced-value`. A repeated member was already refused (Core 0.38 onward); only its
+  class moves. The depth cap's breach is now `limit-exceeded` at 256 (it was a malformed text at
+  Core's own 512). A caller matching on the old class for a syntax failure must match the new one.
+- **Documents past a limit no longer decode.** A document past §2.10's five bounds, and a handler or
+  action past §2.11's four (action depth 32, 1 024 actions per handler, a repeat bound or parameter
+  `hi` above 1 024, an `Each` over more than 1 024 elements or under a larger ceiling), is refused
+  `limit-exceeded` at `parseDocument`, `decodeActionIn` / `decodeAction` and `decodeHandlerJson`. An
+  action built in memory and never decoded is unaffected: the bounds are the WIRE's, and the fold
+  and budget read what they always read.
+
+### What did not move
+
+- Every byte any encoder writes, every round-trip vector, and every refusal of a document that parses
+  and sits within the limits.
+- `null-member`, `undeclared-member` and `$type` dispatch, exactly as before.
+
 ## 0.11.0 — the substrate raise to Fuaran.Core 0.40.2 (Phase 2228)
 
 **Class: breaking**, by this file's first rule: the contract every package is BUILT against moved.

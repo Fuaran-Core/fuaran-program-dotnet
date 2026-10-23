@@ -321,7 +321,35 @@ module HandlerWire =
                 Ok name)
         |> Result.bind (fun name ->
             ProgramWire.requireArray "stages" value
-            |> Result.bind (ProgramWire.traverse (decodeStage witness))
+            |> Result.bind (
+                List.indexed
+                >> ProgramWire.traverse (fun (i, stage) ->
+                    decodeStage witness stage |> Result.mapError (ProgramWire.withinStage i))
+            )
+            |> Result.bind (fun stages ->
+                // §2.11's actions-per-program bound is the HANDLER's: each
+                // compute stage was held to it alone above, and here the
+                // stages are summed, in order, refused at the stage that
+                // passes it.
+                match foldOf witness with
+                | None -> Ok stages
+                | Some fold ->
+                    stages
+                    |> List.indexed
+                    |> List.fold
+                        (fun acc (i, stage) ->
+                            match stage with
+                            | Compute action ->
+                                acc
+                                |> Result.bind (fun counted ->
+                                    ProgramWire.checkActionShape
+                                        fold.Action
+                                        ("stages[" + string i + "].action")
+                                        counted
+                                        action)
+                            | Effect _ -> acc)
+                        (Ok 0)
+                    |> Result.map (fun _ -> stages))
             |> Result.map (fun stages -> { Name = name; Stages = stages }))
 
     let decodeHandler

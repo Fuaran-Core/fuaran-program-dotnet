@@ -94,6 +94,8 @@ type private Vector =
         /// subject is at (§10.7).
         Subject: string option
         Reject: string option
+        /// The bound a `limit-exceeded` vector passes (§2.10, §2.11).
+        Limit: string option
         ReplaySafety: string option
         ReplayReasons: (int * string) list option
         /// The host's query posture the vector's derived values are read
@@ -161,6 +163,7 @@ let private everyVector () : Vector list =
               Sha256 = str "sha256" entry
               Subject = ProgramWire.tryString "subject" entry
               Reject = ProgramWire.tryString "reject" entry
+              Limit = ProgramWire.tryString "limit" entry
               ReplaySafety = ProgramWire.tryString "replaySafety" entry
               ReplayReasons = reasonsOf entry
               Query = queryOf entry })
@@ -396,6 +399,19 @@ let tests =
                           // The class, not merely the fact of refusal: a reader
                           // broken in a convenient way must not certify.
                           Expect.equal refusal.Class expected $"{v.Id} is refused for the right class"
+
+                          // HOST-LOCAL, beyond what §10.1 asks of a reader: this
+                          // host's detail names the bound, so a limit vector is
+                          // also refused for the RIGHT bound — a depth vector
+                          // refused for its action count would pass on class.
+                          match v.Limit with
+                          | Some limit ->
+                              Expect.stringStarts
+                                  refusal.Detail
+                                  ("limit " + limit + " of ")
+                                  $"{v.Id} is refused for the bound it names"
+                          | None -> ()
+
                           v.Id)
 
               Expect.equal ran.Length rejects.Length "every enumerated reject vector was run"
@@ -752,4 +768,145 @@ let resultTargetTests =
                   |> Result.bind (HandlerWire.decodeHandlerJson blind)
 
               Expect.isOk decoded "with no declared reading, nothing is refused for a target"
+          } ]
+
+
+// ─── Phase 2259 — the syntax layer and the limits, host-local ────────────────
+//
+// What the corpus pins at the toy subject is run by the reject test above. What
+// it cannot pin is here: each bound AT its value (a round-trip vector at a bound
+// would be one more document three emitters must mint, for an acceptance this
+// host can state directly), the four syntactic bounds whose breach is megabytes,
+// the stored collection's ceiling (a toy codec spelling the corpus does not
+// carry), and the repeated member at the two vocabulary-free documents, whose
+// corpus vectors the referenced subject's host certifies.
+
+let private refusedFor (limit: string) (what: string) (result: Result<'T, WireRefusal>) =
+    match result with
+    | Ok _ -> failtestf "%s was ACCEPTED; it must be refused past the %s bound" what limit
+    | Error refusal ->
+        Expect.equal refusal.Class RefusalClass.LimitExceeded $"{what}: the limit class"
+        Expect.stringStarts refusal.Detail ("limit " + limit + " of ") $"{what}: the bound named"
+
+let private limitsHandler (stages: ToyAction list) : string =
+    match
+        HandlerWire.encodeHandler
+            wireWitness
+            { Name = "bell.limits"
+              Stages = stages |> List.map Compute }
+    with
+    | Ok bytes -> bytes
+    | Error refusal -> failwithf "the handler does not encode: %A" refusal
+
+let rec private nest (depth: int) : ToyAction =
+    if depth <= 1 then Hush else Seq [ nest (depth - 1) ]
+
+let private hushes (n: int) : ToyAction = Seq(List.replicate n Hush)
+
+let private decodeStages (stages: ToyAction list) =
+    HandlerWire.decodeHandler wireWitness (limitsHandler stages)
+
+/// Each case: the bound, a handler AT it, and one a unit past it.
+let private shapeCases: (string * ToyAction list * ToyAction list) list =
+    [ "actionDepth", [ nest 32 ], [ nest 33 ]
+      "actionsPerProgram", [ hushes 1023 ], [ hushes 1024 ]
+      "actionsPerProgram", [ hushes 511; hushes 511 ], [ hushes 511; hushes 512 ]
+      "repeatBound", [ Times(Bound.Literal 1024, Hush) ], [ Times(Bound.Literal 1025, Hush) ]
+      "repeatBound",
+      [ Times(Bound.Parameter(Read "n", 0, 1024), Hush) ],
+      [ Times(Bound.Parameter(Read "n", 0, 1025), Hush) ]
+      "eachCollection",
+      [ ForEach(List.init 1024 (fun i -> JInt i), "item", Hush) ],
+      [ ForEach(List.init 1025 (fun i -> JInt i), "item", Hush) ]
+      "eachCollection", [ ForEachOf(Read "xs", 1024, "item", Hush) ], [ ForEachOf(Read "xs", 1025, "item", Hush) ] ]
+
+[<Tests>]
+let limitTests =
+    testList
+        "Phase 2259 - the syntax layer and the limits, host-local"
+        [ test "every program-shape limit admits a handler AT it and refuses one a unit past it, naming the bound" {
+              for (limit, atIt, pastIt) in shapeCases do
+                  Expect.isOk (decodeStages atIt) $"a handler at the {limit} bound decodes"
+                  refusedFor limit $"a handler past the {limit} bound" (decodeStages pastIt)
+          }
+
+          test "the actions bound is the handler's: the stage that passes it is the one named" {
+              match decodeStages [ hushes 600; hushes 600 ] with
+              | Ok _ -> failtest "1202 actions across two stages decoded"
+              | Error refusal -> Expect.stringContains refusal.Detail "stages[1].action" "the second stage is named"
+          }
+
+          test "a per-action breach inside a stage is addressed from the handler" {
+              match decodeStages [ Hush; nest 33 ] with
+              | Ok _ -> failtest "a 33-deep action decoded"
+              | Error refusal -> Expect.stringContains refusal.Detail "stages[1].action" "the stage is named"
+          }
+
+          test "the four syntactic bounds no corpus vector reaches at a practical size, at and past each" {
+              let jsonString (n: int) = "\"" + String('a', n) + "\""
+
+              let array (n: int) =
+                  "[" + String.Join(",", Array.create n "0") + "]"
+
+              let object (n: int) =
+                  "{" + String.Join(",", Array.init n (fun i -> "\"k" + string i + "\":0")) + "}"
+
+              // Whitespace after the root is not content (Core row 2), so it pads
+              // a document to an exact byte count without nearing another bound.
+              let bytes (n: int) = "{}" + String(' ', n - 2)
+
+              let cases =
+                  [ "stringLength", jsonString WireLimits.StringLength, jsonString (WireLimits.StringLength + 1)
+                    "arrayLength", array WireLimits.ArrayLength, array (WireLimits.ArrayLength + 1)
+                    "objectMembers", object WireLimits.ObjectMembers, object (WireLimits.ObjectMembers + 1)
+                    "documentBytes", bytes WireLimits.DocumentBytes, bytes (WireLimits.DocumentBytes + 1) ]
+
+              for (limit, atIt, pastIt) in cases do
+                  Expect.isOk (ProgramWire.parseDocument atIt) $"a document at the {limit} bound parses"
+                  refusedFor limit $"a document past the {limit} bound" (ProgramWire.parseDocument pastIt)
+          }
+
+          test "the JSON depth bound admits the 256th container and refuses the 257th" {
+              let deep (n: int) = String('[', n) + String(']', n)
+              Expect.isOk (ProgramWire.parseDocument (deep 256)) "256 containers parse"
+              refusedFor "depth" "257 containers" (ProgramWire.parseDocument (deep 257))
+          }
+
+          test "a repeated member is refused at the two vocabulary-free documents" {
+              let invocation =
+                  """{"$type":"Invocation","endpoint":"/api/settle","endpoint":"/api/refund","nodeId":"btn-settle"}"""
+
+              let reference =
+                  """{"$type":"LogicTreeRef","ref":"orders-logic","ref":"refund-logic","slot":"fuaran.program/logic-tree"}"""
+
+              let results =
+                  [ "invocation",
+                    ProgramWire.parseDocument invocation
+                    |> Result.bind ProgramWire.decodeInvocation
+                    |> Result.map ignore
+                    "logic-tree-ref",
+                    ProgramWire.parseDocument reference
+                    |> Result.bind ProgramWire.decodeLogicTreeRef
+                    |> Result.map ignore ]
+
+              for (document, result) in results do
+                  match result with
+                  | Ok() -> failtestf "a %s with a repeated member decoded" document
+                  | Error refusal ->
+                      Expect.equal refusal.Class RefusalClass.MalformedJson $"the {document}: malformed-json"
+          }
+
+          test "a limit breach and malformed text are distinct classes, and the breach does not echo the input" {
+              let secret = "s3cr3t-endpoint"
+              let deep = "{\"" + secret + "\":" + String('[', 300) + String(']', 300) + "}"
+
+              match ProgramWire.parseDocument deep with
+              | Ok _ -> failtest "a 301-deep document parsed"
+              | Error refusal ->
+                  Expect.equal refusal.Class RefusalClass.LimitExceeded "a breach is not malformed JSON"
+                  Expect.isFalse (refusal.Detail.Contains secret) "the detail names a position, not a member"
+
+              match ProgramWire.parseDocument "{\"a\":1,\"a\":2}" with
+              | Ok _ -> failtest "a repeated member parsed"
+              | Error refusal -> Expect.equal refusal.Class RefusalClass.MalformedJson "malformed text is not a breach"
           } ]
