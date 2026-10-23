@@ -189,7 +189,14 @@
          0.10.2 on Core 0.39.0 or later reaches members its binaries no longer
          find. No member of this repository's own surface changes, and no byte of
          the program wire moves. Released as `v0.11.0`. -->
-    <Version>0.11.0</Version>
+    <!-- 0.12.0 — Phase 2259. ADVANCES rather than rides: v0.11.0 is TAGGED.
+         The program wire cites Core's JSON-syntax layer and states its limits:
+         `RefusalClass` gains `MalformedJson` and `LimitExceeded` (a closed DU
+         gaining cases breaks every exhaustive `match`), and a decode now refuses
+         a document past the syntactic or program-shape limits that decoded
+         before (DECISIONS.md D50). STABILITY.md holds the slot as a DRAFT until
+         it is tagged. -->
+    <Version>0.12.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
          else. Undeclared would read as `local-feed`, under which a pin only this
