@@ -82,6 +82,18 @@ module HandlerWire =
 
     // ─── the server-effect vocabulary ────────────────────────────────────────
 
+    /// A member the specification marks non-empty (§5.1: `fn`, `name`,
+    /// `channel`, `code`, `severity`; Phase 2213, D51). Present and empty is
+    /// refused on the class an absent one is, because an empty name names
+    /// nothing a host could hold; the refusal names the member, never the token.
+    let private requireNonEmpty (name: string) (value: JVal) : Result<string, WireRefusal> =
+        ProgramWire.requireString name value
+        |> Result.bind (fun text ->
+            if text = "" then
+                ProgramWire.refuse RefusalClass.MissingMember ("member '" + name + "' is empty")
+            else
+                Ok text)
+
     let encodeEffect
         (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
         (effect: ServerEffect<'Op>)
@@ -131,7 +143,7 @@ module HandlerWire =
 
         | Some "RunQuery" ->
             ProgramWire.declaredOnly [ "$type"; "name"; "pipeline"; "source" ] value
-            |> Result.bind (fun () -> ProgramWire.requireString "name" value)
+            |> Result.bind (fun () -> requireNonEmpty "name" value)
             |> Result.bind (fun name ->
                 ProgramWire.requireMember "source" value
                 |> Result.bind ProgramWire.decodeSource
@@ -154,12 +166,8 @@ module HandlerWire =
 
         | Some "HostCall" ->
             ProgramWire.declaredOnly [ "$type"; "args"; "fn"; "into" ] value
-            |> Result.bind (fun () -> ProgramWire.requireString "fn" value)
-            |> Result.bind (fun fn ->
-                if fn = "" then
-                    ProgramWire.refuse RefusalClass.MissingMember "the host function name is empty"
-                else
-                    ProgramWire.requireMember "args" value |> Result.map (fun args -> fn, args))
+            |> Result.bind (fun () -> requireNonEmpty "fn" value)
+            |> Result.bind (fun fn -> ProgramWire.requireMember "args" value |> Result.map (fun args -> fn, args))
             |> Result.bind (fun (fn, args) ->
                 // The host-reserved namespace is closed at DECODE, which is one
                 // step earlier than the interpreter closes it at PLAN. Both are
@@ -183,7 +191,7 @@ module HandlerWire =
 
         | Some "Notify" ->
             ProgramWire.declaredOnly [ "$type"; "channel"; "payload" ] value
-            |> Result.bind (fun () -> ProgramWire.requireString "channel" value)
+            |> Result.bind (fun () -> requireNonEmpty "channel" value)
             |> Result.bind (fun channel ->
                 ProgramWire.requireMember "payload" value
                 |> Result.map (fun payload -> ServerEffect.Notify(channel, payload)))
@@ -192,20 +200,12 @@ module HandlerWire =
         // The tokens must be non-empty, as a host function's name must — an
         // empty code names nothing a host's vocabulary could hold.
         | Some FindingRecorder.Capability ->
-            let token (name: string) =
-                ProgramWire.requireString name value
-                |> Result.bind (fun text ->
-                    if text = "" then
-                        ProgramWire.refuse RefusalClass.MissingMember ("member '" + name + "' is empty")
-                    else
-                        Ok text)
-
             ProgramWire.declaredOnly
                 [ "$type"; Finding.CodeMember; Finding.MessageMember; Finding.SeverityMember ]
                 value
-            |> Result.bind (fun () -> token Finding.CodeMember)
+            |> Result.bind (fun () -> requireNonEmpty Finding.CodeMember value)
             |> Result.bind (fun code ->
-                token Finding.SeverityMember
+                requireNonEmpty Finding.SeverityMember value
                 |> Result.bind (fun severity ->
                     ProgramWire.requireString Finding.MessageMember value
                     |> Result.map (fun message ->

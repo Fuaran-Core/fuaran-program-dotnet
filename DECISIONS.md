@@ -3907,3 +3907,52 @@ misdiagnosis rule 10 forbids. Considered and kept: `Demanded.readStrict` itself 
 projection's reader, a different document with its own refusal type, outside this phase's files), and
 `Budget.actionCascadeCost` beside `checkActionShape` (one prices a run, the other sizes a document;
 they agree on nothing by construction and should not share a walk).
+
+## D51 — Every server-effect member §5.1 marks non-empty is held to it by ONE check: an empty `RunQuery` `name` and an empty `Notify` `channel` are refused on `missing-member`, as an empty `fn` already was; the corpus vectors sit at the toy subject (2026-10-23)
+
+**2026-10-23. Phase 2213** (a conformance gap found by Phase 2195's worker and left alone then because
+closing it changes behaviour). `PROGRAM_WIRE.md` §5.1 says `fn`, `name`, `channel`, `code` and
+`severity` MUST be non-empty. The handler decoder held `fn` to that, and since D45 the finding's two
+tokens, and let a `RunQuery` with `"name": ""` and a `Notify` with `"channel": ""` decode. This host
+accepted documents the specification it certifies against calls malformed.
+
+**Premises checked against the tree first.** (1) *Only `fn` was checked.* Not quite: D45 had added a
+second copy of the same check for `code` and `severity`, so the decoder carried the rule twice, in two
+spellings, and still missed two members. (2) *The specification's corpus can mark a vector with the
+release that introduced it, and the downstream certifying host honours that marking.* Neither holds:
+the manifest carries no such member, and that host's harness runs every referenced-subject vector the
+manifest enumerates. (3) *So the vectors cannot reach the specification's main in this phase.* They
+can, on D50's route: the downstream host certifies the referenced subject and the vocabulary-free
+documents only, and the toy subject is certified by this repository alone. The two new vectors are
+`toy-server-effect/reject-empty-query-name` and `toy-server-effect/reject-empty-channel`, beside D45's
+`toy-server-effect/reject-empty-severity`.
+
+**Decided: one check, at the effect decoder.** `HandlerWire.requireNonEmpty` reads a required string
+member and refuses it present-and-empty on `missing-member`, the class an absent member is refused on,
+with the detail `member '<name>' is empty`: it names the member and never the token (§4.4). All five
+members go through it, so the rule is stated once. An empty `fn`'s detail changes to that sentence; its
+class does not. The registration key keeps its own check: §4.1 gives an empty key its own class
+(`empty-name`) and a length cap, which is a different rule.
+
+**Decided: the encoder does not refuse.** An empty member in a typed value is a construction the host
+made, not a document it received; the encoder writes it as it is, and the decoder refuses what it wrote.
+That keeps every encoder byte unchanged, and the asymmetry is pinned by a test per member.
+
+**Why the class is the draft's.** No public surface moves; documents no conformant encoder writes stop
+decoding, which is the narrowed decode the `0.12.0` draft already carries (D50). It rides that draft.
+
+**Not done here, and why.** The referenced-subject counterparts of the two vectors wait for the
+downstream host to raise past this repository's next release, in the same change-set as those vectors
+(§11.1's fifth artefact); they are prepared on the specification's `phase-2213` branch for that raise.
+Three disagreements on the same question sit outside this decoder and are reported rather than
+guessed at: the invocation document's `endpoint` and `nodeId` (§8.3 says non-empty;
+`ProgramWire.decodeInvocation` accepts empty), and `HostCall`'s `into` and an outcome notification's
+`channel`, which the schemas mark non-empty and the text does not. Where the text and a schema
+disagree the text wins, so this host conforms on the last two, and the disagreement is the
+specification's to settle.
+
+Files reviewed for the tidy: `HandlerWire.fs`, the test project, `DECISIONS.md`, `STABILITY.md`,
+`Directory.Build.props` and the corpus's `toy-server-effect` family. Removed: the inline `fn` check and
+the finding decoder's local `token` helper, both replaced by `requireNonEmpty`. Considered and kept: the
+registration key's check (its own refusal class and a length cap, so not a duplicate), and the
+test-side toy codec's own `nonEmpty` (a different codec, the toy witness's, in another assembly).

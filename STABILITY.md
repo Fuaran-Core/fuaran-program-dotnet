@@ -55,6 +55,24 @@ that act). The substrate does not move: `Fuaran.Core.*` 0.40.2 already carries t
   and sits within the limits.
 - `null-member`, `undeclared-member` and `$type` dispatch, exactly as before.
 
+### Rides the draft: the handler decoder refuses an empty `RunQuery` name and an empty `Notify` channel (Phase 2213)
+
+**Class: additive surface, narrowed decode** — the draft's own class, so it rides rather than advances
+it. No public type, member or signature moves. `DECISIONS.md` D51 records what was decided.
+
+**What a consumer pays: documents that decoded before are refused.** `PROGRAM_WIRE.md` §5.1 says `fn`,
+`name`, `channel`, `code` and `severity` MUST be non-empty, and the decoder held only `fn`, `code` and
+`severity` to it. Now `HandlerWire.decodeEffect` — and so `decodeHandler` / `decodeHandlerJson` —
+refuses a `RunQuery` whose `name` is `""` and a `Notify` whose `channel` is `""`, on `missing-member`,
+as it already refused an empty `fn`. A caller that stored such a document can no longer read it back.
+No conformant encoder writes one.
+
+**And one detail string changes.** An empty `fn` is refused with `member 'fn' is empty` (it read
+`the host function name is empty`), the sentence the other four members carry. The class is unchanged.
+
+**What did not move:** every encoder. A typed `RunQuery("", …)` or `Notify("", …)` still encodes; the
+document it encodes to is the one now refused, so such a value round-trips only when non-empty.
+
 ## 0.11.0 — the substrate raise to Fuaran.Core 0.40.2 (Phase 2228)
 
 **Class: breaking**, by this file's first rule: the contract every package is BUILT against moved.
