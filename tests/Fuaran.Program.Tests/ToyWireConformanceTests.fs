@@ -910,3 +910,351 @@ let limitTests =
               | Ok _ -> failtest "a repeated member parsed"
               | Error refusal -> Expect.equal refusal.Class RefusalClass.MalformedJson "malformed text is not a breach"
           } ]
+
+// ─── Conformance profiles, certified in their own leg (Phase 2263) ─────────
+//
+// §10.8 lets a host narrow what it accepts under a NAMED profile and claim
+// conformance under it: `canonical-bytes` refuses any document whose bytes are
+// not the canonical encoding of what they parse to, and `integer-only` refuses
+// any number token carrying a fraction or an exponent. A claim naming no
+// profile is the base claim and is untouched, which is why everything above
+// this line reads `vectors` and nothing here changes it.
+//
+// The profile reader is COMPOSED here over the reference's published strict
+// reader (`ProgramWire.parseDocument`) and its canonical encoder; the profile
+// check is not a published surface (DECISIONS.md D56). It reads in the order
+// §10.8 fixes: the syntax layer and the no-null rule first, then the claimed
+// profiles, then every other rule. So a malformed document is malformed under
+// every profile, and a profile refusal comes before any rule above it.
+//
+// What the leg asserts, every item driven by the manifest's `profiles` and
+// `profileVectors`:
+//
+//   1. every profile vector is ACCEPTED by the base reader — it discriminates
+//      the profile rather than restating a base refusal — and is refused under
+//      its profile for the class the profile names, under each claim that
+//      includes it, and accepted under a claim of the other profile alone;
+//   2. every base vector of the toy subject's run reads under both profiles
+//      exactly as it reads under none, except the vectors a profile lists as
+//      `outside`, and that list is exactly the set the profile reader computes;
+//   3. a profile vector is never a base vector, so a host claiming no profile
+//      never runs one;
+//   4. the leg can go red: a profile vector restored to canonical bytes, or
+//      rid of its fraction, is accepted, and the leg says so.
+
+[<Literal>]
+let private CanonicalBytes = "canonical-bytes"
+
+[<Literal>]
+let private IntegerOnly = "integer-only"
+
+/// The profiles this host claims, as the manifest's adoption record names them.
+let private claimed: string list = [ CanonicalBytes; IntegerOnly ]
+
+/// One profile, as the manifest declares it.
+type private ProfileDecl =
+    {
+        Name: string
+        /// The class a host under the profile refuses the profile's defect for.
+        Class: string
+        /// Base vectors whose expectation does not bind a host under the profile.
+        Outside: string list
+    }
+
+let private profileDecls () : ProfileDecl list =
+    match ProgramWire.tryMember "profiles" manifest.Value with
+    | Some(JObj members) ->
+        members
+        |> List.map (fun (name, decl) ->
+            { Name = name
+              Class = str "reject" decl
+              Outside =
+                match ProgramWire.tryMember "outside" decl with
+                | Some(JArr ids) ->
+                    ids
+                    |> List.map (fun id ->
+                        match id with
+                        | JStr id -> id
+                        | _ -> failwithf "profile %s lists a non-string as outside" name)
+                | _ -> failwithf "profile %s declares no outside list" name })
+    | _ -> failwith "the corpus manifest declares no profiles object (§10.8)"
+
+let private profileClass (name: string) : string =
+    match profileDecls () |> List.tryFind (fun p -> p.Name = name) with
+    | Some p -> p.Class
+    | None -> failwithf "the manifest declares no profile '%s'" name
+
+/// One profile vector, as the manifest declares it.
+type private ProfileVector =
+    { Id: string
+      Profile: string
+      Document: string
+      File: string
+      Sha256: string
+      Subject: string option
+      Reject: string }
+
+let private profileVectors () : ProfileVector list =
+    match ProgramWire.tryMember "profileVectors" manifest.Value with
+    | Some(JArr entries) ->
+        entries
+        |> List.map (fun entry ->
+            if str "kind" entry <> "reject" then
+                failwithf "profile vector %s is not a reject vector" (str "id" entry)
+
+            { Id = str "id" entry
+              Profile = str "profile" entry
+              Document = str "document" entry
+              File = str "file" entry
+              Sha256 = str "sha256" entry
+              Subject = ProgramWire.tryString "subject" entry
+              Reject = str "reject" entry })
+    | _ -> failwith "the corpus manifest declares no profileVectors array (§10.8)"
+
+let private readProfile (vector: ProfileVector) : string =
+    File.ReadAllText(Path.Combine(ToyCorpus.fixturesRoot, vector.File))
+
+/// `integer-only`'s defect, read off the TOKENS rather than the parsed value:
+/// Core reads an integer token past Int32 as `JFloat`, so the value cannot tell
+/// `1.0` from `4294967296`, and only the second is an integer. Strings are
+/// skipped whole, escapes included, so a digit and a point inside one are text.
+let private hasNonIntegerNumber (text: string) : bool =
+    let isNumberChar (c: char) =
+        Char.IsAsciiDigit c || c = '-' || c = '+' || c = '.' || c = 'e' || c = 'E'
+
+    let mutable i = 0
+    let mutable found = false
+
+    while not found && i < text.Length do
+        let c = text[i]
+
+        if c = '"' then
+            i <- i + 1
+
+            while i < text.Length && text[i] <> '"' do
+                i <- i + (if text[i] = '\\' then 2 else 1)
+
+            i <- i + 1
+        elif c = '-' || Char.IsAsciiDigit c then
+            while i < text.Length && isNumberChar text[i] do
+                if text[i] = '.' || text[i] = 'e' || text[i] = 'E' then
+                    found <- true
+
+                i <- i + 1
+        else
+            i <- i + 1
+
+    found
+
+/// The canonical rendering of a parsed document: the canonical form for every
+/// document §2 introduces, and §5.2's as-emitted envelope — members in the
+/// order read, which the family's own reader holds to declaration order — for
+/// a client effect.
+let private canonicalOf (document: string) (value: JVal) : string =
+    if document = "client-effect" then
+        Canonical.write Rendering.Declared value
+    else
+        ProgramWire.render value
+
+/// The profile reader: the base read, under the named profiles, in §10.8's
+/// order. `Ok` carries the bytes re-encoded; `Error` the refusal.
+let private profileRead (profiles: string list) (document: string) (bytes: string) : Result<string, WireRefusal> =
+    let nonCanonical () =
+        ProgramWire.refuse (profileClass CanonicalBytes) "the bytes are not the canonical encoding"
+
+    match ProgramWire.parseDocument bytes with
+    | Error refusal -> Error refusal
+    | Ok value ->
+        if List.contains IntegerOnly profiles && hasNonIntegerNumber bytes then
+            ProgramWire.refuse (profileClass IntegerOnly) "a number token carries a fraction or an exponent"
+        elif List.contains CanonicalBytes profiles && canonicalOf document value <> bytes then
+            nonCanonical ()
+        else
+            match roundTrip document bytes with
+            | Ok emitted when List.contains CanonicalBytes profiles && emitted <> bytes -> nonCanonical ()
+            | other -> other
+
+/// The verdict a profile harness reaches on one profile vector: green only
+/// when the base reader accepts it and the profile reader refuses it for the
+/// manifest's class. A pure function, so its ability to go red is shown.
+let private certifyProfileVector (vector: ProfileVector) (bytes: string) : Result<unit, string> =
+    match roundTrip vector.Document bytes, profileRead [ vector.Profile ] vector.Document bytes with
+    | Error refusal, _ ->
+        Error(sprintf "the base reader refuses it (%s), so it does not discriminate the profile" refusal.Class)
+    | Ok _, Ok _ -> Error(sprintf "accepted under %s; it must be refused for '%s'" vector.Profile vector.Reject)
+    | Ok _, Error refusal when refusal.Class <> vector.Reject ->
+        Error(sprintf "refused for '%s', and the manifest names '%s'" refusal.Class vector.Reject)
+    | Ok _, Error _ -> Ok()
+
+/// A base vector's verdict, as a comparable value: the bytes it re-encodes to,
+/// or the class it is refused for.
+let private verdict (result: Result<string, WireRefusal>) : Result<string, string> = result |> Result.mapError _.Class
+
+[<Tests>]
+let profileTests =
+    testList
+        "Phase 2263 - the conformance profiles, certified in a profile-scoped leg"
+        [ test "the manifest declares the two profiles this host claims, with distinct classes" {
+              let decls = profileDecls ()
+
+              Expect.equal
+                  (decls |> List.map _.Name |> List.sort)
+                  (List.sort claimed)
+                  "canonical-bytes and integer-only"
+
+              Expect.equal
+                  (decls |> List.map _.Class |> List.distinct |> List.length)
+                  decls.Length
+                  "each profile refuses for a class of its own"
+
+              // A profile class is not a base class: a host claiming no profile
+              // refuses nothing for it, so no base vector may name one.
+              let baseClasses = everyVector () |> List.choose _.Reject |> Set.ofList
+
+              for p in decls do
+                  Expect.isFalse (baseClasses.Contains p.Class) $"no base vector is refused for {p.Class}"
+          }
+
+          test "every profile vector is at the toy subject, digested, and of a profile the manifest declares" {
+              let vectors = profileVectors ()
+              let names = profileDecls () |> List.map _.Name
+              Expect.isNonEmpty vectors "the manifest carries profile vectors"
+
+              for v in vectors do
+                  Expect.equal v.Subject (Some ToySubject) $"{v.Id} sits at the toy subject"
+                  Expect.contains names v.Profile $"{v.Id} names a declared profile"
+                  Expect.equal v.Reject (profileClass v.Profile) $"{v.Id} is refused for its profile's class"
+
+                  Expect.equal
+                      (digestOf (Path.Combine(ToyCorpus.fixturesRoot, v.File)))
+                      v.Sha256
+                      $"{v.Id} hashes to its manifest digest"
+
+              for name in names do
+                  Expect.isTrue (vectors |> List.exists (fun v -> v.Profile = name)) $"{name} has vectors"
+          }
+
+          test "every profile vector is accepted by the base reader and refused under its profile for its class" {
+              let vectors = profileVectors ()
+
+              let ran =
+                  vectors
+                  |> List.map (fun v ->
+                      match certifyProfileVector v (readProfile v) with
+                      | Ok() -> v.Id
+                      | Error why -> failtestf "%s %s" v.Id why)
+
+              Expect.equal ran.Length vectors.Length "every enumerated profile vector was run"
+          }
+
+          test "a profile vector carries one profile's defect: refused under every claim naming it, alone elsewhere" {
+              for v in profileVectors () do
+                  let bytes = readProfile v
+
+                  match profileRead claimed v.Document bytes with
+                  | Ok _ -> failtestf "%s was accepted under both profiles" v.Id
+                  | Error refusal -> Expect.equal refusal.Class v.Reject $"{v.Id} under both profiles"
+
+                  for other in claimed |> List.filter ((<>) v.Profile) do
+                      Expect.isOk (profileRead [ other ] v.Document bytes) $"{v.Id} is accepted under {other} alone"
+          }
+
+          test "every base vector reads under both profiles as it reads under none, outside the declared lists" {
+              let mine = selectForToy (vocabularyFree ()) (everyVector ())
+              let decls = profileDecls ()
+
+              // The `outside` lists, COMPUTED: the base vectors whose verdict a
+              // profile changes, profile by profile.
+              let computed (profile: string) =
+                  mine
+                  |> List.filter (fun v ->
+                      verdict (profileRead [ profile ] v.Document (read v))
+                      <> verdict (roundTrip v.Document (read v)))
+                  |> List.map _.Id
+                  |> List.sort
+
+              for p in decls do
+                  Expect.equal
+                      (List.sort p.Outside)
+                      (computed p.Name)
+                      $"{p.Name}'s outside list is exactly the base vectors whose verdict it changes"
+
+                  for id in p.Outside do
+                      let v = mine |> List.find (fun v -> v.Id = id)
+
+                      match profileRead [ p.Name ] v.Document (read v) with
+                      | Error refusal -> Expect.equal refusal.Class p.Class $"{id} is refused for {p.Class}"
+                      | Ok _ -> failtestf "%s is listed outside %s and accepted under it" id p.Name
+
+              let outside = decls |> List.collect _.Outside |> Set.ofList
+
+              let ran =
+                  mine
+                  |> List.filter (fun v -> not (outside.Contains v.Id))
+                  |> List.map (fun v ->
+                      Expect.equal
+                          (verdict (profileRead claimed v.Document (read v)))
+                          (verdict (roundTrip v.Document (read v)))
+                          $"{v.Id} reads under both profiles as under none"
+
+                      v.Id)
+
+              Expect.equal (ran.Length + outside.Count) mine.Length "every base vector of the run was read"
+          }
+
+          test "a profile vector is never a base vector, so a host claiming no profile never runs one" {
+              let baseIds = everyVector () |> List.map _.Id |> Set.ofList
+              let baseFiles = everyVector () |> List.map _.File |> Set.ofList
+              let profiled = profileVectors ()
+
+              for v in profiled do
+                  Expect.isFalse (baseIds.Contains v.Id) $"{v.Id} is not also a base vector"
+                  Expect.isFalse (baseFiles.Contains v.File) $"{v.File} is not also a base vector's file"
+
+              Expect.equal
+                  (profiled |> List.map _.Id |> List.distinct |> List.length)
+                  profiled.Length
+                  "each profile vector is enumerated once"
+          }
+
+          test "the integer-only scan reads tokens, not values, and never looks inside a string" {
+              Expect.isTrue (hasNonIntegerNumber "{\"a\":1.5}") "a fraction"
+              Expect.isTrue (hasNonIntegerNumber "{\"a\":2e3}") "an exponent"
+              Expect.isTrue (hasNonIntegerNumber "[1,-0.0]") "a negative zero written with a point"
+              Expect.isFalse (hasNonIntegerNumber "{\"a\":4294967296}") "an integer past Int32 is an integer"
+              Expect.isFalse (hasNonIntegerNumber "{\"a\":\"1.5\",\"b\":\"\\\"2e3\"}") "text inside a string"
+              Expect.isFalse (hasNonIntegerNumber "{\"e\":-12}") "a member named e and a negative integer"
+          }
+
+          test "the profile leg can go red: a vector rid of its defect is accepted, and the harness says so" {
+              let vectors = profileVectors ()
+
+              let canonical =
+                  vectors
+                  |> List.find (fun v -> v.Profile = CanonicalBytes && v.Document = "handler")
+
+              let bytes = readProfile canonical
+
+              let restored =
+                  match ProgramWire.parseDocument bytes with
+                  | Ok value -> canonicalOf canonical.Document value
+                  | Error refusal -> failtestf "%s does not parse (%s)" canonical.Id refusal.Class
+
+              Expect.notEqual restored bytes "the restoration actually changed the bytes"
+
+              Expect.isError
+                  (certifyProfileVector canonical restored)
+                  "canonical bytes are not a canonical-bytes vector"
+
+              let fraction = vectors |> List.find (fun v -> v.Id.EndsWith "/handler-fraction")
+
+              let integral = (readProfile fraction).Replace("1.5", "15")
+              Expect.notEqual integral (readProfile fraction) "the second restoration changed the bytes"
+              Expect.isError (certifyProfileVector fraction integral) "an integer is not an integer-only vector"
+
+              // And a vector the BASE reader refuses is not a profile vector at
+              // all: it would certify a base refusal under the profile's name.
+              let malformed = bytes.Replace("\"stages\"", "\"stages\":0,\"stages\"")
+              Expect.notEqual malformed bytes "the third mutation changed the bytes"
+              Expect.isError (certifyProfileVector canonical malformed) "a base refusal does not discriminate"
+          } ]

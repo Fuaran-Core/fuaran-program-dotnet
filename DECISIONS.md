@@ -4273,3 +4273,66 @@ vocabulary, by the closure argument above, until a consumer needs one. It does n
 corpus's `declared-argument-policy` vector with the two discriminators: that corpus is the UI tier's
 emitter's output and is regenerated there (it does not carry Phase 2260's windowed clauses either);
 the round trip of both is pinned here by `ArgumentFloorTests`.
+
+## D56 — A constrained host claims conformance under a NAMED profile: `canonical-bytes` and `integer-only` are opt-in narrowings with vectors of their own, enumerated apart from the base corpus; the syntax layer reads first; tighter limits are deployment policy, never a profile; this reference certifies both in a profile-scoped test leg and publishes no profile reader (2026-10-24)
+
+**Context.** The specification's §2.3 obliges a decoder to accept any member order, and §2.8 lets a
+number carry a fraction. A recognizer that accepts only canonical bytes, or a device without floating
+point, therefore had no codec claim it could make, although each is the shape a microcontroller host
+wants: one forward pass checks order instead of sorting, and the hash of the bytes received is the hash
+of the document, so a signature over it needs no re-encoding. The `device-langsec` target needs such a
+host to make an honest claim that can be checked.
+
+**Premises checked against the tree first.** The shard asked for "the existing accept-any-order
+vectors" to be marked outside `canonical-bytes`. There are none, and the absence is structural: every
+round-trip vector must re-encode to itself, so it is canonical by construction, and every base reject
+vector whose bytes are not canonical (the repeated members, and `1e999`, the corpus's one fraction or
+exponent token) is refused by the syntax layer before a profile reads anything. So no vector pins
+§2.3's acceptance of out-of-order members at all; a base reader that refused them would pass the whole
+corpus. That is recorded as open in the specification's §11.2 rather than "fixed" here, because pinning
+it needs a vector kind no certifying host reads today. The profiles' `outside` lists are therefore
+empty, and are kept anyway, recomputed by the specification's manifest check and by this leg, so the
+first base vector that ever carries a float, or pins a non-canonical acceptance, turns both red until
+it is listed. Also checked: the .NET reference has no profile-aware reader; Core reads an integer token
+past Int32 as `JFloat`, so `integer-only` cannot be decided on the parsed value and is decided on the
+token; and the pinned float layout writes `1E+21`, not `1e+21`, which the leg found when the first draft
+of the exponent vector carried the second spelling.
+
+**The decisions.**
+
+1. **A profile is opt-in and narrows only.** A claim naming no profile is the base claim, and every
+   vector, scenario and rule reads exactly as it did. That is enforced by where the vectors live: a
+   top-level `profileVectors` array beside a `profiles` object, never `vectors`, so no host that claims
+   nothing meets one. Every existing harness, this repository's toy suite, the UI tier's referenced
+   suite and the Rust core's, reads `vectors` by subject and is untouched.
+2. **A profile vector is a document the BASE reader accepts**, carrying its own profile's defect and no
+   other, at the toy subject. Accepted by the base reader is what makes it a test of the profile rather
+   than a base refusal filed under another name; one defect is what keeps the class determined for a
+   host claiming both. Toy only, as the driver's binding asks: the referenced subject's hosts certify
+   against the tree wire's vocabulary and move in their own change-sets.
+3. **The order of reading is fixed: the syntax layer and the no-null rule first, then the profiles,
+   then everything else.** A forward recognizer may stop building at a profile defect, but reports its
+   class only once the text is known well-formed, so a malformed document is malformed to every host.
+   A key equal to its predecessor is a repeated member, never an order defect. The alternative,
+   "either class where both apply", was weighed and rejected: it would make the `outside` lists
+   depend on which defect a host happened to meet first, and a list that cannot be computed is not a
+   falsifier.
+4. **Tighter limits are deployment policy, never a profile**, on the tree wire's section 21.2 rule 6:
+   declared beside the claim, refused `limit-exceeded`, never called non-conformant, and pinned by no
+   vector because no value suits every device. An adoption entry records them in `declaredLimits`, and
+   its claimed profiles in `profiles`; Phase 2267's adoption record is extended, not duplicated.
+5. **This reference certifies both profiles in a profile-scoped leg, and publishes no profile
+   reader.** The leg (`ToyWireConformanceTests.profileTests`) composes the profile reader over the
+   published strict reader (`ProgramWire.parseDocument`) and canonical encoder, in decision 3's order.
+   It asserts every profile vector is accepted by the base reader and refused under its profile for its
+   class, accepted under the other profile alone, that every base vector of the toy run reads under both
+   profiles exactly as under none, that each `outside` list equals the set it computes, and that a
+   vector rid of its defect turns it red. No published surface moves, so `STABILITY.md` and the version
+   do not. A published profile reader waits for a consumer that runs one: the constrained hosts this
+   serves are other implementations, for which this reference is the oracle, and a .NET host that
+   wanted to refuse non-canonical bytes in production would be the first reason to publish it.
+
+**What this does not do, stated.** It specifies no third profile, and no profile over the scenario
+families: a profile narrows what a CODEC accepts. It carries no profile vector at the referenced
+subject or for the two vocabulary-free documents. And it pins no vector for §2.3's acceptance of any
+member order, for the reason given above, which the specification records as open.
