@@ -147,6 +147,7 @@ call it. `HandlerWire`'s refusals are byte-for-byte unchanged.
 still encodes; the document it encodes to is the one now refused, so such a record round-trips only
 when both members are non-empty. The idempotency key's two refusals, and their order after these, are
 unchanged.
+
 ### Rides the draft: a domain declares a quantity per leaf, and the budget prices its worst case before the program runs (Phase 2261)
 
 **Class: breaking** — the draft's own class, so it rides rather than advances it. `DECISIONS.md` D54

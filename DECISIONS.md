@@ -4091,6 +4091,7 @@ Files reviewed for the tidy: `ProgramWire.fs`, `HandlerWire.fs`, the test projec
 `ProgramWire`. Considered and kept: the reference decoder's empty-`ref` check (its own detail and a
 length cap), and the control journal's own `requireNonEmpty` in `Journal.fs`, which refuses on
 `empty-name`, a different class, for a document the specification does not define.
+
 ## D54 — A leaf DECLARES the named quantities it spends, typed by the Core unit algebra; the budget prices each with D35's rules and no step, saturating; the demanded document carries the worst case per (name, unit) at version 13; a host's ceiling in the same unit refuses an over-ceiling program before the first stage, and converts nothing (2026-10-24)
 
 **Context.** `Budget.actionCascadeCost` prices one quantity — the STEP — and the G2 gate refuses on it
