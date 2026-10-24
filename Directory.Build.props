@@ -206,8 +206,9 @@
          Argument policy gains a floor and an opt-in presence clause:
          `ServerConstraintClause` gains `AtLeast` and `Required` (a closed DU
          gaining cases breaks every exhaustive `match`), and the demanded
-         document moves to version 14 (DECISIONS.md D55). STABILITY.md holds the
-         slot as a DRAFT until it is tagged. -->
+         document moves to version 14 (DECISIONS.md D55). Phase 2263 adds the
+         profile-scoped conformance leg and moves no surface.
+         Released as `v0.13.0`. -->
     <Version>0.13.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing

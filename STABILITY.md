@@ -20,11 +20,11 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.13.0 — DRAFT, not yet released — argument policy gains a floor and an opt-in Required clause (Phase 2262)
+## 0.13.0 — argument policy gains a floor and an opt-in Required clause (Phase 2262)
 
 **Class: breaking.** `v0.12.0` is tagged, so this cannot ride it: two closed DUs gain cases and the
 demanded document's version moves, so the work lands for the `0.13.0` slot, which the version ledger
-opened (`Directory.Build.props`), and it is tagged only by the separate release act. The substrate does not move. `DECISIONS.md` D55 records the design, including why the clauses
+opened (`Directory.Build.props`), released as `v0.13.0`. The substrate does not move. `DECISIONS.md` D55 records the design, including why the clauses
 are the policy's own rather than Core's `intRange` / `closed` decode shapes.
 
 ### What a consumer gains
