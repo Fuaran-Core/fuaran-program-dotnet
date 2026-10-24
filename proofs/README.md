@@ -1366,6 +1366,34 @@ perform phase. This is "a performer with no contract behaves exactly as today" a
 than a reading, and it is why every staging and gate theorem holds of an uncontracted performer
 unchanged: the registry they are stated over IS the uncontracted one.
 
+### 4. The windowed gate — `decide` and its laws (Phase 2260)
+
+The header's finding — the gate reads the capability and nothing else — stops being true of three
+clauses: at most N admissions per window, at most Q of a quantity per window, a minimum dwell. Each is
+decided from a STATE, the capability's counters and a clock reading the host supplies once per
+invocation, and production cuts that decision at one function, `WindowedLimits.decide`
+(`src/Fuaran.Program.Server/ServerEffect.fs`). The model's `decide` is it clause for clause, in the
+fixed order dwell, count, quantity, over fixed windows anchored at the first admission, and seven
+lemmas state what it computes: `window_refuses_full` (the N+1th inside the window is refused, the
+counter unchanged), `window_admits_after` (the first past the window is admitted and opens a fresh
+window holding exactly it), `window_count_bounded` and `window_quantity_bounded` (within the cap in,
+within the cap out — and a quantity that would exceed is refused), `dwell_refuses_inside` and
+`dwell_admits_after`, and `refusal_moves_nothing`. Every parameter is an assumption and is listed in
+the model's section comment: the clock reading is an unbounded integer here and an `int64` in
+production (the differential host pins the bridge), the quantity is a natural because production
+refuses a negative or non-integer one before the function is reached, and the counter enters within
+the cap because the invariant the lemmas state is what keeps it there.
+
+What does NOT move: the staging theorems. Production composes the decision into
+`ServerArgumentPolicy.check`, which the model carries as the registry's `r_policy` arrow — an assumed
+parameter every theorem is already quantified over. And what is not claimed stays on its rung: the
+TRACE-level Σ ("in every window of the whole timed trace, at most N") is not a theorem here — the
+counter-level invariants are — and `history-dependent-policy-not-claimed` in `proofs.json` says so.
+
+The differential host is in the `Phase 1759` list of `ToyStagingOracleTests`: the extraction and
+production walk the same traces over a grid of declarations, instants and quantities, each counter
+reached by the decisions before it, with the lemmas checked as instances along the way.
+
 ### What the effect-gate model does NOT own
 
 The same two records of arrows as the staging model — the witness and the registry's gate,

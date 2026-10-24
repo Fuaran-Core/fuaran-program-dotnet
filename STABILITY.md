@@ -73,6 +73,60 @@ No conformant encoder writes one.
 **What did not move:** every encoder. A typed `RunQuery("", …)` or `Notify("", …)` still encodes; the
 document it encodes to is the one now refused, so such a value round-trips only when non-empty.
 
+### Rides the draft: effects are limited over time windows by the host (Phase 2260)
+
+**Class: breaking** — the draft's own class, so it rides rather than advances it. `DECISIONS.md` D52
+records what was decided; `proofs/EffectGate.fst` models the decision and proves it.
+
+**What a consumer gains.**
+
+- Three policy clauses on `ServerConstraintClause`: `PerWindow(count, window)` — at most `count`
+  admissions of the capability per `window`; `QuantityPerWindow(argument, quantity, window)` — at
+  most `quantity` of the named argument's integer value summed over the admissions of a `window`;
+  `Dwell(window)` — at least `window` between admissions. Windows and dwells are in the HOST clock's
+  unit; every number is a 32-bit integer like the document's others. Declared with `constrain`,
+  carried by `withConstraints`, decided by `ServerArgumentPolicy.check` after the stateless clauses.
+- `DurableServices.Clock` and `DurableServices.withClock`: the host clock the limits are judged
+  against, read once per invocation and journaled under `ReadClock` so a replay is served it.
+- `ServerEffectRegistry.Limiter` / `withLimiter` and the `WindowedLimiter` type; `WindowedLimit`
+  (with `WindowedLimit.ofClauses` / `none`), `WindowCounter` (`fresh`, `key`, `encode`, `decode`),
+  `WindowDecision`, and `WindowedLimits.decide` — the pure decision the model proves.
+- Four defects on `ServerConstraintDefect` — `OverWindow`, `OverQuantity`, `WithinDwell`,
+  `Unjudgeable` — plus `Recorded`, the shape a refusal served from the journal arrives in; their
+  tokens `admissions-over-window:<count>/<window>`, `quantity-over-window:<argument>:<quantity>/<window>`,
+  `within-dwell:<window>` and `limit-unjudgeable:<reason>`.
+- Two journal capabilities, `Durable.ClockCapability` (`ReadClock`) and `Durable.LimitCapability`
+  (`Limit`): a host reads admissions and refusals off the effect journal.
+- `ServerArgumentPolicy.integerOf` is `internal` rather than `private` (the counter codec reads it).
+
+**What a consumer pays.**
+
+- **Two records gain a field.** A full-literal construction of `ServerEffectRegistry` (now
+  `Limiter`) or `DurableServices` (now `Clock`) fails with FS0764 until it names the member;
+  `denyAll` and `DurableServices.create` carry the defaults. **Two closed DUs gain cases**: an
+  exhaustive `match` over `ServerConstraintClause` (three new) or `ServerConstraintDefect` (five new)
+  must take them.
+- **The demanded document moves to version 12.** `Demanded.Version` and `decodableVersions` are
+  `12`; a version-11 document is refused `UnknownVersion`, and an envelope signed under version 11
+  reports `Unreadable` drift until re-signed. The three clause discriminators `perWindow`,
+  `quantityPerWindow` and `dwell` join the closed set; a reader pinned to 11 refuses them at the
+  clause. A document for a host declaring no windowed limit differs from its version-11 bytes in the
+  version alone.
+- **A windowed clause under a placement with no clock refuses the capability.** `denyAll`'s limiter
+  and the direct interpreter judge no window: a host that declares one and supplies no
+  `DurableServices.Clock` has declared a bound nobody can read, and it refuses
+  `limit-unjudgeable:no-clock` rather than admitting. A host that declared nothing windowed pays
+  nothing: the limiter is reached only when a windowed clause exists.
+- **An invocation under a windowed limit journals more.** One `ReadClock` ordinal, then one `Limit`
+  ordinal per decision, interleaved with the plan's other reads in plan order; a journal written
+  before this release holds none and replays as before. The outcome's store gains the capability's
+  counters under `<reserved prefix>limit/<capability>` — whether or not the handler committed.
+
+**What did not move.** Every stateless clause, every denial, every byte any encoder writes for a host
+declaring no windowed clause (the demanded document's version excepted), and every theorem in
+`proofs/EffectGate.fst` above the new section: the staging theorems quantify over the policy arrow
+the decision is composed into.
+
 ## 0.11.0 — the substrate raise to Fuaran.Core 0.40.2 (Phase 2228)
 
 **Class: breaking**, by this file's first rule: the contract every package is BUILT against moved.

@@ -554,6 +554,15 @@ type DurableServices =
         /// this placement is closed — the permissive answer is the one a host
         /// should have to reach for.
         ReinvokeIndeterminate: bool
+        /// The host's clock (Phase 2260, D52): what a windowed limit is judged
+        /// against. Read ONCE per invocation, at the first windowed decision,
+        /// through the journal wrapper at its ordinal — so a replay is SERVED
+        /// the reading the recorded run took and the live clock is never
+        /// consulted again for that invocation (D39's discipline for a read of
+        /// the world). The unit is the host's; a window and a dwell are
+        /// declared in it. `None`, the default, judges no windowed clause: a
+        /// capability declaring one is refused `limit-unjudgeable:no-clock`.
+        Clock: (unit -> int64) option
     }
 
 module DurableServices =
@@ -567,10 +576,17 @@ module DurableServices =
     let create: DurableServices =
         { Journal = Journal.none
           Performers = PerformerFacets.none
-          ReinvokeIndeterminate = false }
+          ReinvokeIndeterminate = false
+          Clock = None }
 
     let withJournal (journal: EffectJournal) (services: DurableServices) : DurableServices =
         { services with Journal = journal }
+
+    /// Supply the host's clock (Phase 2260): the reading a windowed limit is
+    /// judged against, in the host's own unit. Without one every windowed
+    /// clause is refused rather than admitted.
+    let withClock (clock: unit -> int64) (services: DurableServices) : DurableServices =
+        { services with Clock = Some clock }
 
     /// Declare what repeating a registered performer does.
     let declaringPerformer (fn: string) (facet: IdempotencyFacet) (services: DurableServices) : DurableServices =
@@ -652,6 +668,19 @@ module Durable =
     /// `DerivationRecorder.Capability`, restated beside the others.
     [<Literal>]
     let DeriveCapability = DerivationRecorder.Capability
+
+    /// The capability the host clock's reading is journaled under (Phase
+    /// 2260, D52): once per invocation, at the first windowed decision, no
+    /// subject, the recorded value the reading as decimal text.
+    [<Literal>]
+    let ClockCapability = "ReadClock"
+
+    /// The capability a windowed-limit decision is journaled under (Phase
+    /// 2260, D52): the subject the capability decided, the recorded value the
+    /// counter an admission leaves — or the refusal's own token as a `Refused`
+    /// record, so a replay serves the refusal as it serves any other.
+    [<Literal>]
+    let LimitCapability = "Limit"
 
     /// The completed records one capability left in an invocation's journal,
     /// in ordinal order, each through `decode` — the trace readers below share
@@ -986,12 +1015,101 @@ module Durable =
 
         let witness = witnessOf journalEntry journalDerivation
 
+        // The WINDOWED limits (Phase 2260, D52) through the same wrapper,
+        // twice over. The host CLOCK is read once per invocation, at the
+        // first windowed decision, journaled under `ReadClock` at its
+        // ordinal with no subject — so a replay is SERVED the reading the
+        // recorded run took and the live clock is not consulted (D39's
+        // discipline for a read of the world). Then each DECISION is
+        // journaled under `Limit`, the subject the capability, the recorded
+        // value the counter an admission leaves or the refusal's own token —
+        // so a replay reproduces every decision from the journal and
+        // recomputes none, and a host reads admissions and refusals off it.
+        // The counters are read off the ENTRY store, under the host-reserved
+        // prefix the state witness declares (K5: no program can write
+        // there), tallied through the invocation, and written back after the
+        // run — committed or not, because an admission the gate let through
+        // is spent whatever the handler did with it afterwards.
+        let channel =
+            (witness.Dispatch :> IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>).Fold
+
+        let mutable clockReading: Result<int64, ServerConstraintDefect> option = None
+        let mutable counters: Map<string, WindowCounter> = Map.empty
+
+        let readClock () : Result<int64, ServerConstraintDefect> =
+            match clockReading with
+            | Some reading -> reading
+            | None ->
+                let reading =
+                    match services.Clock with
+                    | None -> Error(ServerConstraintDefect.Unjudgeable "no-clock")
+                    | Some clock ->
+                        match
+                            wrapAt
+                                ClockCapability
+                                None
+                                IdempotencyFacet.Idempotent
+                                (fun () -> None)
+                                (fun _ -> Ok(Fuaran.Core.JStr(string (clock ()))))
+                                (Fuaran.Core.JObj [])
+                        with
+                        | Ok(Fuaran.Core.JStr text) ->
+                            match ServerArgumentPolicy.integerOf text with
+                            | Some now -> Ok now
+                            | None -> Error(ServerConstraintDefect.Unjudgeable "clock-malformed")
+                        | Ok _ -> Error(ServerConstraintDefect.Unjudgeable "clock-malformed")
+                        | Error code -> Error(ServerConstraintDefect.Recorded code)
+
+                clockReading <- Some reading
+                reading
+
+        let journalLimit: WindowedLimiter =
+            fun capability limit quantity ->
+                match channel with
+                | None -> Error(ServerConstraintDefect.Unjudgeable "no-store")
+                | Some fold ->
+                    readClock ()
+                    |> Result.bind (fun now ->
+                        let key = WindowCounter.key fold.Store.ReservedPrefix capability
+
+                        let entry =
+                            match Map.tryFind capability counters with
+                            | Some counter -> Ok counter
+                            | None ->
+                                match fold.Store.Read key store.Bindings with
+                                | None -> Ok WindowCounter.fresh
+                                | Some held ->
+                                    WindowCounter.decode held |> Result.mapError ServerConstraintDefect.Unjudgeable
+
+                        entry
+                        |> Result.bind (fun counter ->
+                            match
+                                wrapAt
+                                    LimitCapability
+                                    (Some capability)
+                                    IdempotencyFacet.Idempotent
+                                    (fun () -> None)
+                                    (fun _ ->
+                                        match WindowedLimits.decide limit now quantity counter with
+                                        | WindowDecision.Admitted next -> Ok(WindowCounter.encode next)
+                                        | WindowDecision.Refused defect ->
+                                            Error(ServerArgumentPolicy.describe defect))
+                                    (Fuaran.Core.JObj [])
+                            with
+                            | Ok served ->
+                                WindowCounter.decode served
+                                |> Result.mapError ServerConstraintDefect.Unjudgeable
+                                |> Result.map (fun next -> counters <- Map.add capability next counters)
+                            | Error token -> Error(ServerConstraintDefect.Recorded token)))
+
+
         let journalling =
             { registry with
                 HostFunctions = registry.HostFunctions |> Map.map wrap
                 QueryEvaluator = registry.QueryEvaluator |> Option.map (QueryEvaluator.through journalQuery)
                 ReadExtent = journalExtent
-                RecordFinding = journalFinding }
+                RecordFinding = journalFinding
+                Limiter = journalLimit }
 
         // The op performer, through the same wrapper. The plan phase stages
         // `fun _ -> perform state op` per edit (`Handler.stagedOp`), so this
@@ -1035,6 +1153,27 @@ module Durable =
 
         let outcome =
             Handler.runWith witness journalling performing resolve nodeId handler store
+
+        // The counters an admission moved, written back under the reserved
+        // prefix (Phase 2260) — onto the outcome's store whether or not the
+        // handler committed: a rolled-back run still spent what the gate let
+        // through, and a window that forgot it would be breached by failing.
+        let outcome =
+            match channel with
+            | Some fold when not (Map.isEmpty counters) ->
+                { outcome with
+                    Store =
+                        { outcome.Store with
+                            Bindings =
+                                counters
+                                |> Map.fold
+                                    (fun bindings capability counter ->
+                                        fold.Store.Assign
+                                            (WindowCounter.key fold.Store.ReservedPrefix capability)
+                                            (WindowCounter.encode counter)
+                                            bindings)
+                                    outcome.Store.Bindings } }
+            | _ -> outcome
 
         // An audit fact, not a short circuit. A completed invocation is
         // REPLAYED rather than skipped — the outcome of a handler is a tree and

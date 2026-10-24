@@ -3492,6 +3492,168 @@ let effectGateTests =
                   keyedCases |> List.choose (fun c -> keyedDivergence c (runKeyed misKeyed c))
 
               Expect.isNonEmpty misKeyedDivergences "the mis-keyed model lost no case of the corpus"
+          }
+
+          // ── Phase 2260 — the windowed gate's decision as oracle ──────────────
+          //
+          //  `WindowedLimits.decide` is the ONE function that reads the state a
+          //  windowed clause is judged from; the model's `decide` is it clause
+          //  for clause, and the theorems about it (`window_refuses_full`,
+          //  `window_admits_after`, the two bounds, the two dwell lemmas) are
+          //  checked here as instances against production over a grid of
+          //  declarations, instants and quantities, each counter reached by the
+          //  decisions before it — so the comparison walks real traces rather
+          //  than isolated states.
+          test
+              "the extracted window decision and WindowedLimits.decide agree over every declaration, instant and quantity of the grid, along traces" {
+              let toModelLimit (limit: WindowedLimit) : EffectGate.window_limit =
+                  { EffectGate.wl_count =
+                      match limit.Count with
+                      | Some(cap, window) -> Staging.OSome(bigint cap, bigint window)
+                      | None -> Staging.ONone
+                    EffectGate.wl_quantity =
+                      match limit.Quantity with
+                      | Some(_, cap, window) -> Staging.OSome(bigint cap, bigint window)
+                      | None -> Staging.ONone
+                    EffectGate.wl_dwell =
+                      match limit.Dwell with
+                      | Some dwell -> Staging.OSome(bigint dwell)
+                      | None -> Staging.ONone }
+
+              let toModelCounter (c: WindowCounter) : EffectGate.window_counter =
+                  { EffectGate.wc_since = bigint c.Since
+                    EffectGate.wc_count = bigint c.Count
+                    EffectGate.wc_qsince = bigint c.QuantitySince
+                    EffectGate.wc_quantity = bigint c.Quantity
+                    EffectGate.wc_last =
+                      match c.Last with
+                      | Some last -> Staging.OSome(bigint last)
+                      | None -> Staging.ONone }
+
+              /// The model's decision rendered in production's vocabulary.
+              let describeModel (d: EffectGate.window_decision) =
+                  match d with
+                  | EffectGate.Admitted c -> Choice1Of2 c
+                  | EffectGate.WithinDwell -> Choice2Of2 "within-dwell"
+                  | EffectGate.OverCount -> Choice2Of2 "admissions-over-window"
+                  | EffectGate.OverQuantity -> Choice2Of2 "quantity-over-window"
+
+              let describeProduction (d: WindowDecision) =
+                  match d with
+                  | WindowDecision.Admitted c -> Choice1Of2(toModelCounter c)
+                  | WindowDecision.Refused defect -> Choice2Of2((ServerArgumentPolicy.describe defect).Split(':').[0])
+
+              let declarations: WindowedLimit list =
+                  [ for count in [ None; Some(0, 5); Some(1, 5); Some(2, 3) ] do
+                        for quantity in [ None; Some("amount", 4, 5); Some("amount", 9, 2) ] do
+                            for dwell in [ None; Some 1; Some 3 ] do
+                                { Count = count
+                                  Quantity = quantity
+                                  Dwell = dwell } ]
+
+              let instants = [ 0L; 1L; 2L; 3L; 4L; 5L; 6L; 8L; 11L; 12L ]
+              let quantities = [ 0L; 1L; 3L ]
+
+              let mutable compared = 0
+              let mutable admissions = 0
+
+              for limit in declarations do
+                  let model = toModelLimit limit
+
+                  for quantity in quantities do
+                      // One trace per (declaration, quantity): the instants in
+                      // order, the counter carried forward by every admission.
+                      let mutable counter = WindowCounter.fresh
+
+                      for now in instants do
+                          let production = WindowedLimits.decide limit now quantity counter
+
+                          let extracted =
+                              EffectGate.decide model (bigint now) (bigint quantity) (toModelCounter counter)
+
+                          Expect.equal
+                              (describeProduction production)
+                              (describeModel extracted)
+                              $"production and the model disagree at now={now} q={quantity} under %A{limit} over %A{counter}"
+
+                          compared <- compared + 1
+
+                          // The theorems, as instances.
+                          match limit.Count with
+                          | Some(cap, window) when counter.Count <= cap ->
+                              match production with
+                              | WindowDecision.Admitted next ->
+                                  Expect.isLessThanOrEqual next.Count cap "window_count_bounded"
+                              | _ -> ()
+                          | _ -> ()
+
+                          match limit.Quantity, production with
+                          | Some(_, cap, _), WindowDecision.Admitted next when counter.Quantity <= int64 cap ->
+                              Expect.isLessThanOrEqual next.Quantity (int64 cap) "window_quantity_bounded"
+                          | _ -> ()
+
+                          match limit.Dwell, counter.Last with
+                          | Some dwell, Some last when now - last < int64 dwell ->
+                              Expect.equal
+                                  production
+                                  (WindowDecision.Refused(ServerConstraintDefect.WithinDwell dwell))
+                                  "dwell_refuses_inside"
+                          | _ -> ()
+
+                          match production with
+                          | WindowDecision.Admitted next ->
+                              admissions <- admissions + 1
+                              counter <- next
+                          | WindowDecision.Refused _ -> ()
+
+              Expect.isGreaterThan compared 1000 "the grid was walked"
+              Expect.isGreaterThan admissions 100 "and it admitted along the way, so the counters moved"
+          }
+
+          test
+              "the N+1th inside the window is refused and the first past it admitted, in production and in the extraction alike" {
+              let limit =
+                  { Count = Some(2, 10)
+                    Quantity = None
+                    Dwell = None }
+
+              let model: EffectGate.window_limit =
+                  { EffectGate.wl_count = Staging.OSome(bigint 2, bigint 10)
+                    EffectGate.wl_quantity = Staging.ONone
+                    EffectGate.wl_dwell = Staging.ONone }
+
+              let full =
+                  { WindowCounter.fresh with
+                      Since = 100L
+                      Count = 2
+                      Last = Some 105L }
+
+              Expect.equal
+                  (WindowedLimits.decide limit 109L 0L full)
+                  (WindowDecision.Refused(ServerConstraintDefect.OverWindow(2, 10)))
+                  "production: the third inside the window"
+
+              Expect.isTrue
+                  (EffectGate.uu___is_OverCount (
+                      EffectGate.decide
+                          model
+                          (bigint 109)
+                          (bigint 0)
+                          { EffectGate.wc_since = bigint 100
+                            EffectGate.wc_count = bigint 2
+                            EffectGate.wc_qsince = bigint 0
+                            EffectGate.wc_quantity = bigint 0
+                            EffectGate.wc_last = Staging.OSome(bigint 105) }
+                  ))
+                  "the model: window_refuses_full"
+
+              match WindowedLimits.decide limit 110L 0L full with
+              | WindowDecision.Admitted next ->
+                  Expect.equal
+                      (next.Since, next.Count, next.Last)
+                      (110L, 1, Some 110L)
+                      "production: a fresh window at the roll-over"
+              | refused -> failtestf "production refused past the window: %A" refused
           } ]
 
 // ═══════════════════════════════════════════════════════════════════════════

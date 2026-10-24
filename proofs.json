@@ -1180,6 +1180,82 @@
       "reason": "Phase 1739's bound narrows where a permitted call may go and is an instance of the Σ `policy_sufficient` ranges over; nothing proved here says the endpoint named on the list behaves. Stated rather than left absent, because it is the row an assessor probes next."
     },
     {
+      "id": "windowed-gate-refuses-inside-admits-after",
+      "level": "proved",
+      "phase": "Phase 2260",
+      "claim": "A capability limited to N admissions per window refuses the N+1th inside the window — the decision is OverCount and carries no counter, so the state the next decision reads is unchanged — and admits the first past it, opening a fresh window anchored at that admission and holding exactly it; a cap of zero admits nothing. Conditional on the dwell clause admitting (it is decided first) and, for the admission, on the quantity clause admitting.",
+      "evidence": {
+        "theorem": "window_refuses_full",
+        "model": "proofs/EffectGate.fst",
+        "prover": "proofs/fstar-pin.json",
+        "supporting": [
+          "window_admits_after",
+          "refusal_moves_nothing"
+        ],
+        "definitions": [
+          "decide",
+          "within",
+          "count_window",
+          "dwell_admits",
+          "count_admits",
+          "quantity_admits",
+          "window_limit",
+          "window_counter",
+          "window_decision"
+        ],
+        "note": "the decision is modelled where production cuts it — WindowedLimits.decide, the one function that reads the state a windowed clause is judged from — and composes into the registry's policy arrow the staging theorems already quantify over, so no theorem above it moves. The clock reading is an unbounded integer in the model and an int64 in production; the quantity is a natural because production refuses a negative or non-integer one before the function is reached. Both are stated as assumptions in the model's section comment"
+      }
+    },
+    {
+      "id": "windowed-gate-bounds-and-dwell",
+      "level": "proved",
+      "phase": "Phase 2260",
+      "claim": "A counter within the count cap leaves every admission within it, and a counter within the quantity cap leaves every admission within it — so with the entry store's counters within the caps (a fresh counter is), no sequence of decisions puts more than N admissions or more than Q of the quantity in one window — and an effect whose quantity would take the window's sum over the cap is refused OverQuantity. After an admission at an instant, every decision less than the declared dwell later is refused WithinDwell whatever it carries; once the dwell has elapsed since the last admission, the dwell admits and the decision is the count and quantity clauses' alone.",
+      "evidence": {
+        "theorem": "window_count_bounded",
+        "model": "proofs/EffectGate.fst",
+        "prover": "proofs/fstar-pin.json",
+        "supporting": [
+          "window_quantity_bounded",
+          "dwell_refuses_inside",
+          "dwell_admits_after"
+        ],
+        "definitions": [
+          "decide",
+          "quantity_window",
+          "count_window",
+          "dwell_admits"
+        ]
+      }
+    },
+    {
+      "id": "windowed-gate-model-agrees-with-shipped-code",
+      "level": "tested",
+      "phase": "Phase 2260",
+      "claim": "The extracted window decision and WindowedLimits.decide answer the SAME decision — the same counter on an admission, the same refusing clause on a refusal — over a grid of declarations (every combination of a count cap, a quantity cap and a dwell, present or absent), instants and quantities, walked as TRACES so every counter compared is one the decisions before it reached; and the lemmas hold as instances against production along the walk. The two cross a bridge the host states: production's int64 instants and quantities to the model's unbounded integers, and production's declaration-naming defects to the model's three refusing arms by their token's class.",
+      "evidence": {
+        "family": "Phase 1759 - the proved effect gate as oracle at the toy witness",
+        "host": "tests/Fuaran.Program.Tests/ToyStagingOracleTests.fs",
+        "cases": [
+          "the extracted window decision and WindowedLimits.decide agree over every declaration, instant and quantity of the grid, along traces",
+          "the N+1th inside the window is refused and the first past it admitted, in production and in the extraction alike"
+        ],
+        "runner": "run.ps1 (the Fuaran.Program.Tests project) and proofs/check.ps1 step 6 through the Phase 1759 list, whose case-count floor the two cases raise",
+        "note": "made to lose once during authoring: production's count check moved off by one (count + 1 >= cap) reddened the grid case and six of the windowed-limit cases, and was restored. The grid is fixed and deterministic — 36 declarations x 3 quantities x 10 instants — so a divergence names its point"
+      }
+    },
+    {
+      "id": "windowed-gate-journal-inherited",
+      "level": "assumed",
+      "phase": "Phase 2260",
+      "claim": "The clock read and every windowed decision ride the durable interpreter's one journal wrapper at an ordinal, so a replay is SERVED them exactly as it is served any journaled step: 'replay reproduces the decision' is Staging's replay_serves_completed over a step whose recorded value is a decision or a clock reading, and is not re-proved here. The counters are read off the ENTRY store, which D39's premise already assumes is the store a re-entry is handed.",
+      "class": "model-bridge",
+      "evidence": {
+        "assumption": "the recorded value at a Limit ordinal decodes to the counter the run wrote, or at a Refused record to the token it refused with, and the ReadClock ordinal's value to the reading"
+      },
+      "mitigation": "WindowedLimitTests pins the journal shapes (one ReadClock, one Limit per decision, the refusal as Refused) and runs the mid-window crash and the full replay against production at the toy witness, with the live clock moved so a run that re-read it would decide differently"
+    },
+    {
       "id": "history-dependent-policy-not-claimed",
       "level": "policy",
       "phase": "Phase 1759",
@@ -1187,7 +1263,7 @@
       "evidence": {
         "document": "proofs/README.md"
       },
-      "reason": "production's gate is stateless: it reads the capability and nothing else, so the monitor state is trivial and `sufficient_for` admits only policies inductive under a single-capability check. Phase 1716's budget bounds the fold's steps, not the effects' count. The stronger statement — a gate over a monitor state — is proposed in the README and needs the gate's signature to change before it is a theorem about anything that ships."
+      "reason": "production's gate is stateless for every clause but three: it reads the capability and nothing else, so the monitor state is trivial and `sufficient_for` admits only policies inductive under a single-capability check. Phase 1716's budget bounds the fold's steps, not the effects' count. Since Phase 2260 the three WINDOWED clauses are decided from a state — a clock reading and the capability's counters — and `decide` is proved at the DECISION (the N+1th inside the window refused, the first past it admitted, the count and the sum never over their caps, the dwell kept: the `windowed-gate-*` rows). What stays out is the TRACE-level Σ — 'in every window of the whole timed trace, at most N' — which would need the counter stated as an abstraction of a timed trace with a preservation obligation; the counter-level invariants are what ship."
     },
     {
       "id": "performer-state-discipline-not-labelled",

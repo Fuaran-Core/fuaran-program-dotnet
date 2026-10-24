@@ -68,6 +68,16 @@
 /// `proofs/README.md` and needs the production gate to take a state
 /// before it can be proved of anything.
 ///
+/// **Since Phase 2260 the gate TAKES a state for three clauses** — at
+/// most N admissions per window, at most Q of a quantity per window, a
+/// minimum dwell — decided from the capability's counters and a clock
+/// reading the host supplies once per invocation. The section at the
+/// end of this module (`decide` and its theorems) models that decision
+/// clause for clause; the finding above stands for every other clause,
+/// and the staging theorems are untouched because production composes
+/// the decision into the argument-policy arrow they already quantify
+/// over.
+///
 /// # The theorems
 ///
 ///   * `gate_before_perform` — one effect the gate refuses: the planned
@@ -1083,3 +1093,227 @@ let uncontracted_is_direct (#t: Type0) (#b: Type0) (#v: Type0) (#o: Type0) (#q: 
   let planned = plan w reg node_id stages (start s) in
   assert (forall (tok: p) (args: v). perf' tok args == reg.r_perf tok args);
   (if planned.ac_halted then () else perform_ext w reg perf' (rev planned.ac_staged) planned)
+
+(* ───────────────────────────────────────────────────────────────────
+   Phase 2260 — the WINDOWED gate: a limit the host declares over TIME.
+   The monitor state is no longer empty for these clauses.
+   ─────────────────────────────────────────────────────────────────── *)
+
+/// # What moves, and what does not
+///
+/// The finding in the module header — the gate reads the capability
+/// name and nothing else — stops being true of three clauses: at most
+/// N admissions per window, at most Q of a named argument's quantity
+/// summed per window, and a minimum dwell between admissions
+/// (`ServerConstraintClause.PerWindow` / `QuantityPerWindow` / `Dwell`,
+/// `src/Fuaran.Program.Bounded/Demanded.fs`). Each is decided from a
+/// STATE: the capability's counters, which the store holds under the
+/// host-reserved prefix, and a CLOCK reading the host supplies once per
+/// invocation (`Durable.fs`, `journalClock`). This is the stateful Π
+/// the header proposes, `Π : m -> string -> bool`, cut at the clause
+/// where production cuts it: `WindowedLimits.decide`
+/// (`src/Fuaran.Program.Server/ServerEffect.fs`) is the one function
+/// that reads the state, and `decide` below is it, clause for clause.
+///
+/// The staging theorems above do not move. Production composes the
+/// decision into `ServerArgumentPolicy.check`, which the model carries
+/// as the registry's `r_policy` arrow — an assumed parameter every
+/// theorem is already quantified over — so `gate_before_perform`,
+/// `gate_refusal_halts_run` and `policy_sufficient` hold of a registry
+/// whose policy refuses on a window exactly as they hold of one whose
+/// policy refuses on an allow-list. What is NEW is what that arrow
+/// computes for these clauses, which is what the theorems below state.
+///
+/// # Parameters — every one an assumption
+///
+///   * `now`, the clock reading: an unbounded integer here, an `int64`
+///     in production (a model-bridge assumption, pinned by the
+///     differential host). The theorems assume nothing about it — not
+///     monotonicity, not a unit — so a clock that runs backwards reads
+///     as "still inside the window", the conservative side.
+///   * `q`, the quantity the effect carries under the declared
+///     argument: a natural. Production refuses a value that does not
+///     read as a non-negative canonical integer BEFORE this function is
+///     reached (`argument-not-allowed`), which is why the parameter is a
+///     `nat`; an effect naming nothing under the argument carries `0`.
+///   * `c`, the counters: what the entry store held, or what the last
+///     admission in this invocation left. The theorems about the cap
+///     (`window_count_bounded`, `window_quantity_bounded`) are
+///     conditional on the counters entering within the cap, which the
+///     invariant they state is what maintains.
+///   * `lim`, the declaration. Production refuses a non-positive window
+///     or dwell at the clause (`limit-unjudgeable`); no theorem below needs
+///     positivity, so it is neither a type nor a hypothesis here.
+///
+/// What is NOT modelled: the journal. The clock read and every decision
+/// ride `Durable.fs`'s one wrapper at an ordinal, so a replay is SERVED
+/// them by `Staging.replay_serves_completed` as it is served any step —
+/// the mechanism is inherited, and "replay reproduces the decision" is
+/// that theorem over a step whose recorded value is a decision. The
+/// differential host pins the encoding.
+
+/// F#: `WindowedLimit` — the three declared limits of one capability,
+/// each optional. A `(cap, window)` pair: at most `cap` per `window`.
+type window_limit = {
+  wl_count: opt (nat & int);
+  wl_quantity: opt (nat & int);
+  wl_dwell: opt int;
+}
+
+/// F#: `WindowCounter` — one capability's counters, as the store holds
+/// them under the host-reserved prefix. `wc_since` is the instant the
+/// open count window began and is read only while `wc_count > 0`;
+/// `wc_qsince` likewise for the quantity window while `wc_quantity > 0`;
+/// `wc_last` is the last admission's instant.
+type window_counter = {
+  wc_since: int;
+  wc_count: nat;
+  wc_qsince: int;
+  wc_quantity: nat;
+  wc_last: opt int;
+}
+
+/// F#: `WindowCounter.fresh` — a capability never admitted.
+let fresh_counter : window_counter =
+  { wc_since = 0; wc_count = 0; wc_qsince = 0; wc_quantity = 0; wc_last = ONone }
+
+/// A window that began at `since` is still OPEN at `now`. Fixed windows,
+/// anchored at the first admission: the window does not slide, and it
+/// rolls over the instant `now - since` reaches the declared length.
+let within (since: int) (w: int) (now: int) : bool = now - since < w
+
+/// The count window as the decision sees it: the open one, or a fresh
+/// one that begins now with nothing counted.
+let count_window (c: window_counter) (w: int) (now: int) : (int & nat) =
+  if c.wc_count > 0 && within c.wc_since w now then (c.wc_since, c.wc_count) else (now, 0)
+
+/// The quantity window, on the same terms.
+let quantity_window (c: window_counter) (w: int) (now: int) : (int & nat) =
+  if c.wc_quantity > 0 && within c.wc_qsince w now then (c.wc_qsince, c.wc_quantity) else (now, 0)
+
+/// F#: `WindowDecision` — what the gate decided. A refusal carries NO
+/// value and NO counter: the refusal names the declaration (production
+/// renders it from the clause), and the caller's counter is unchanged
+/// because a refusal is not an admission.
+type window_decision =
+  | Admitted : counter: window_counter -> window_decision
+  | WithinDwell : window_decision
+  | OverCount : window_decision
+  | OverQuantity : window_decision
+
+/// The dwell clause, alone.
+let dwell_admits (lim: window_limit) (now: int) (c: window_counter) : bool =
+  match lim.wl_dwell with
+  | ONone -> true
+  | OSome d -> (match c.wc_last with ONone -> true | OSome last -> now - last >= d)
+
+/// The count clause, alone.
+let count_admits (lim: window_limit) (now: int) (c: window_counter) : bool =
+  match lim.wl_count with
+  | ONone -> true
+  | OSome (cap, w) -> (let (_, n) = count_window c w now in n + 1 <= cap)
+
+/// The quantity clause, alone.
+let quantity_admits (lim: window_limit) (now: int) (q: nat) (c: window_counter) : bool =
+  match lim.wl_quantity with
+  | ONone -> true
+  | OSome (cap, w) -> (let (_, sum) = quantity_window c w now in sum + q <= cap)
+
+/// F#: `WindowedLimits.decide` — ONE decision for one effect of a
+/// capability, in the fixed order dwell, count, quantity: the first
+/// clause that refuses names the refusal, and only when every clause
+/// admits does the counter move — by one admission, by `q`, to `now`.
+let decide (lim: window_limit) (now: int) (q: nat) (c: window_counter) : window_decision =
+  if not (dwell_admits lim now c) then WithinDwell
+  else if not (count_admits lim now c) then OverCount
+  else if not (quantity_admits lim now q c) then OverQuantity
+  else
+    let (since, n) = (match lim.wl_count with ONone -> (now, 0) | OSome (_, w) -> count_window c w now) in
+    let (qsince, sum) = (match lim.wl_quantity with ONone -> (now, 0) | OSome (_, w) -> quantity_window c w now) in
+    Admitted { wc_since = since; wc_count = n + 1; wc_qsince = qsince; wc_quantity = sum + q; wc_last = OSome now }
+
+/// **`window_refuses_full`.** The N+1th INSIDE the window is refused:
+/// with the dwell admitting, a capability whose open window already
+/// holds `n` admissions — or a cap of zero, which admits nothing — is
+/// refused `OverCount`, whatever quantity the effect carries. The
+/// decision carries no counter, so the caller's is unchanged.
+let window_refuses_full (lim: window_limit) (now: int) (q: nat) (c: window_counter) (n: nat) (w: int)
+  : Lemma
+      (requires
+        lim.wl_count == OSome (n, w) /\ dwell_admits lim now c /\
+        c.wc_count >= n /\ (n > 0 ==> within c.wc_since w now))
+      (ensures decide lim now q c == OverCount) = ()
+
+/// **`window_admits_after`.** After the window: once `now` has reached
+/// the declared length past the open window's start — or nothing was
+/// ever admitted — a capability with a cap of at least one is admitted
+/// when the dwell and quantity clauses admit it, and the admission
+/// OPENS a fresh window at `now` holding exactly this one admission.
+let window_admits_after (lim: window_limit) (now: int) (q: nat) (c: window_counter) (n: nat) (w: int)
+  : Lemma
+      (requires
+        lim.wl_count == OSome (n, w) /\ n >= 1 /\
+        dwell_admits lim now c /\ quantity_admits lim now q c /\
+        (c.wc_count == 0 \/ not (within c.wc_since w now)))
+      (ensures
+        (match decide lim now q c with
+         | Admitted c' -> c'.wc_count == 1 /\ c'.wc_since == now /\ c'.wc_last == OSome now
+         | _ -> False)) = ()
+
+/// **`window_count_bounded`.** The invariant the cap rests on: a counter
+/// within the cap leaves every admission within it. With the entry
+/// store's counter within the cap (a fresh one is), no sequence of
+/// decisions puts more than `n` admissions in one window.
+let window_count_bounded (lim: window_limit) (now: int) (q: nat) (c: window_counter) (n: nat) (w: int)
+  : Lemma
+      (requires lim.wl_count == OSome (n, w) /\ c.wc_count <= n)
+      (ensures
+        (match decide lim now q c with
+         | Admitted c' -> c'.wc_count <= n
+         | _ -> True)) = ()
+
+/// **`window_quantity_bounded`.** The same invariant for the summed
+/// quantity: within the cap in, within the cap out — so the sum of the
+/// admitted quantities inside one window never exceeds `cap`, and an
+/// effect whose quantity would take it over is refused `OverQuantity`
+/// (the second conjunct), its counter untouched.
+let window_quantity_bounded (lim: window_limit) (now: int) (q: nat) (c: window_counter) (cap: nat) (w: int)
+  : Lemma
+      (requires lim.wl_quantity == OSome (cap, w) /\ c.wc_quantity <= cap)
+      (ensures
+        (match decide lim now q c with
+         | Admitted c' -> c'.wc_quantity <= cap
+         | _ -> True) /\
+        (dwell_admits lim now c /\ count_admits lim now c /\
+         (let (_, sum) = quantity_window c w now in sum + q > cap) ==> decide lim now q c == OverQuantity)) = ()
+
+/// **`dwell_refuses_inside`.** The dwell: after an admission at `now`,
+/// every decision at an instant less than `d` later is refused
+/// `WithinDwell`, whatever it carries and whatever the other clauses
+/// would say — the dwell is decided first.
+let dwell_refuses_inside (lim: window_limit) (now: int) (now2: int) (q: nat) (q2: nat) (c: window_counter) (c2: window_counter) (d: int)
+  : Lemma
+      (requires lim.wl_dwell == OSome d /\ decide lim now q c == Admitted c2 /\ now2 - now < d)
+      (ensures decide lim now2 q2 c2 == WithinDwell) = ()
+
+/// **`dwell_admits_after`.** And once `d` has elapsed since the last
+/// admission, the dwell admits: the decision is then the count and
+/// quantity clauses' alone.
+let dwell_admits_after (lim: window_limit) (now: int) (q: nat) (c: window_counter) (last: int) (d: int)
+  : Lemma
+      (requires lim.wl_dwell == OSome d /\ c.wc_last == OSome last /\ now - last >= d)
+      (ensures
+        dwell_admits lim now c /\
+        (count_admits lim now c /\ quantity_admits lim now q c ==> Admitted? (decide lim now q c))) = ()
+
+/// **`refusal_moves_nothing`.** A refusal is not an admission: the
+/// decision's three refusing arms carry no counter, so the state the
+/// next decision reads is the state this one read — and a refusal is
+/// reached only through a clause that refused. Stated so a caller can
+/// rely on it rather than infer it from the type.
+let refusal_moves_nothing (lim: window_limit) (now: int) (q: nat) (c: window_counter)
+  : Lemma
+      (ensures
+        (match decide lim now q c with
+         | Admitted _ -> True
+         | _ -> not (dwell_admits lim now c) \/ not (count_admits lim now c) \/ not (quantity_admits lim now q c))) = ()

@@ -194,8 +194,10 @@
          `RefusalClass` gains `MalformedJson` and `LimitExceeded` (a closed DU
          gaining cases breaks every exhaustive `match`), and a decode now refuses
          a document past the syntactic or program-shape limits that decoded
-         before (DECISIONS.md D50). STABILITY.md holds the slot as a DRAFT until
-         it is tagged. -->
+         before (DECISIONS.md D50). Phase 2260 rides the same draft: the host's
+         limits over time (D52) add a field to two records and cases to two closed
+         DUs, and the demanded document moves to version 12. STABILITY.md holds the
+         slot as a DRAFT until it is tagged. -->
     <Version>0.12.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing

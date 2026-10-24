@@ -440,7 +440,12 @@ let private documented =
                   "the host's declared vocabulary joins it as the capability's bound"
 
               let document = Demanded.encode projection
-              Expect.stringContains document "\"version\":11" "the version that names the widened vocabulary"
+
+              Expect.stringContains
+                  document
+                  $"\"version\":{Demanded.Version}"
+                  "the version that names the widened vocabulary"
+
               Expect.isFalse (document.Contains "notes/x.md archived") "no message reaches the document"
           }
 

@@ -576,6 +576,158 @@ module QueryEvaluatorLaws =
     let certify (evaluator: QueryEvaluator) (fixtures: QueryFixture list) : QueryLawFinding list =
         fixtures |> List.choose (check evaluator)
 
+/// Why an effect's ARGUMENTS did not satisfy the policy declared for its
+/// capability — the refusal the gate produces once it has admitted the
+/// capability itself and gone on to look at what the effect carries.
+///
+/// Every arm names the DECLARATION and never the value. That is the same rule
+/// the denial DU keeps and it bites harder here, because an argument check is
+/// the one place in this subsystem that reads a wire-supplied string: an
+/// off-list refusal names the ARGUMENT the host constrained, never the value
+/// found there, and an over-ceiling refusal names the host's LIMIT, never the
+/// size measured. A measured size is not the payload, but it is a fact about it,
+/// and this is not the seam to start conceding those at. The windowed arms
+/// (Phase 2260) keep it: a refusal names the declared count, quantity, window
+/// or dwell, never the clock reading or the counter it was judged against.
+[<RequireQualifiedAccess>]
+type ServerConstraintDefect =
+    /// The effect carries a value for `argument` that the declared allow-list
+    /// for that argument does not permit, or that a declared deny-list for it
+    /// refuses (Phase 1975). One token for both, deliberately: the refusal names
+    /// the argument the host constrained, and which list excluded the value is a
+    /// fact about the value this type never carries.
+    | OffList of argument: string
+    /// The effect's declarative payload is larger than the declared ceiling.
+    | OverCeiling of limit: int
+    /// The capability's open window already holds the declared `count` of
+    /// admissions (Phase 2260): this would be the `count`+1th.
+    | OverWindow of count: int * window: int
+    /// Admitting this effect's quantity under `argument` would take the
+    /// window's sum past the declared `quantity` (Phase 2260).
+    | OverQuantity of argument: string * quantity: int * window: int
+    /// Less than the declared dwell has elapsed since the last admission
+    /// (Phase 2260).
+    | WithinDwell of window: int
+    /// A windowed clause was declared and this placement cannot judge it
+    /// (Phase 2260): `no-clock` where no host clock was supplied, `no-store`
+    /// where there is no state channel to hold the counters, or
+    /// `window-not-positive` where the declaration itself is unjudgeable. A
+    /// bound nobody can judge admits nothing — the default-deny reading, and
+    /// the reason the direct interpreter refuses a windowed clause outright.
+    | Unjudgeable of reason: string
+    /// A refusal the durable interpreter SERVED from its journal (Phase 2260):
+    /// the token the recorded run refused with, carried whole so a resumed run
+    /// reports exactly the refusal the dead run reported. Rendered as itself.
+    | Recorded of token: string
+
+/// The three limits over TIME one capability declares (Phase 2260, D52) —
+/// the windowed clauses of its argument policy, read together, because an
+/// admission is counted only once EVERY clause has admitted it. `None` is a
+/// clause nobody declared. A later clause of one kind REPLACES an earlier
+/// one, on the terms `constrain` and a throttle already keep.
+type WindowedLimit =
+    {
+        /// At most `count` admissions per `window`.
+        Count: (int * int) option
+        /// At most `quantity` of the named argument's value, summed per `window`.
+        Quantity: (string * int * int) option
+        /// At least `dwell` between admissions.
+        Dwell: int option
+    }
+
+/// One capability's counters (Phase 2260): what the store holds under the
+/// host-reserved prefix, read at entry and written back after the run.
+/// `Since` is the instant the open count window began and is read only while
+/// `Count > 0`; `QuantitySince` likewise for the quantity window while
+/// `Quantity > 0`; `Last` is the last admission's instant. Instants are the
+/// host clock's, as `int64`, in whatever unit the host reads it.
+type WindowCounter =
+    { Since: int64
+      Count: int
+      QuantitySince: int64
+      Quantity: int64
+      Last: int64 option }
+
+/// What the windowed gate decided about one effect (Phase 2260): admitted,
+/// with the counter as the admission leaves it, or refused, naming the
+/// declaration. A refusal carries no counter because a refusal is not an
+/// admission — the counter the next decision reads is the one this one read.
+[<RequireQualifiedAccess>]
+type WindowDecision =
+    | Admitted of counter: WindowCounter
+    | Refused of defect: ServerConstraintDefect
+
+/// How this placement DECIDES a windowed limit (Phase 2260): asked once per
+/// effect of a capability that declares one, after the gate and the stateless
+/// clauses admitted it, with the capability, the limit as declared and the
+/// quantity the effect carries under the declared argument (zero where it
+/// names nothing). `WindowedLimiter.unjudgeable` is `denyAll`'s: a placement
+/// with no clock refuses every windowed clause. The durable interpreter
+/// replaces it with a limiter that reads the clock once at its ordinal, reads
+/// the counters off the entry store, journals every decision at its ordinal
+/// and serves the record on replay — as it replaces `ReadExtent`.
+type WindowedLimiter = string -> WindowedLimit -> int64 -> Result<unit, ServerConstraintDefect>
+
+module WindowedLimit =
+
+    /// Nothing declared.
+    let none: WindowedLimit =
+        { Count = None
+          Quantity = None
+          Dwell = None }
+
+    /// Fold a capability's clauses into its windowed limit, or `None` where no
+    /// clause is windowed. A window or a dwell that is not positive is refused
+    /// here, as `limit-unjudgeable:window-not-positive`: it is a declaration
+    /// the gate could only read as "every instant is past the window", which
+    /// would make the mildest-looking misdeclaration the most permissive.
+    let ofClauses
+        (clauses: Fuaran.Program.Bounded.ServerConstraintClause list)
+        : Result<WindowedLimit option, ServerConstraintDefect> =
+        let positive (window: int) (next: unit -> Result<WindowedLimit, ServerConstraintDefect>) =
+            if window > 0 then
+                next ()
+            else
+                Error(ServerConstraintDefect.Unjudgeable "window-not-positive")
+
+        clauses
+        |> List.fold
+            (fun (state: Result<WindowedLimit option, ServerConstraintDefect>) clause ->
+                state
+                |> Result.bind (fun declared ->
+                    let limit = declared |> Option.defaultValue none
+
+                    match clause with
+                    | Fuaran.Program.Bounded.ServerConstraintClause.PerWindow(count, window) ->
+                        positive window (fun () ->
+                            Ok
+                                { limit with
+                                    Count = Some(count, window) })
+                        |> Result.map Some
+                    | Fuaran.Program.Bounded.ServerConstraintClause.QuantityPerWindow(argument, quantity, window) ->
+                        positive window (fun () ->
+                            Ok
+                                { limit with
+                                    Quantity = Some(argument, quantity, window) })
+                        |> Result.map Some
+                    | Fuaran.Program.Bounded.ServerConstraintClause.Dwell window ->
+                        positive window (fun () -> Ok { limit with Dwell = Some window })
+                        |> Result.map Some
+                    | Fuaran.Program.Bounded.ServerConstraintClause.AllowList _
+                    | Fuaran.Program.Bounded.ServerConstraintClause.Ceiling _
+                    | Fuaran.Program.Bounded.ServerConstraintClause.Label _
+                    | Fuaran.Program.Bounded.ServerConstraintClause.DenyList _
+                    | Fuaran.Program.Bounded.ServerConstraintClause.AtMost _ -> Ok declared))
+            (Ok None)
+
+module WindowedLimiter =
+
+    /// A placement that cannot judge a windowed clause refuses it. The
+    /// DEFAULT: a host that supplied no clock has declared a bound nobody can
+    /// read, and admitting it would be the one failure a limit must not have.
+    let unjudgeable: WindowedLimiter =
+        fun _ _ _ -> Error(ServerConstraintDefect.Unjudgeable "no-clock")
+
 /// A closed, default-deny registry of the server placement's effect
 /// permissions, plus the performers for the one arm that needs them.
 type ServerEffectRegistry =
@@ -631,6 +783,14 @@ type ServerEffectRegistry =
         /// the finding at its ordinal and serves the record on replay, as it
         /// replaces `ReadExtent`.
         RecordFinding: FindingRecorder
+        /// How this placement DECIDES a windowed limit (Phase 2260, D52):
+        /// asked by the argument policy once per effect of a capability whose
+        /// clauses declare one, after the stateless clauses admitted it.
+        /// `denyAll` cannot judge one and refuses it; the durable interpreter
+        /// replaces it with a limiter over the host clock and the entry
+        /// store's counters that journals every decision, as it replaces
+        /// `ReadExtent` and `RecordFinding`.
+        Limiter: WindowedLimiter
     }
 
 module ServerEffectRegistry =
@@ -655,7 +815,10 @@ module ServerEffectRegistry =
           ReadExtent = Fuaran.Program.Bounded.ExtentReader.live
           // The finding as reported: journaling it is the durable
           // interpreter's act.
-          RecordFinding = FindingRecorder.live }
+          RecordFinding = FindingRecorder.live
+          // No clock, so no windowed clause can be judged: refused, never
+          // admitted. Supplying one is the durable interpreter's act.
+          Limiter = WindowedLimiter.unjudgeable }
 
     /// Register a `HostCall` performer under a function name. Registering does
     /// NOT permit: the gate still decides, and it is asked about `host:<fn>`.
@@ -724,6 +887,12 @@ module ServerEffectRegistry =
         { registry with
             QueryEvaluator = registry.QueryEvaluator |> Option.map (QueryEvaluator.checkedAgainst schemas) }
 
+    /// Replace how windowed limits are decided (Phase 2260). The durable
+    /// interpreter's act; a host reaches for it only to judge a windowed clause
+    /// under the direct interpreter with a limiter of its own.
+    let withLimiter (limiter: WindowedLimiter) (registry: ServerEffectRegistry) : ServerEffectRegistry =
+        { registry with Limiter = limiter }
+
     /// The registered host-function names, for host introspection.
     let registered (registry: ServerEffectRegistry) : string list =
         registry.HostFunctions |> Map.toList |> List.map fst
@@ -752,28 +921,6 @@ module ServerEffectRegistry =
         (registry: ServerEffectRegistry)
         : Fuaran.Program.Bounded.ServerConstraintClause list =
         registry.Constraints |> Map.tryFind capability |> Option.defaultValue []
-
-/// Why an effect's ARGUMENTS did not satisfy the policy declared for its
-/// capability — the refusal the gate produces once it has admitted the
-/// capability itself and gone on to look at what the effect carries.
-///
-/// Both arms name the DECLARATION and never the value. That is the same rule
-/// the denial DU keeps and it bites harder here, because an argument check is
-/// the one place in this subsystem that reads a wire-supplied string: an
-/// off-list refusal names the ARGUMENT the host constrained, never the value
-/// found there, and an over-ceiling refusal names the host's LIMIT, never the
-/// size measured. A measured size is not the payload, but it is a fact about it,
-/// and this is not the seam to start conceding those at.
-[<RequireQualifiedAccess>]
-type ServerConstraintDefect =
-    /// The effect carries a value for `argument` that the declared allow-list
-    /// for that argument does not permit, or that a declared deny-list for it
-    /// refuses (Phase 1975). One token for both, deliberately: the refusal names
-    /// the argument the host constrained, and which list excluded the value is a
-    /// fact about the value this type never carries.
-    | OffList of argument: string
-    /// The effect's declarative payload is larger than the declared ceiling.
-    | OverCeiling of limit: int
 
 /// The ARGUMENT half of the policy gate: what an effect's arguments are, and
 /// whether a capability's declared clauses admit them.
@@ -962,7 +1109,7 @@ module ServerArgumentPolicy =
     /// one reading and reach the performer under another, so anything else is
     /// not an integer here. Written out rather than parsed by the platform so
     /// it reads the same under Fable.
-    let private integerOf (value: string) : int64 option =
+    let internal integerOf (value: string) : int64 option =
         let negative = value.StartsWith "-"
         let digits = if negative then value.Substring 1 else value
 
@@ -1044,9 +1191,42 @@ module ServerArgumentPolicy =
                 Ok()
             else
                 Error(ServerConstraintDefect.OffList argument)
+        // The windowed clauses (Phase 2260) are decided TOGETHER, after every
+        // stateless clause, by `check` through the registry's limiter: an
+        // admission is counted only once the whole policy has admitted the
+        // effect, so none of the three decides anything here.
+        | Fuaran.Program.Bounded.ServerConstraintClause.PerWindow _
+        | Fuaran.Program.Bounded.ServerConstraintClause.QuantityPerWindow _
+        | Fuaran.Program.Bounded.ServerConstraintClause.Dwell _ -> Ok()
+
+    /// The quantity an effect carries under `argument`, summed (Phase 2260):
+    /// every value under the argument must read as a NON-NEGATIVE canonical
+    /// integer, on `AtMost`'s reading and one bound tighter — a negative
+    /// contribution would buy back a spent cap. An effect naming nothing under
+    /// the argument carries zero. A value that does not read is refused under
+    /// the argument's name, never the value.
+    let private quantityOf
+        (ops: Fuaran.Program.Bounded.StateWitness<'Node, 'Op>)
+        (effect: ServerEffect<'Op>)
+        (argument: string)
+        : Result<int64, ServerConstraintDefect> =
+        arguments ops effect
+        |> List.filter (fun (name, _) -> name = argument)
+        |> List.fold
+            (fun (sum: Result<int64, ServerConstraintDefect>) (_, value) ->
+                sum
+                |> Result.bind (fun total ->
+                    match integerOf value with
+                    | Some n when n >= 0L -> Ok(total + n)
+                    | _ -> Error(ServerConstraintDefect.OffList argument)))
+            (Ok 0L)
 
     /// Check an effect against every clause declared for its capability, in the
-    /// order they are declared, reporting the FIRST that refuses.
+    /// order they are declared, reporting the FIRST that refuses — then, where
+    /// the capability declares a limit over time (Phase 2260), the windowed
+    /// clauses together, through the registry's limiter. Last deliberately: the
+    /// limiter COUNTS an admission, and an effect a stateless clause refuses
+    /// was never admitted.
     ///
     /// A deny-list and an allow-list on ONE argument compose as a domain gate
     /// composes a lock over a writable set — the lock wins, so a value on both
@@ -1065,8 +1245,20 @@ module ServerArgumentPolicy =
         (registry: ServerEffectRegistry)
         (effect: ServerEffect<'Op>)
         : Result<unit, ServerConstraintDefect> =
-        ServerEffectRegistry.constraintsFor (ServerEffect.capability effect) registry
+        let capability = ServerEffect.capability effect
+        let clauses = ServerEffectRegistry.constraintsFor capability registry
+
+        clauses
         |> List.fold (fun state clause -> state |> Result.bind (fun () -> checkClause ops effect clause)) (Ok())
+        |> Result.bind (fun () -> WindowedLimit.ofClauses clauses)
+        |> Result.bind (fun windowed ->
+            match windowed with
+            | None -> Ok()
+            | Some limit ->
+                (match limit.Quantity with
+                 | Some(argument, _, _) -> quantityOf ops effect argument
+                 | None -> Ok 0L)
+                |> Result.bind (fun quantity -> registry.Limiter capability limit quantity))
 
     /// The refusal as the outcome document carries it: a closed token naming the
     /// CLAUSE that refused and the host's own declaration, never the value or the
@@ -1075,6 +1267,148 @@ module ServerArgumentPolicy =
         match defect with
         | ServerConstraintDefect.OffList argument -> "argument-not-allowed:" + argument
         | ServerConstraintDefect.OverCeiling limit -> "payload-over-ceiling:" + string limit
+        | ServerConstraintDefect.OverWindow(count, window) ->
+            "admissions-over-window:" + string count + "/" + string window
+        | ServerConstraintDefect.OverQuantity(argument, quantity, window) ->
+            "quantity-over-window:" + argument + ":" + string quantity + "/" + string window
+        | ServerConstraintDefect.WithinDwell window -> "within-dwell:" + string window
+        | ServerConstraintDefect.Unjudgeable reason -> "limit-unjudgeable:" + reason
+        | ServerConstraintDefect.Recorded token -> token
+
+// ============================================================================
+//  WINDOWED LIMITS (Phase 2260, D52): the one decision the gate takes from a
+//  STATE. A count per window, a quantity per window and a dwell, judged
+//  against a clock reading and the capability's counters; the model is
+//  `proofs/EffectGate.fst`'s `decide`, and this is it clause for clause.
+// ============================================================================
+
+module WindowCounter =
+
+    /// A capability never admitted.
+    let fresh: WindowCounter =
+        { Since = 0L
+          Count = 0
+          QuantitySince = 0L
+          Quantity = 0L
+          Last = None }
+
+    /// The store key a capability's counters live under: the host-reserved
+    /// prefix the state witness declares (K5), so no program can write it,
+    /// then `limit/` and the capability. Read at entry, written after the run.
+    let key (reservedPrefix: string) (capability: string) : string = reservedPrefix + "limit/" + capability
+
+    /// An instant as the wire carries it: canonical decimal text, because the
+    /// wire's integer is 32-bit and a clock reading is not.
+    let private instant (value: int64) : Fuaran.Core.JVal = Fuaran.Core.JStr(string value)
+
+    let private readInstant (value: Fuaran.Core.JVal) : Result<int64, string> =
+        match value with
+        | Fuaran.Core.JStr text ->
+            match ServerArgumentPolicy.integerOf text with
+            | Some n -> Ok n
+            | None -> Error "window-counter-malformed"
+        | _ -> Error "window-counter-malformed"
+
+    /// The counter as the store and the journal carry it.
+    let encode (counter: WindowCounter) : Fuaran.Core.JVal =
+        Fuaran.Core.JObj
+            [ "since", instant counter.Since
+              "count", Fuaran.Core.JInt counter.Count
+              "quantitySince", instant counter.QuantitySince
+              "quantity", instant counter.Quantity
+              "last",
+              (match counter.Last with
+               | Some last -> instant last
+               | None -> Fuaran.Core.JObj []) ]
+
+    /// The inverse. A value that is not a counter is refused, never read as a
+    /// fresh one: a store that holds something else under the reserved key is
+    /// a store the gate must not read a spent cap off as unspent.
+    let decode (value: Fuaran.Core.JVal) : Result<WindowCounter, string> =
+        match value with
+        | Fuaran.Core.JObj members ->
+            let field name =
+                members |> List.tryFind (fun (k, _) -> k = name) |> Option.map snd
+
+            match field "since", field "count", field "quantitySince", field "quantity", field "last" with
+            | Some since, Some(Fuaran.Core.JInt count), Some quantitySince, Some quantity, Some last ->
+                readInstant since
+                |> Result.bind (fun since ->
+                    readInstant quantitySince
+                    |> Result.bind (fun quantitySince ->
+                        readInstant quantity
+                        |> Result.bind (fun quantity ->
+                            (match last with
+                             | Fuaran.Core.JObj [] -> Ok None
+                             | other -> readInstant other |> Result.map Some)
+                            |> Result.map (fun last ->
+                                { Since = since
+                                  Count = count
+                                  QuantitySince = quantitySince
+                                  Quantity = quantity
+                                  Last = last }))))
+            | _ -> Error "window-counter-malformed"
+        | _ -> Error "window-counter-malformed"
+
+module WindowedLimits =
+
+    /// A window that began at `since` is still OPEN at `now`. Fixed windows,
+    /// anchored at the first admission: the window does not slide, and it
+    /// rolls over the instant `now - since` reaches the declared length. A
+    /// clock that ran backwards reads as "still inside", the conservative
+    /// side. Model: `within`.
+    let private within (since: int64) (window: int) (now: int64) : bool = now - since < int64 window
+
+    /// The count window as the decision sees it: the open one, or a fresh one
+    /// beginning now. Model: `count_window`.
+    let private countWindow (counter: WindowCounter) (window: int) (now: int64) : int64 * int =
+        if counter.Count > 0 && within counter.Since window now then
+            counter.Since, counter.Count
+        else
+            now, 0
+
+    /// The quantity window, on the same terms. Model: `quantity_window`.
+    let private quantityWindow (counter: WindowCounter) (window: int) (now: int64) : int64 * int64 =
+        if counter.Quantity > 0L && within counter.QuantitySince window now then
+            counter.QuantitySince, counter.Quantity
+        else
+            now, 0L
+
+    /// **ONE decision for one effect** — in the fixed order dwell, count,
+    /// quantity: the first clause that refuses names the refusal, and only
+    /// when every clause admits does the counter move, by one admission, by
+    /// `quantity`, to `now`. Pure, so a replay that re-reads the same clock
+    /// and counter decides the same; the durable interpreter serves the
+    /// recorded decision rather than trusting even that. Model: `decide`.
+    let decide (limit: WindowedLimit) (now: int64) (quantity: int64) (counter: WindowCounter) : WindowDecision =
+        let dwellAdmits =
+            match limit.Dwell, counter.Last with
+            | Some dwell, Some last -> now - last >= int64 dwell
+            | _ -> true
+
+        let since, count =
+            match limit.Count with
+            | Some(_, window) -> countWindow counter window now
+            | None -> now, 0
+
+        let quantitySince, sum =
+            match limit.Quantity with
+            | Some(_, _, window) -> quantityWindow counter window now
+            | None -> now, 0L
+
+        match limit.Dwell, limit.Count, limit.Quantity with
+        | Some dwell, _, _ when not dwellAdmits -> WindowDecision.Refused(ServerConstraintDefect.WithinDwell dwell)
+        | _, Some(cap, window), _ when count + 1 > cap ->
+            WindowDecision.Refused(ServerConstraintDefect.OverWindow(cap, window))
+        | _, _, Some(argument, cap, window) when sum + quantity > int64 cap ->
+            WindowDecision.Refused(ServerConstraintDefect.OverQuantity(argument, cap, window))
+        | _ ->
+            WindowDecision.Admitted
+                { Since = since
+                  Count = count + 1
+                  QuantitySince = quantitySince
+                  Quantity = sum + quantity
+                  Last = Some now }
 
 // ============================================================================
 //  A performed write's RECEIPT is the performer's RETURN VALUE, typed (Phase

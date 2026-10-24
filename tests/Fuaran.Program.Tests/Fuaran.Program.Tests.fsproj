@@ -73,6 +73,7 @@
     <Compile Include="NonEmptyMemberTests.fs" />
     <!-- Phase 2220 (D47): the derived view. -->
     <Compile Include="DerivedViewTests.fs" />
+    <Compile Include="WindowedLimitTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

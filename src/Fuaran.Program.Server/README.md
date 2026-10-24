@@ -113,6 +113,39 @@ sequence.
 The declared policy travels in the capability envelope below, so a deployer reads *HTTP to
 api.example.com, ≤ 64 KB* rather than *HTTP*.
 
+### Limits over time: a count per window, a quantity per window, a dwell
+
+A gate that judges each command alone admits a legitimate command sent too often for too long. So
+three further clauses bound the **combined** effect of individually valid commands, over the host's
+clock (Phase 2260, D52):
+
+```fsharp
+registry
+|> ServerEffectRegistry.constrain
+       "host:actuate"
+       [ ServerConstraintClause.PerWindow(10, 60_000)                  // at most 10 admissions per minute
+         ServerConstraintClause.QuantityPerWindow("ml", 500, 3_600_000) // at most 500 ml, summed, per hour
+         ServerConstraintClause.Dwell 2_000 ]                           // at least two seconds apart
+```
+
+They are declared, carried and refused exactly where the other clauses are — in the demanded
+document (version 12), at the gate's own position, naming the declaration and never the value:
+`admissions-over-window:10/60000`, `quantity-over-window:ml:500/3600000`, `within-dwell:2000`. What
+is different is that they are decided from a **state**: a clock reading the host supplies through
+`DurableServices.withClock`, read **once per invocation** and journaled at its ordinal so a replay is
+served the same reading, and the capability's **counters**, which the store holds under the
+host-reserved prefix (`<prefix>limit/<capability>`) — state no program can write — read at entry and
+written back after the run whether or not the handler committed, because an admission the gate let
+through is spent whatever the handler did with it. Every decision is journaled too, so a resumed run
+reproduces each one from the record and a host reads admissions and refusals off the journal.
+
+Windows are **fixed**, anchored at the first admission: the N+1th inside one is refused and the first
+past it opens a fresh one. A placement with no clock — the direct interpreter, a durable one that
+supplied none — refuses a windowed clause rather than admitting it (`limit-unjudgeable:no-clock`): a
+bound nobody can judge admits nothing. `proofs/EffectGate.fst` proves the decision — the N+1th inside
+the window refused, the first past it admitted, the count and the sum never over their caps, the
+dwell kept — and the differential host runs its extraction beside the shipped function.
+
 ## Atomicity, stated honestly
 
 The **handler** is the unit. Stages thread a value; nothing commits until the last stage succeeds; a

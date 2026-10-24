@@ -130,7 +130,27 @@ let private renderTier (tier: ServerDemand option) =
                             + "}"
                         | ServerConstraintClause.Ceiling bytes ->
                             "{\"clause\":\"ceiling\",\"bytes\":" + string bytes + "}"
-                        | ServerConstraintClause.Label label -> "{\"clause\":\"label\",\"label\":" + q label + "}")
+                        | ServerConstraintClause.Label label -> "{\"clause\":\"label\",\"label\":" + q label + "}"
+                        // The three limits over time (Phase 2260), rendered as
+                        // the document carries them, for the same reason: a
+                        // reader that dropped one would read "unbounded over
+                        // time" off a capability the host bounded.
+                        | ServerConstraintClause.PerWindow(count, window) ->
+                            "{\"clause\":\"perWindow\",\"count\":"
+                            + string count
+                            + ",\"window\":"
+                            + string window
+                            + "}"
+                        | ServerConstraintClause.QuantityPerWindow(argument, quantity, window) ->
+                            "{\"clause\":\"quantityPerWindow\",\"argument\":"
+                            + q argument
+                            + ",\"quantity\":"
+                            + string quantity
+                            + ",\"window\":"
+                            + string window
+                            + "}"
+                        | ServerConstraintClause.Dwell window ->
+                            "{\"clause\":\"dwell\",\"window\":" + string window + "}")
                     |> arr
 
                 "{\"capability\":" + q c.Capability + ",\"clauses\":" + clauses + "}")

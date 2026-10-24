@@ -172,14 +172,20 @@ type UndoPosture =
 /// One clause of a capability's declared argument policy — the vocabulary a
 /// host writes a bound in, and the one this document carries it in.
 ///
-/// **A closed set of five, and the closure is the point**: this is what a
+/// **A closed set of eight, and the closure is the point**: this is what a
 /// policy gate can decide about an effect's ARGUMENTS without interpreting a
 /// payload, so a further kind is a deliberate widening of what the gate reasons
 /// over rather than a new option on a record. The fourth, `DenyList`, was such a
 /// widening (Phase 1975): "everything except these" has no allow-list spelling
 /// that survives a run which creates the names it later addresses. The fifth,
 /// `AtMost`, was another (Phase 1982): "at most N" has an allow-list spelling
-/// only as the N+1 literals it permits.
+/// only as the N+1 literals it permits. The last three — `PerWindow`,
+/// `QuantityPerWindow` and `Dwell` (Phase 2260) — are the first clauses decided
+/// from a STATE rather than from the effect alone: a limit over time, kept in
+/// counters the store holds under the host-reserved prefix and judged against a
+/// clock reading the host supplies once per invocation. Every number here is a
+/// 32-bit integer, as every other number in this document is; a window and a
+/// dwell are in the HOST CLOCK's unit, whatever unit the host reads it in.
 ///
 /// **A clause is PRESENT or it is not; there is no "unconstrained" clause.** An
 /// argument nobody allow-listed, a payload nobody bounded and a capability
@@ -220,6 +226,21 @@ type ServerConstraintClause =
     /// repeat's `count` is the case that motivated it: "at most 90 polls" used
     /// to be an allow-list of the 91 literals `0`..`90`.
     | AtMost of argument: string * limit: int
+    /// At most `count` ADMISSIONS of the capability per `window` of the host
+    /// clock (Phase 2260). Fixed windows anchored at the first admission: the
+    /// `count`+1th inside a window is refused, the first past it opens a fresh
+    /// one. A count of zero admits nothing.
+    | PerWindow of count: int * window: int
+    /// At most `quantity` of one named argument's INTEGER value, summed over
+    /// the admissions of a `window` (Phase 2260): a cumulative cap, on the
+    /// `AtMost` reading of a value — canonical decimal, and here non-negative,
+    /// because a negative contribution would buy back a spent cap. An effect
+    /// naming nothing under the argument contributes nothing.
+    | QuantityPerWindow of argument: string * quantity: int * window: int
+    /// At least `window` of the host clock between two admissions of the
+    /// capability (Phase 2260): a minimum dwell. A decision inside it is
+    /// refused; one at or past it is admitted on the other clauses' terms.
+    | Dwell of window: int
 
 /// One capability's declared argument policy, as the document carries it.
 ///
@@ -870,6 +891,9 @@ module Demanded =
         | ServerConstraintClause.Label _ -> 2, ""
         | ServerConstraintClause.DenyList(argument, _) -> 3, argument
         | ServerConstraintClause.AtMost(argument, _) -> 4, argument
+        | ServerConstraintClause.PerWindow _ -> 5, ""
+        | ServerConstraintClause.QuantityPerWindow(argument, _, _) -> 6, argument
+        | ServerConstraintClause.Dwell _ -> 7, ""
 
     /// Put a projection's every list into the canonical form the document
     /// promises: distinct, sorted, one entry per namespace. The single place
@@ -1128,7 +1152,7 @@ module Demanded =
     /// The version this encoder emits, and — see `decodableVersions` — the only
     /// one this reader reads.
     [<Literal>]
-    let Version = 11
+    let Version = 12
 
     // The policy clause's discriminator, written once and read once. A literal
     // spelled at the encoder and again at the reader is the drift this document
@@ -1147,6 +1171,15 @@ module Demanded =
 
     [<Literal>]
     let ClauseAtMost = "atMost"
+
+    [<Literal>]
+    let ClausePerWindow = "perWindow"
+
+    [<Literal>]
+    let ClauseQuantityPerWindow = "quantityPerWindow"
+
+    [<Literal>]
+    let ClauseDwell = "dwell"
 
     /// The three common control characters keep their short escapes; every other
     /// control character (U+0000–U+001F) is escaped as `\u00XX`. A raw control
@@ -1280,6 +1313,16 @@ module Demanded =
     /// pinned to version 10 would carry the new arm without being told the
     /// vocabulary grew. A document for a registration that reports nothing
     /// differs from its version-10 bytes in the version alone.
+    ///
+    /// **Version 12 widens the policy-clause vocabulary** (Phase 2260, D52):
+    /// `perWindow`, `quantityPerWindow` and `dwell` join the clause
+    /// discriminators — the host's limits over TIME, which a deployer reads
+    /// beside the allow-lists and ceilings. No member moves. The version moves
+    /// because a discriminator SELECTS a shape: a reader pinned to version 11
+    /// refuses the three at the clause, so a document carrying one is unreadable
+    /// to it whatever number it carried, and the number is what tells it why. A
+    /// document for a host declaring no windowed limit differs from its
+    /// version-11 bytes in the version alone.
     let encode (projection: DemandedProjection) : string =
         let effects = projection.Effects |> List.map q |> arr
 
@@ -1380,7 +1423,13 @@ module Demanded =
 
                                     $"""{{"clause":{q ClauseDenyList},"argument":{q argument},"refused":{values}}}"""
                                 | ServerConstraintClause.AtMost(argument, limit) ->
-                                    $"""{{"clause":{q ClauseAtMost},"argument":{q argument},"limit":{limit}}}""")
+                                    $"""{{"clause":{q ClauseAtMost},"argument":{q argument},"limit":{limit}}}"""
+                                | ServerConstraintClause.PerWindow(count, window) ->
+                                    $"""{{"clause":{q ClausePerWindow},"count":{count},"window":{window}}}"""
+                                | ServerConstraintClause.QuantityPerWindow(argument, quantity, window) ->
+                                    $"""{{"clause":{q ClauseQuantityPerWindow},"argument":{q argument},"quantity":{quantity},"window":{window}}}"""
+                                | ServerConstraintClause.Dwell window ->
+                                    $"""{{"clause":{q ClauseDwell},"window":{window}}}""")
                             |> arr
 
                         $"""{{"capability":{q c.Capability},"clauses":{clauses}}}""")
@@ -1893,6 +1942,25 @@ module Demanded =
                 |> Result.bind (fun argument ->
                     requireInt version (child path "limit") "limit" value
                     |> Result.map (fun limit -> ServerConstraintClause.AtMost(argument, limit)))
+            | ClausePerWindow ->
+                declaredOnly version path [ "clause"; "count"; "window" ] value
+                |> Result.bind (fun () -> requireInt version (child path "count") "count" value)
+                |> Result.bind (fun count ->
+                    requireInt version (child path "window") "window" value
+                    |> Result.map (fun window -> ServerConstraintClause.PerWindow(count, window)))
+            | ClauseQuantityPerWindow ->
+                declaredOnly version path [ "clause"; "argument"; "quantity"; "window" ] value
+                |> Result.bind (fun () -> requireString version (child path "argument") "argument" value)
+                |> Result.bind (fun argument ->
+                    requireInt version (child path "quantity") "quantity" value
+                    |> Result.bind (fun quantity ->
+                        requireInt version (child path "window") "window" value
+                        |> Result.map (fun window ->
+                            ServerConstraintClause.QuantityPerWindow(argument, quantity, window))))
+            | ClauseDwell ->
+                declaredOnly version path [ "clause"; "window" ] value
+                |> Result.bind (fun () -> requireInt version (child path "window") "window" value)
+                |> Result.map ServerConstraintClause.Dwell
             | other ->
                 failWith
                     DemandedDefect.WrongType

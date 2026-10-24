@@ -3956,3 +3956,88 @@ Files reviewed for the tidy: `HandlerWire.fs`, the test project, `DECISIONS.md`,
 the finding decoder's local `token` helper, both replaced by `requireNonEmpty`. Considered and kept: the
 registration key's check (its own refusal class and a length cap, so not a duplicate), and the
 test-side toy codec's own `nonEmpty` (a different codec, the toy witness's, in another assembly).
+
+## D52 — Effects are limited over TIME by the host: three policy clauses — a count per window, a quantity per window and a dwell — decided at the gate's position from a clock the host supplies once per invocation and counters the store holds under the reserved prefix; every decision is journaled and replay serves it; the demanded document carries the clauses at version 12 (2026-10-24)
+
+**Context.** The throttle (Phase 1746) counts attempts per INVOCATION and says so: a rate over
+wall-clock time cannot be replayed, so the window was counted rather than timed. That left the host
+with no way to bound the combined effect of commands that are each individually valid — the shape
+of the refrigeration incident that motivated the `device-langsec` target, where a legitimate command
+was sent too often for too long and a gate judging each alone admitted every one. The argument policy
+(D-series through Phase 1982) bounds what ONE effect carries; nothing bounded what N of them did.
+`proofs/EffectGate.fst` recorded the gap as a finding: the gate reads the capability and nothing
+else, so no policy that counts is provable of it, and a gate over a monitor state was "proposed and
+waiting for the production gate to take a state".
+
+**Premises checked against the tree first.** The shard's `tests/Fuaran.Program.Server.Tests/` does
+not exist — fuaran#2012 folded the server suites into `Fuaran.Program.Tests`, the one runner
+`run.ps1` enumerates — so the tests land there (Phase 401's class, reported rather than worked
+around). The demanded version was 11 (D45), so the clauses move it to 12; the
+corpus at `conformance/` is a byte copy of the UI tier's generator, bumped in place exactly as Phase
+2195 bumped it for version 11. The reserved prefix is the STATE witness's (K5, `IsReserved` /
+`ReservedPrefix`), reachable from the durable interpreter through the dispatch position's fold, and
+the store witness has had a `Read` since Phase 1976 — so counters in the store needed no new member
+anywhere in the core.
+
+**The choice — windowed clauses on the argument policy, decided by a limiter the durable interpreter
+installs.** Three new `ServerConstraintClause` cases: `PerWindow(count, window)`,
+`QuantityPerWindow(argument, quantity, window)` and `Dwell(window)`, in the host clock's unit, every
+number 32-bit as the document's numbers are. They are DECLARED where the other bounds are
+(`constrain`), carried where the other bounds are carried (`withConstraints`, so the demanded
+document gains no member and the three ride as clause discriminators), and decided where the other
+bounds are decided (`ServerArgumentPolicy.check`) — AFTER every stateless clause, together, because
+an admission is counted only once the whole policy has admitted the effect. What is new is that the
+decision reads a STATE, and the registry says how through one member, `Limiter`, on the shape
+`ReadExtent` and `RecordFinding` already have: `denyAll` cannot judge a windowed clause and REFUSES it
+(`limit-unjudgeable:no-clock`), and the durable interpreter replaces it. Three alternatives were
+rejected: a second declaration map beside `Constraints` (a new demanded member, a new version
+argument, and two places a deployer reads bounds from); a windowed `ControlOp` beside `Throttle` (an
+operator ACT on a session, where this is a host DECLARATION a deployer reads before anything runs);
+and a host-side ledger port for the counters (a second persistence a host must wire, where the store
+it already persists has a namespace no program can write).
+
+**The decision function is the model's, clause for clause.** `WindowedLimits.decide` takes the
+limit, the clock reading, the quantity the effect carries under the declared argument and the
+capability's counter, and answers an admission with the counter it leaves or a refusal naming the
+declaration — in the fixed order dwell, count, quantity. Windows are FIXED, anchored at the first
+admission: the `count`+1th inside one is refused, the first past it opens a fresh one; the quantity
+window is the same shape over the summed argument; the dwell is the distance from the last admission.
+A clock that runs backwards reads as "still inside the window", the conservative side. A quantity that
+is negative or not a canonical integer is refused under the argument's name BEFORE the limiter is
+reached — a negative contribution would buy back a spent cap. `proofs/EffectGate.fst` models it as
+`decide` and proves `window_refuses_full`, `window_admits_after`, `window_count_bounded`,
+`window_quantity_bounded`, `dwell_refuses_inside`, `dwell_admits_after` and `refusal_moves_nothing`;
+`ToyStagingOracleTests` runs the extraction beside production along traces over a grid. The staging
+theorems do not move: production composes the decision into the policy arrow they quantify over.
+
+**The clock and the counters follow D39.** The host clock is `DurableServices.Clock`, read ONCE per
+invocation at the first windowed decision through the one journal wrapper, under `ReadClock` at its
+ordinal, so a replay is served the reading the recorded run took and never consults the live clock
+for that invocation. Each decision is then journaled under `Limit` with the capability as its
+subject — the counter an admission leaves as the completed value, a refusal's own token as a
+`Refused` record — so a replay reproduces every decision from the journal and recomputes none, and a
+host reads admissions and refusals off the journal. The counters are read off the ENTRY store under
+`<reserved prefix>limit/<capability>`, tallied through the invocation, and written back onto the
+outcome's store after the run — committed or not, because an admission the gate let through is spent
+whatever the handler did with it afterwards, and a window that forgot an admission on rollback would
+be breached by failing. The session adopts the arm's store on rollback already, so the write-back
+needs no session change.
+
+**The refusal names the declaration.** `admissions-over-window:<count>/<window>`,
+`quantity-over-window:<argument>:<quantity>/<window>`, `within-dwell:<window>`,
+`limit-unjudgeable:<no-clock | no-store | window-not-positive | clock-malformed>` — never the reading,
+never the counter, never the value. A served refusal is reported with the recorded token whole.
+
+**Version.** Rides the `0.12.0` draft, which is already breaking: `ServerEffectRegistry` and
+`DurableServices` gain a field (FS0764 for a full literal), `ServerConstraintClause` and
+`ServerConstraintDefect` gain cases (an exhaustive `match` breaks), and the demanded document moves
+to version 12 (`STABILITY.md` says what a consumer pays).
+
+**What this does not do, stated.** It does not SLIDE a window: a fixed window is what a counter can
+hold and a microcontroller can keep, and a sliding one is a different declaration. It does not count
+PERFORMED effects: an admission is counted when the gate admits, so a plan that halts later has still
+spent it — conservative by choice, and the opposite choice is the hole the write-back-on-rollback
+closes. The trace-level statement — "in every window of the whole timed trace, at most N" — is not a
+theorem here: the counter-level invariants are, and `proofs.json` keeps the trace-level Σ on the
+not-claimed rung with that reason. A second declaration of one kind on one capability replaces the
+first, on `constrain`'s and the throttle's terms.
