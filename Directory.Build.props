@@ -202,7 +202,13 @@
          version 13 and `Fuaran.Core.Unit` joins the pins. Phases 2213 and 2436
          ride it too (non-empty handler and invocation members, D51 and D53).
          Released as `v0.12.0`. -->
-    <Version>0.12.0</Version>
+    <!-- 0.13.0 — Phase 2262. ADVANCES rather than rides: v0.12.0 is TAGGED.
+         Argument policy gains a floor and an opt-in presence clause:
+         `ServerConstraintClause` gains `AtLeast` and `Required` (a closed DU
+         gaining cases breaks every exhaustive `match`), and the demanded
+         document moves to version 14 (DECISIONS.md D55). STABILITY.md holds the
+         slot as a DRAFT until it is tagged. -->
+    <Version>0.13.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
          else. Undeclared would read as `local-feed`, under which a pin only this
