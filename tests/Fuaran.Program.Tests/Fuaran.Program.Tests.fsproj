@@ -74,6 +74,8 @@
     <!-- Phase 2220 (D47): the derived view. -->
     <Compile Include="DerivedViewTests.fs" />
     <Compile Include="WindowedLimitTests.fs" />
+    <!-- Phase 2261 (D54): a declared quantity priced before the program runs. -->
+    <Compile Include="QuantityBudgetTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

@@ -127,6 +127,47 @@ declaring no windowed clause (the demanded document's version excepted), and eve
 `proofs/EffectGate.fst` above the new section: the staging theorems quantify over the policy arrow
 the decision is composed into.
 
+### Rides the draft: a domain declares a quantity per leaf, and the budget prices its worst case before the program runs (Phase 2261)
+
+**Class: breaking** — the draft's own class, so it rides rather than advances it. `DECISIONS.md` D54
+records what was decided; `proofs/Budget.fst` extends the Phase 1716 theorem to the declared quantity.
+
+**What a consumer gains.**
+
+- `QuantityDeclaration` (`Name`, `Unit: Fuaran.Core.UnitOfMeasure`, `Amount`) and
+  `LeafDeclaration.Quantities`: a witness declares, per leaf, the named quantities the leaf spends at
+  worst, typed by the Core unit algebra.
+- `Budget.quantityCost witness name unit action` — D35's rules without the step, saturating — and
+  `Budget.declaredQuantities`.
+- `QuantityDemand` and `DemandedProjection.Quantities`: the worst case per (name, unit), the dearest
+  handler's over a tree and the sum over a union; `QuantityCeiling`, `HostCoverage.QuantityCeilings`
+  and `HostCoverage.withQuantityCeilings`; `CoverageFinding.QuantityOverCeiling` and
+  `CoverageFinding.QuantityUnitMismatch`, with their `describe` sentences.
+- The pin `Fuaran.Core.Unit` 0.40.2, referenced by `Fuaran.Program.Bounded`.
+
+**What a consumer pays.**
+
+- **Three records gain a field.** A full-literal construction of `LeafDeclaration` (now `Quantities`),
+  `DemandedProjection` (now `Quantities`) or `HostCoverage` (now `QuantityCeilings`) fails with FS0764
+  until it names the member; `LeafDeclaration.none`, `Demanded.empty` and `HostCoverage.nothing` carry
+  the defaults, and every construction in this repository already builds from them. **One closed DU
+  gains cases**: an exhaustive `match` over `CoverageFinding` must take the two.
+- **The demanded document moves to version 13.** `Demanded.Version` and `decodableVersions` are `13`;
+  a version-12 document is refused `UnknownVersion`, and an envelope signed under version 12 reports
+  `Unreadable` drift until re-signed. The root gains `quantities`, present on every document (`[]`
+  where the leaves declare none) and REQUIRED on read: a document without it is `MissingMember`, so a
+  producer predating the member is told so rather than read as one that priced nothing. A document for
+  a program declaring no quantity differs from its version-12 bytes in the version and the empty member.
+- **A new transitive dependency.** `Fuaran.Program.Bounded` now references `Fuaran.Core.Unit`; a
+  consumer restoring from nuget.org gains one package, Fable-clean and FSharp.Core-only.
+- **A witness that declares a quantity is priced.** Nothing changes for a witness declaring none: its
+  documents carry `[]` and no ceiling can ever refuse it.
+
+**What did not move.** `Budget.actionCascadeCost`, `Budget.treeCost` and every cascade theorem (the
+model's leaf gained an amount the cascade never reads); every byte of the handler and program wire;
+every other member of the demanded document; `ServerSession.initStrict`'s shape — it already
+consulted `checkProjection` before building a session, which is where the new finding is answered.
+
 ## 0.11.0 — the substrate raise to Fuaran.Core 0.40.2 (Phase 2228)
 
 **Class: breaking**, by this file's first rule: the contract every package is BUILT against moved.

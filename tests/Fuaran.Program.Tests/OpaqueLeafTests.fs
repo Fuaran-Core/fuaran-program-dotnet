@@ -145,9 +145,9 @@ let projection =
 let document =
     testList
         "Phase 2130 — the demanded document carries opaqueLeaves at version 8"
-        [ test "the version is 12, and it is the only one read" {
-              Expect.equal Demanded.Version 12 "the version"
-              Expect.equal Demanded.decodableVersions [ 12 ] "the versions read"
+        [ test "the version is 13, and it is the only one read" {
+              Expect.equal Demanded.Version 13 "the version"
+              Expect.equal Demanded.decodableVersions [ 13 ] "the versions read"
           }
 
           test "the member is encoded between iterations and values, and round-trips" {
@@ -156,7 +156,7 @@ let document =
 
               Expect.stringContains
                   bytes
-                  "\"iterations\":[],\"opaqueLeaves\":[{\"reason\":\"in-process\",\"name\":\"Hush\"}],\"values\":[],\"server\":null"
+                  "\"iterations\":[],\"opaqueLeaves\":[{\"reason\":\"in-process\",\"name\":\"Hush\"}],\"values\":[],\"quantities\":[{\"name\":\"beep-minutes\",\"unit\":\"min\",\"worstCase\":1}],\"server\":null"
                   "the member and its place"
 
               Expect.equal (Demanded.decode bytes) (Ok projection) "decode inverts encode"

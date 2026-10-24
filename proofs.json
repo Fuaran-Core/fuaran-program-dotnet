@@ -624,10 +624,92 @@
       }
     },
     {
+      "id": "quantity-saturates-exact",
+      "level": "proved",
+      "phase": "fuaran#2261",
+      "claim": "A leaf DECLARES what it spends of a named quantity (LeafDeclaration.Quantities, DECISIONS.md D54), and Budget.quantityCost prices it with D35's rules and NO step — a sequence sums, a selection is its dearer arm, a repeat is its body times the top of its bound, an iteration is its lowered elements (a stored one its body at the ceiling), a leaf is what it declares under the (name, unit) being priced, and the assignment, call and guard spend nothing — in saturating arithmetic. The figure is the EXACT worst case clipped at the saturation bound: it never reads below what the leaves can spend, and a figure under the bound is that figure.",
+      "evidence": {
+        "theorem": "quantity_saturates_exact",
+        "model": "proofs/Budget.fst",
+        "prover": "proofs/fstar-pin.json",
+        "supporting": [
+          "quantity_fold_saturates_exact",
+          "quantity_cost_bounds",
+          "exact_quantity_nonneg",
+          "sat_mul_clip"
+        ],
+        "definitions": [
+          "quantity_cost",
+          "quantity_fold",
+          "exact_quantity"
+        ],
+        "note": "the model prices one (name, unit) per tree over the SAME act the cascade prices: act's leaf gained an amount the cascade never reads and the quantity reads, so one translation serves both differentials. The AMOUNT is a parameter on the fold theorem's terms for View: it is the witness's worst case for the leaf, read from the leaf's arguments by View (a literal is the amount, a parameter the top of its range), and nothing proves a witness read its arguments honestly"
+      }
+    },
+    {
+      "id": "quantity-monotone",
+      "level": "proved",
+      "phase": "fuaran#2261",
+      "claim": "A tree whose leaves declare MORE of a quantity never prices CHEAPER: over trees of the same shape with every leaf declaring at most what the other's does (declares_at_most), the quantity price is monotone. This is sat_monotone carried to the declared quantity — the extension of the Phase 1716 theorem the shard asked for — and what makes the worst case a comparand: a witness that raised a leaf's declaration, or a host that read a dearer tree, cannot be answered a smaller figure.",
+      "evidence": {
+        "theorem": "quantity_monotone",
+        "model": "proofs/Budget.fst",
+        "prover": "proofs/fstar-pin.json",
+        "supporting": [
+          "exact_quantity_monotone",
+          "exact_quantity_sum_monotone",
+          "quantity_saturates_exact"
+        ],
+        "definitions": [
+          "declares_at_most",
+          "all_declare_at_most"
+        ]
+      }
+    },
+    {
+      "id": "quantity-laws-per-flow-shape",
+      "level": "proved",
+      "phase": "fuaran#2261",
+      "claim": "One law per flow shape for the declared quantity, in a host's terms: a selection admitted under a ceiling below the bound has EITHER arm admitted under the WHOLE ceiling, since a selection spends nothing of its own; a parameter repeat spends at least what the literal repeat of every count in its range spends; an iteration spends exactly what the sequence of its lowered elements spends; and a sequence or an iteration admitted under a ceiling has its first member, and the rest, admitted under it — by a caller's induction, every member, which is the refusal before the first element for a quantity as each_member_within is for the step.",
+      "evidence": {
+        "theorem": "quantity_choose_covers_either_arm",
+        "model": "proofs/Budget.fst",
+        "prover": "proofs/fstar-pin.json",
+        "supporting": [
+          "quantity_repeat_parameter_covers_every_count",
+          "quantity_each_is_elements",
+          "quantity_chain_member_within",
+          "quantity_each_member_within",
+          "quantity_saturates_exact"
+        ],
+        "note": "cap < mx is the side condition, as on the cascade laws: a price AT the bound says only 'at least this much'"
+      }
+    },
+    {
+      "id": "quantity-gate-exact",
+      "level": "proved",
+      "phase": "fuaran#2261",
+      "claim": "A host's ceiling on a named quantity — HostCoverage.QuantityCeilings, compared by Demanded.checkProjection against the demanded document's worst case per (name, unit) — admits exactly the programs whose leaves can spend at most the ceiling and refuses the rest WITH the figure (exact while within the bound, the bound otherwise), under a ceiling below the saturation bound. The refusal happens before the first stage: the model's gate is a Tot function of the ceiling and the action ALONE, with no session, store or effect in its signature, so there is nothing it could have run or written. The acceptance's worked example is a proved instance: 30 + 3 × 20 + max(45, 0) = 135, refused at a ceiling of 120 with 135 and admitted at 135.",
+      "evidence": {
+        "theorem": "quantity_gate_exact",
+        "model": "proofs/Budget.fst",
+        "prover": "proofs/fstar-pin.json",
+        "supporting": [
+          "worked_example",
+          "quantity_saturates_exact"
+        ],
+        "definitions": [
+          "quantity_gate",
+          "worked_example_program"
+        ],
+        "note": "production compares in the SAME unit only and converts nothing (a ceiling in another unit is QuantityUnitMismatch, never scaled); the model prices one (name, unit) and has no unit to mismatch, so that refusal is production's alone and is tested, not proved. The strict construction paths (ServerSession.initStrict) already consult checkProjection before building a session, which is where the refusal is answered"
+      }
+    },
+    {
       "id": "budget-generic-model-agrees-at-the-toy-witness",
       "level": "tested",
       "phase": "fuaran#2017",
-      "claim": "The extracted tree_cost and the core's Budget.treeCost return the same integer at the toy witness for fans, chains, unequal siblings and nodes past the counting cap, at every ceiling around each tree's exact cost and at the saturation bound; the extracted action_cascade_cost equals Budget.actionCascadeCost on EVERY action shape the core accepts — the non-flow shapes nested, and since fuaran#2018 each of Choose, Repeat and Each in several trees and nested in the others, with the core's price stated beside each case, and on a corpus whose prices reach the saturation bound; a wrapping accumulator loses the ceiling comparison; and a cascade pricing a selection by its cheaper arm is reported. The G2 gate is not compared here: the toy has no driver.",
+      "claim": "The extracted tree_cost and the core's Budget.treeCost return the same integer at the toy witness for fans, chains, unequal siblings and nodes past the counting cap, at every ceiling around each tree's exact cost and at the saturation bound; the extracted action_cascade_cost equals Budget.actionCascadeCost on EVERY action shape the core accepts — the non-flow shapes nested, and since fuaran#2018 each of Choose, Repeat and Each in several trees and nested in the others, with the core's price stated beside each case, and on a corpus whose prices reach the saturation bound; a wrapping accumulator loses the ceiling comparison; and a cascade pricing a selection by its cheaper arm is reported. The G2 gate is not compared here: the toy has no driver. Since fuaran#2261 the extracted quantity_cost equals Budget.quantityCost for the toy's beep-minutes over the same flow corpus priced for the quantity, a saturating corpus and the acceptance's worked example (135), with a cheaper-arm go-red reported.",
       "evidence": {
         "family": "Phase 1716 - the proved budget as oracle at the toy witness",
         "host": "tests/Fuaran.Program.Tests/ToyBudgetOracleTests.fs",

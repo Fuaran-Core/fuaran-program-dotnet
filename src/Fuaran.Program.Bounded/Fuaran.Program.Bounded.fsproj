@@ -47,7 +47,7 @@
        names directly — the JSON value and canonical form (Wire), the columnar
        table (Column), the evaluator a server read runs (DataFrame), the node
        witness and hash (Tree), and the stream witness and signing sink
-       (OpStream). The UI instantiation is an adapter that references this
+       (OpStream), and the unit algebra a declared quantity is typed by (Unit, Phase 2261). The UI instantiation is an adapter that references this
        package, never the reverse. -->
   <ItemGroup>
     <PackageReference Include="FSharp.Core" />
@@ -56,5 +56,6 @@
     <PackageReference Include="Fuaran.Compute.DataFrame" />
     <PackageReference Include="Fuaran.Core.Tree" />
     <PackageReference Include="Fuaran.Core.OpStream" />
+    <PackageReference Include="Fuaran.Core.Unit" />
   </ItemGroup>
 </Project>

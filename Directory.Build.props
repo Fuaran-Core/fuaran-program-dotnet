@@ -196,7 +196,10 @@
          a document past the syntactic or program-shape limits that decoded
          before (DECISIONS.md D50). Phase 2260 rides the same draft: the host's
          limits over time (D52) add a field to two records and cases to two closed
-         DUs, and the demanded document moves to version 12. STABILITY.md holds the
+         DUs, and the demanded document moves to version 12. Phase 2261 rides it
+         too: a leaf declares the quantities it spends (D54), three records gain a
+         field, `CoverageFinding` gains two cases, the demanded document moves to
+         version 13 and `Fuaran.Core.Unit` joins the pins. STABILITY.md holds the
          slot as a DRAFT until it is tagged. -->
     <Version>0.12.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so

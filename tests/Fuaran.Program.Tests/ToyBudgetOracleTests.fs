@@ -258,6 +258,18 @@ let private priced (cost: TreeCost) (trees: (string * ToyNode) list) : (string *
 ///    would be handing the oracle production's answer to the one question the
 ///    `Each` arm asks; stating the toy's lowering here means a toy whose
 ///    substitution ever changed an action's shape shows as a divergence.
+/// What a leaf declares of the toy's one quantity, as the model's leaf amount.
+/// Stated here from the declaration rather than through `Budget.quantityCost`,
+/// so the translation says what the toy's leaf declares and a core that read
+/// the declaration differently shows as a divergence.
+let private beepAmount (declaration: LeafDeclaration) : bigint =
+    declaration.Quantities
+    |> List.sumBy (fun q ->
+        if q.Name = beepMinutes && q.Unit = minute then
+            bigint (max q.Amount 0)
+        else
+            0I)
+
 let rec private modelCascade (a: ToyAction) : ProvedBudget.act =
     match toyWitness.Dispatch.Action.View a with
     | ActionView.Sequence members -> ProvedBudget.AChain(members |> List.map modelCascade)
@@ -274,10 +286,16 @@ let rec private modelCascade (a: ToyAction) : ProvedBudget.act =
     // at the ceiling — the law `repeat_priced_at_top` already covers it.
     | ActionView.Each(Collection.Stored(_, ceiling), _, body) ->
         ProvedBudget.ARepeat(ProvedBudget.BParameter(bigint 0, bigint ceiling), modelCascade body)
+    // A leaf carries what it declares of the toy's ONE quantity (Phase 2261):
+    // the model prices one (name, unit) per tree, so the host projects every
+    // declaration under `beep-minutes`/`min` to its amount, summed where a
+    // leaf declares the pair twice, and the other three one-step shapes —
+    // which declare nothing — to zero. The cascade cost reads none of this;
+    // the quantity cost reads nothing else.
+    | ActionView.Leaf declaration -> ProvedBudget.ALeaf(beepAmount declaration)
     | ActionView.Assign _
     | ActionView.Call _
-    | ActionView.Require _
-    | ActionView.Leaf _ -> ProvedBudget.ALeaf
+    | ActionView.Require _ -> ProvedBudget.ALeaf 0I
 
 /// The cost function under comparison for the cascade. Production is one; the
 /// go-red case below is another, and it is deliberately wrong.
@@ -297,6 +315,93 @@ let private cascadeDivergence (cost: CascadeCost) (name: string) (action: ToyAct
         Some(sprintf "%s\n  production: %d\n  oracle:     %d" name prod oracle)
     else
         None
+
+/// The quantity price under comparison (Phase 2261): production's
+/// `Budget.quantityCost` for the toy's `beep-minutes`, against the model's
+/// `quantity_cost` over the SAME translation the cascade uses.
+let private productionQuantity: CascadeCost =
+    ShippedBudget.quantityCost toyWitness beepMinutes minute
+
+let private oracleQuantity (a: ToyAction) : int =
+    int (ProvedBudget.quantity_cost satBound (modelCascade a))
+
+let private quantityDivergence (cost: CascadeCost) (name: string) (action: ToyAction) : string option =
+    let prod = cost action
+    let oracle = oracleQuantity action
+
+    if prod <> oracle then
+        Some(sprintf "%s\n  production: %d\n  oracle:     %d" name prod oracle)
+    else
+        None
+
+/// The flow corpus priced for the QUANTITY (Phase 2261), the figure the core
+/// computes stated beside each: a selection is its dearer arm, a repeat its
+/// body times the top of its bound, an iteration its body once per element,
+/// a leaf what it declares — and NO step anywhere, which is what tells this
+/// price from the cascade's. The acceptance's worked example is the last.
+let private quantityCases: (string * ToyAction * int) list =
+    [ "a leaf spends what it declares", Beep 3, 3
+      "a leaf declaring nothing spends nothing", Hush, 0
+      "a sequence of every non-flow shape spends its leaves' sum",
+      Seq
+          [ Beep 1
+            Hush
+            Put("k", None, Some(Read "a"))
+            Ring("/x", false, (fun () -> failwith "a carried closure was invoked"))
+            Need Missing ],
+      1
+      "a branch spends its dearer arm, and its condition nothing",
+      Pick(Const(JBool true), Beep 1, Seq [ Beep 1; Beep 2 ], None),
+      3
+      "a branch whose arms are empty spends nothing", Pick(Const(JBool false), Seq [], Seq [], None), 0
+      "a literal repeat spends its body times its count, and its bound nothing", Times(Bound.Literal 3, Beep 1), 3
+      "a repeat of nothing spends nothing", Times(Bound.Literal 0, Beep 1), 0
+      "a negative literal repeat spends nothing", Times(Bound.Literal -4, Seq [ Beep 1; Beep 2 ]), 0
+      "a parameter repeat spends its body at the top of its range", Times(Bound.Parameter(Read "k", 0, 5), Beep 1), 5
+      "a repeat nesting a repeat", Times(Bound.Literal 2, Times(Bound.Literal 3, Beep 1)), 6
+      "an iteration spends its body once per element", ForEach([ JInt 1; JInt 2 ], "x", Seq [ Beep 1; Hush ]), 2
+      "an iteration over nothing spends nothing", ForEach([], "x", Beep 1), 0
+      "an iteration nesting an iteration",
+      ForEach([ JInt 1; JInt 2 ], "x", ForEach([ JInt 3; JInt 4; JInt 5 ], "y", Beep 1)),
+      6
+      "a store-bound iteration spends its body at its ceiling, and its read nothing",
+      ForEachOf(Read "xs", 4, "x", Beep 2),
+      8
+      "a branch whose arms are a repeat and an iteration",
+      Pick(Missing, Times(Bound.Literal 4, Beep 1), ForEach([ JInt 1; JInt 2; JInt 3 ], "x", Beep 1), None),
+      4
+      "a repeat of a branch over an iteration",
+      Times(Bound.Parameter(Read "n", 1, 3), Pick(Missing, ForEach([ JInt 1; JInt 2 ], "x", Beep 1), Hush, None)),
+      6
+      "an iteration whose body is a repeat of a branch",
+      ForEach([ JInt 1; JInt 2 ], "x", Times(Bound.Literal 2, Pick(Hole "x", Seq [ Beep 1; Beep 2 ], Beep 3, None))),
+      12
+      "the acceptance's worked example: 30 + 3 x 20 + max(45, 0)",
+      Seq
+          [ Beep 30
+            Times(Bound.Literal 3, Beep 20)
+            Pick(Missing, Beep 45, Seq [], None) ],
+      135 ]
+
+/// Quantity prices that reach the saturation bound.
+let private saturatingQuantities: (string * ToyAction) list =
+    [ "a repeat whose multiply saturates the quantity", Times(Bound.Literal 2_000_000_000, Seq [ Beep 1; Beep 2 ])
+      "a repeat over the whole range of a leaf spending one", Times(Bound.Literal System.Int32.MaxValue, Beep 1)
+      "nested repeats whose product saturates", Times(Bound.Literal 100_000, Times(Bound.Literal 100_000, Beep 1))
+      "a sequence of two repeats whose sum saturates",
+      Seq
+          [ Times(Bound.Literal 1_500_000_000, Beep 1)
+            Times(Bound.Literal 1_500_000_000, Beep 1) ] ]
+
+/// The proved quantity price with ONE arm changed: a selection priced by its
+/// CHEAPER arm — the defect `quantity_choose_covers_either_arm` excludes.
+let rec private cheaperArmQuantity (a: ProvedBudget.act) : int =
+    match a with
+    | ProvedBudget.AChoose(whenTrue, whenFalse) -> min (cheaperArmQuantity whenTrue) (cheaperArmQuantity whenFalse)
+    | other -> int (ProvedBudget.quantity_cost satBound other)
+
+let private cheaperArmQuantityCost: CascadeCost =
+    fun action -> cheaperArmQuantity (modelCascade action)
 
 let private ring =
     Ring("/x", false, fun () -> failwith "a carried closure was invoked")
@@ -622,6 +727,70 @@ let tests =
               match divergences with
               | [] -> ()
               | first :: _ -> failtestf "the extracted model and production disagree on a saturating cascade:\n%s" first
+          }
+
+          test "the oracle agrees with production on the declared quantity over every action shape (Phase 2261)" {
+              Expect.isGreaterThanOrEqual (List.length quantityCases) 18 "the quantity corpus is the one declared above"
+
+              // The figure production answers is the one stated beside the
+              // case — checked by hand, the worked example included.
+              for name, action, stated in quantityCases do
+                  Expect.equal (productionQuantity action) stated (sprintf "%s is priced by the core at %d" name stated)
+
+              // And the cascade still prices the SAME trees by the step: the
+              // two prices are read off one translation and never agree by
+              // accident — a leaf spending 3 is one step.
+              Expect.equal (productionCascade (Beep 3)) 1 "a leaf is one step whatever it spends"
+
+              let divergences =
+                  quantityCases
+                  |> List.choose (fun (name, action, _) -> quantityDivergence productionQuantity name action)
+
+              match divergences with
+              | [] -> ()
+              | first :: rest ->
+                  failtestf
+                      "the extracted model and production disagree on %d of %d quantity price(s). First divergence:\n%s"
+                      (List.length rest + 1)
+                      quantityCases.Length
+                      first
+          }
+
+          test "the oracle agrees with production on quantities whose price saturates (Phase 2261)" {
+              for name, action in saturatingQuantities do
+                  Expect.equal
+                      (productionQuantity action)
+                      System.Int32.MaxValue
+                      (sprintf "%s reaches the saturation bound" name)
+
+              let divergences =
+                  saturatingQuantities
+                  |> List.choose (fun (name, action) -> quantityDivergence productionQuantity name action)
+
+              match divergences with
+              | [] -> ()
+              | first :: _ ->
+                  failtestf "the extracted model and production disagree on a saturating quantity:\n%s" first
+          }
+
+          test "GO RED: a quantity pricing a selection by its cheaper arm is reported at the toy witness (Phase 2261)" {
+              Expect.isNone
+                  (quantityDivergence productionQuantity "the unequal branch" unequalBranch)
+                  "production disagrees with the oracle on the very branch the defect is committed against"
+
+              Expect.isSome
+                  (quantityDivergence cheaperArmQuantityCost "the unequal branch" unequalBranch)
+                  "the comparison harness did not report a quantity that prices a selection by its cheaper arm"
+
+              let dearerArm =
+                  match unequalBranch with
+                  | Pick(_, _, whenFalse, _) -> productionQuantity whenFalse
+                  | _ -> failwith "the unequal branch is a Pick"
+
+              Expect.isLessThan
+                  (cheaperArmQuantityCost unequalBranch)
+                  dearerArm
+                  "the cheaper-arm figure should be below the dearer arm's own spend - that is the whole defect"
           }
 
           test "GO RED: a cascade pricing a selection by its cheaper arm is reported at the toy witness" {

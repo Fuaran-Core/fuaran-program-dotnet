@@ -173,6 +173,18 @@ let describe (action: ToyAction) : string =
     | Beep volume -> sprintf "Beep(%d)" volume
     | Hush -> "Hush"
 
+/// The toy's one declared quantity (Phase 2261): what a `Beep` spends, by
+/// name, in minutes. The unit is parsed once from the algebra's own text, so a
+/// toy that named a unit the algebra does not read fails here, at load, and
+/// not in a test's expectation.
+[<Literal>]
+let beepMinutes = "beep-minutes"
+
+let minute: UnitOfMeasure =
+    match Unit.parse "min" with
+    | Ok unit -> unit
+    | Error refusal -> failwithf "the toy's unit does not parse: %A" refusal
+
 let view (action: ToyAction) : ActionView<ToyAction, ToyExpr> =
     match action with
     | Seq actions -> ActionView.Sequence actions
@@ -184,10 +196,17 @@ let view (action: ToyAction) : ActionView<ToyAction, ToyExpr> =
     | ForEach(collection, placeholder, body) -> ActionView.Each(Collection.Literal collection, placeholder, body)
     | ForEachOf(source, ceiling, placeholder, body) ->
         ActionView.Each(Collection.Stored(source, ceiling), placeholder, body)
-    | Beep _ ->
+    // A beep SPENDS its volume (Phase 2261): the toy's one declared quantity,
+    // `beep-minutes` in minutes, read off the leaf's own argument — the amount
+    // the budget prices with D35's rules and a host's ceiling bounds.
+    | Beep volume ->
         ActionView.Leaf
             { LeafDeclaration.none with
-                EffectKinds = [ "Sound" ] }
+                EffectKinds = [ "Sound" ]
+                Quantities =
+                    [ { Name = beepMinutes
+                        Unit = minute
+                        Amount = volume } ] }
     | Hush ->
         ActionView.Leaf
             { LeafDeclaration.none with

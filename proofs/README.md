@@ -733,6 +733,38 @@ and nobody's gate.
 The shipped rules were examined shape by shape before any of this was proved and all three were
 TAKEN rather than corrected — the decision per shape is `DECISIONS.md` D35.
 
+### 8. The declared quantity — `quantity_saturates_exact`, `quantity_monotone`, `quantity_gate_exact` (Phase 2261)
+
+A step is the one quantity every domain spends; a device spends heater-minutes and a server
+spends money or egress bytes (`DECISIONS.md` D54). A leaf DECLARES what it spends of a named
+quantity (`LeafDeclaration.Quantities`), and `Budget.quantityCost` prices it with D35's rules and
+WITHOUT the step — a selection's condition, a repeat's bound and a stored collection's read spend
+none of it. The model is `action_cascade_cost` with the `1`s removed over the SAME `act`, whose
+leaf gained an `amount` the cascade never reads, so one translation of a tree serves both
+differentials. What the theorems assume: the amount is the witness's worst case for the leaf,
+read from the leaf's arguments by `View` and taken as declared (the fold theorem's posture on
+`View`); one `act` is one (name, unit), a leaf declaring another pair being `ALeaf 0`; the bound
+is the parameter it is everywhere here.
+
+- **`quantity_saturates_exact`** — the figure is the exact worst case clipped at the bound, with
+  `quantity_cost_bounds` beside it.
+- **`quantity_monotone`** — a tree whose leaves declare MORE never prices CHEAPER (`declares_at_
+  most` is the order: the same shape, every leaf at most). This is `sat_monotone` carried to the
+  quantity, and the clause the shard asked the Phase 1716 theorem extended to.
+- **One law per flow shape again** — `quantity_choose_covers_either_arm` (either arm under the
+  WHOLE ceiling, since a selection spends nothing of its own),
+  `quantity_repeat_parameter_covers_every_count`, `quantity_each_is_elements`,
+  `quantity_chain_member_within` and `quantity_each_member_within`.
+- **`quantity_gate_exact`** — the gate (`Demanded.checkProjection`'s quantity arm, a host's
+  ceiling per name and unit against the demanded worst case) admits exactly the programs whose
+  leaves can spend at most the ceiling and refuses the rest WITH the figure, exact while within
+  the bound. The model's gate is a `Tot` function of the ceiling and the action alone — no
+  session, no store, no effect — so "before the first stage" is its signature, not a lemma about
+  it.
+- **`worked_example`** — the acceptance's instance: a leaf spending 30, a repeat of 3 over a leaf
+  spending 20, a choice between a leaf spending 45 and nothing; 30 + 3 × 20 + max(45, 0) = 135,
+  refused at a ceiling of 120 with 135, admitted at 135.
+
 ### What the budget model does NOT own
 
 Three things, and they are different in kind.
@@ -767,6 +799,10 @@ wrapping add prices wrong only on the trees nobody tries.
 7. **One law per flow shape** — `choose_covers_either_arm`, `repeat_literal_is_unrolling`,
    `repeat_parameter_covers_every_count`, `each_is_elements`, `each_member_within` and
    `chain_member_within` (Phase 2018).
+8. **The declared quantity is the exact worst case clipped, monotone in what the leaves declare,
+   and the ceiling gate decides on it with nothing run** — `quantity_saturates_exact`,
+   `quantity_monotone`, the per-shape laws again, `quantity_gate_exact` and the acceptance's
+   `worked_example` (Phase 2261).
 
 No `admit`, no `assume`; `--report_assumes error` is on for this module exactly as it is for
 the fold.
@@ -791,6 +827,11 @@ The extracted model agrees with production over three corpora:
   states an `Each`'s elements as the body once per element rather than taking them from the
   witness's own `lowered`, so the oracle is not handed production's answer to the question the
   arm asks.
+- **the declared quantity over the same trees** (Phase 2261): `quantity_cost` against
+  `Budget.quantityCost` for the toy's `beep-minutes`, over the flow corpus priced for the
+  quantity with the core's figure stated beside each case, a saturating corpus, and the
+  acceptance's worked example; the translation reads a leaf's amount off its DECLARATION rather
+  than through the price, so a core reading the declaration differently shows as a divergence.
 
 And a **go-red case**: a walk that accumulates with .NET's ordinary wrapping `+` instead of the
 saturating add, committed deliberately, which the comparison is asserted to report AND whose
@@ -799,7 +840,8 @@ refused. That second assertion is the point: a divergence that was merely a diff
 would not demonstrate the defect this law exists to exclude. A second go-red case (Phase 2018)
 commits a cascade that prices a selection by its CHEAPER arm and asserts the harness reports it
 and that the figure falls below the dearer arm's own price — the admission `choose_covers_either_arm`
-excludes.
+excludes. A third (Phase 2261) commits the same cheaper-arm defect against the QUANTITY price and
+asserts the harness reports it — the admission `quantity_choose_covers_either_arm` excludes.
 
 #### Assumed, and stated
 

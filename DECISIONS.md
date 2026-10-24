@@ -4041,3 +4041,92 @@ closes. The trace-level statement — "in every window of the whole timed trace,
 theorem here: the counter-level invariants are, and `proofs.json` keeps the trace-level Σ on the
 not-claimed rung with that reason. A second declaration of one kind on one capability replaces the
 first, on `constrain`'s and the throttle's terms.
+
+## D54 — A leaf DECLARES the named quantities it spends, typed by the Core unit algebra; the budget prices each with D35's rules and no step, saturating; the demanded document carries the worst case per (name, unit) at version 13; a host's ceiling in the same unit refuses an over-ceiling program before the first stage, and converts nothing (2026-10-24)
+
+**Context.** `Budget.actionCascadeCost` prices one quantity — the STEP — and the G2 gate refuses on it
+(Phase 1716, 2018). A device spends heater-minutes, a server spends money or egress bytes, and the
+`device-langsec` target wants the same statement about those: the worst case priced from the tree
+before anything runs, checked against an envelope the device holds (the plan's G4). D52 bounds a
+quantity over TIME at the gate, admission by admission; nothing priced a program's worst case of a
+quantity STATICALLY, so a program that would spend 135 heater-minutes in one run was admitted and then
+stopped by the window after it had started. `Fuaran.Core.Unit` (fuaran-core Phase 426) is the shipped
+dimension algebra, and it was pinned nowhere in this repository.
+
+**Premises checked against the tree first.** The shard's `tests/Fuaran.Program.Bounded.Tests/` does
+not exist — fuaran#2012 folded every suite into `Fuaran.Program.Tests`, the one runner `run.ps1`
+enumerates — so the tests land there (Phase 401's class, reported rather than worked around, as D52
+did). The shard's conditional owner, the program wire specification, does not carry the demanded
+document (it is the UI tier's corpus, copied in-repo at `conformance/`), so no specification text
+moves and the shared specification checkout is untouched. The demanded version was 12 (D52), so the
+member moves it to 13. No `LeafDeclaration` is constructed anywhere in this repository's `src/` — the
+UI adapter that did left with fuaran#2012 — so the declaration gains a member at one site and the toy
+witness is the first declarer. `Fuaran.Core.Unit` 0.40.2 is served by nuget.org (`tools/check-pins.ps1`
+asked), the release the other Core pins sit at.
+
+**The choice — declare at the leaf, price with the walk, carry in the document, refuse at the gate.**
+
+- **The declaration is the witness's.** `LeafDeclaration` gains `Quantities: QuantityDeclaration list`
+  — `Name`, `Unit: UnitOfMeasure`, `Amount: int`. The amount is the leaf's WORST CASE, already read:
+  the witness's `View` has the leaf's arguments in hand when it declares, so a literal argument is the
+  amount and a parameter is the top of its range, decided by the witness. The core takes it as
+  declared, exactly as it takes `View`'s shape and `EffectKinds`; nothing proves a witness read its
+  arguments honestly, and the fold theorem's posture on `View` is the precedent. A negative amount is
+  priced as nothing — a quantity a leaf gives back is not a cost and must not buy down its neighbours.
+- **The price is the cascade's walk without the step.** `Budget.quantityCost witness name unit action`:
+  a sequence sums, a selection is its DEARER arm, a repeat is its body times the TOP of its bound, an
+  `Each` is its lowered elements summed (a stored one its body at the ceiling), a leaf is what it
+  declares under the pair, and the assignment, call and guard spend nothing — D35's rules, saturating,
+  through the witness's view. No step anywhere: a step is `actionCascadeCost`'s quantity and this is
+  another. One (name, unit) per walk; `Budget.declaredQuantities` lists the pairs an action's leaves
+  declare. The two prices are ONE model in `proofs/Budget.fst`: `act`'s leaf gains an `amount`, the
+  cascade cost ignores it, `quantity_cost` reads it, and one translation of a tree serves both
+  differentials at the toy witness.
+- **The document carries the worst case per (name, unit), and a tree's is its dearest handler's.**
+  `DemandedProjection.Quantities: QuantityDemand list` — `Name`, `Unit`, `WorstCase` — at version 13,
+  the unit written as `Unit.render` and read back through `Unit.parse` (a text the algebra refuses is
+  the wrong TYPE for the member). `ofTree` takes the MAX over a tree's handler actions, because one
+  event reaches one handler and it knows that; `union` and `normalise` SUM the same pair, because what
+  is joined either runs together (a handler's stages, `ServerDemanded.ofHandler`) or is a caller's
+  alternatives, and a sum is a bound either way. So the figure is EXACT for a program that is one
+  action or one handler — the device's case — and a bound for a tree of alternatives joined with a
+  server tier. The signed envelope carries it as it carries every member; drift reports a quantity in
+  EXCESS when the recomputed worst case is dearer than the signed one.
+- **The host declares a ceiling per quantity, and the gate refuses on the document alone.**
+  `HostCoverage.QuantityCeilings`, `withQuantityCeilings`; `Demanded.checkProjection` answers
+  `QuantityOverCeiling(name, unit, worstCase, ceiling)` when the worst case exceeds the ceiling of the
+  same name AND unit, and `QuantityUnitMismatch(name, demanded, declared)` when the host's unit is not
+  the program's: the gate CONVERTS NOTHING — `h` against `min` is reported, never scaled — because a
+  bound a host wrote that silently bound something else is the misreading the document exists to
+  prevent. A quantity under no ceiling is unconstrained (a bound nobody declared is not an empty one,
+  the policy clauses' posture) and a ceiling nobody spends against is silent. `ServerSession.initStrict`
+  and every strict construction path already consult `checkProjection` before building a session, so
+  the refusal is before the first stage with no new call site.
+
+**What is proved (`proofs/Budget.fst`, Phase 1716 extended).** `quantity_saturates_exact` — the
+figure is the exact worst case clipped at the bound; `quantity_monotone` — a tree whose leaves declare
+more never prices cheaper (`sat_monotone` carried to the quantity, the extension the shard asked
+for); the per-shape laws again, over the whole ceiling since a selection spends nothing of its own;
+`quantity_gate_exact` — under a ceiling below the bound the gate admits exactly the programs whose
+leaves can spend at most the ceiling and refuses the rest with the figure, deciding on a `Tot` function
+of the action alone, which is what "before the first stage" IS in the model; and `worked_example` —
+the acceptance's 30 + 3 × 20 + max(45, 0) = 135, refused at 120 with 135 and admitted at 135, as a
+proved instance. `ToyBudgetOracleTests` runs the extraction beside `Budget.quantityCost` over the
+flow corpus, a saturating corpus and the worked example, with a cheaper-arm go-red.
+
+**Version.** Rides the `0.12.0` draft, which is already breaking: `LeafDeclaration`,
+`DemandedProjection` and `HostCoverage` gain a field (FS0764 for a full literal — `LeafDeclaration.none`,
+`Demanded.empty` and `HostCoverage.nothing` carry the defaults), `CoverageFinding` gains two cases, the
+demanded document moves to version 13, and `Fuaran.Core.Unit` 0.40.2 joins the pins (`STABILITY.md`
+says what a consumer pays).
+
+**What this does not do, stated.** It does not price a SERVER EFFECT stage's quantity: a handler's
+effect stages carry arguments computed at plan time, not declared by a witness, so the static worst
+case of money or egress through them is a registry declaration (a capability's argument as a quantity,
+on `QuantityPerWindow`'s reading of an argument) that `ServerDemanded.ofEffect` would price — a
+deliberate successor, not a residue, because it needs the registry's declaration vocabulary to grow
+and the server-tier walk to read it, and the dispatch-axis path here is complete without it. It does
+not CONVERT between compatible units: a ceiling applies in the unit the program declared, and the
+algebra's `conversionFactor` stays unused at the gate until a host asks for it. It does not price a
+quantity per NODE of the tree: a node's render cost is the step budget's `treeCost`, and a quantity is
+spent by actions.

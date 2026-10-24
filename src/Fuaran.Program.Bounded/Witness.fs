@@ -745,6 +745,33 @@ type OpaqueLeaf =
         Name: string
     }
 
+/// A named QUANTITY one leaf spends (Phase 2261, D54): heater-minutes, API
+/// spend, egress bytes — whatever a domain prices besides steps. The budget
+/// walks it with D35's rules (`Budget.quantityCost`), the demanded document
+/// carries its worst case, and a host's ceiling refuses an over-ceiling program
+/// before the first stage.
+///
+/// `Amount` is the leaf's WORST CASE, already read: the witness's `View` has
+/// the leaf's arguments in hand when it declares, so a literal argument is the
+/// amount and a parameter is the top of its range, decided by the witness and
+/// never by the core. Non-negative — a negative amount is priced as nothing,
+/// as a negative repeat bound is, because a quantity a leaf gives back is not a
+/// cost and must not buy down the cost of its neighbours.
+type QuantityDeclaration =
+    {
+        /// The quantity's name within the domain's vocabulary — the string a
+        /// host's ceiling is declared on, so a demanded quantity and a bounded
+        /// one cannot be two spellings of an intention.
+        Name: string
+        /// The unit the amount is in, typed by the Core dimension algebra. A
+        /// ceiling compares only in the SAME unit (`Unit.render` equal): the
+        /// gate converts nothing, so a host declaring `h` against a leaf
+        /// declaring `min` is told so rather than silently scaled.
+        Unit: UnitOfMeasure
+        /// How much of it this leaf spends, at worst.
+        Amount: int
+    }
+
 /// What a leaf may demand, for the static projection. The fold never reads it.
 type LeafDeclaration =
     {
@@ -758,6 +785,10 @@ type LeafDeclaration =
         /// says why, so the demanded document tells "does nothing" apart from
         /// "cannot be analysed" — which a leaf declaring nothing could not.
         Opaque: OpaqueLeaf option
+        /// The named quantities the leaf spends (Phase 2261). Empty for every
+        /// leaf that spends nothing but its step, which is every leaf before
+        /// this phase.
+        Quantities: QuantityDeclaration list
     }
 
 module LeafDeclaration =
@@ -769,7 +800,8 @@ module LeafDeclaration =
     let none: LeafDeclaration =
         { EffectKinds = []
           HostCalls = []
-          Opaque = None }
+          Opaque = None
+          Quantities = [] }
 
     /// A leaf that is an escape: it demands nothing a walk can name, and says
     /// so with a reason class and the act's name.

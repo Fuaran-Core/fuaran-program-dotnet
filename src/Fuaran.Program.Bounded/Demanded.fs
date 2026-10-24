@@ -413,7 +413,38 @@ type DemandedProjection =
         /// signed envelope then says. Empty for every program with none,
         /// which is every program before this phase.
         Values: ValueDemand list
+        /// The named quantities the program's leaves declare they spend (Phase
+        /// 2261, D54), each with its WORST CASE priced by D35's rules
+        /// (`Budget.quantityCost`): "spends at most N of THIS, in THIS unit" is
+        /// what the signed envelope then says, and what a host's ceiling
+        /// refuses before the first stage. One entry per (name, unit). Empty
+        /// for every program whose leaves declare none, which is every program
+        /// before this phase.
+        Quantities: QuantityDemand list
     }
+
+/// One quantity the program can spend, as the document carries it (Phase
+/// 2261): the name and unit the leaves declared it under, and the worst case
+/// of one run — a tree's dearest interaction, a handler's stages together.
+and QuantityDemand =
+    {
+        /// The quantity's declared name — the string a ceiling is declared on.
+        Name: string
+        /// Its unit, typed by the Core algebra; written as `Unit.render` and
+        /// read back by `Unit.parse`.
+        Unit: UnitOfMeasure
+        /// The worst case, in that unit, saturating at `Int32.MaxValue`.
+        WorstCase: int
+    }
+
+/// A host's ceiling on one named quantity (Phase 2261, D54): the most of it,
+/// in the given unit, a program may spend in one run. Compared in the SAME
+/// unit only — the gate converts nothing — so a ceiling in a unit the program
+/// did not declare the quantity in is reported, never scaled.
+type QuantityCeiling =
+    { Name: string
+      Unit: UnitOfMeasure
+      Ceiling: int }
 
 /// What a host offers, against which a projection is checked.
 ///
@@ -477,6 +508,12 @@ type HostCoverage =
         /// behaviour the host performs and nothing in the tree describes, and
         /// accepting that is a statement the host makes, not one it is spared.
         Opaque: Set<string>
+        /// The ceilings this host holds on named quantities (Phase 2261, D54).
+        /// A quantity with no ceiling here is unconstrained — a bound nobody
+        /// declared is not an empty one, on the policy clauses' terms — and a
+        /// ceiling on a quantity the program never spends is silent. Empty by
+        /// default.
+        QuantityCeilings: QuantityCeiling list
     }
 
 /// Why a host cannot cover a program tree. Each names the demanded thing; none
@@ -526,6 +563,20 @@ type CoverageFinding =
     /// A reachable handler names a channel outside the host's DECLARED server
     /// channel surface. Only ever produced when the host declared one.
     | UncoveredServerChannel of channel: string * name: string
+    /// The program's worst case of a named quantity, priced before the run,
+    /// exceeds the ceiling this host holds on it (Phase 2261, D54). The unit is
+    /// carried as `Unit.render` writes it. Nothing has run: this is the
+    /// refusal before the first stage, and the figure beside the ceiling is
+    /// the EXACT worst case (`quantity_gate_exact`), so a host reading it
+    /// knows by how much.
+    | QuantityOverCeiling of name: string * unit: string * worstCase: int * ceiling: int
+    /// This host declared a ceiling on a named quantity in one unit and the
+    /// program declares the quantity in another (Phase 2261). The gate
+    /// converts nothing, so the ceiling cannot be applied; reported rather
+    /// than ignored, because a bound a host wrote that silently bound nothing
+    /// is the misreading this document exists to prevent. Both units are
+    /// carried as `Unit.render` writes them.
+    | QuantityUnitMismatch of name: string * demanded: string * declared: string
 
 module ServerCoverage =
 
@@ -581,7 +632,8 @@ module HostCoverage =
           HostCalls = None
           StateNamespaces = None
           Server = None
-          Opaque = Set.empty }
+          Opaque = Set.empty
+          QuantityCeilings = [] }
 
     /// Declare the effect performers the host registered. Registering does not
     /// permit — the gate still decides, exactly as at dispatch time.
@@ -621,6 +673,14 @@ module HostCoverage =
     let acceptingOpaque (reasons: string seq) (coverage: HostCoverage) : HostCoverage =
         { coverage with
             Opaque = Set.ofSeq reasons }
+
+    /// Declare the ceilings this host holds on named quantities (Phase 2261,
+    /// D54). Each is compared against the demanded worst case of the quantity
+    /// of the same name and unit; a quantity the program spends under no
+    /// ceiling here is unconstrained. Replaces any earlier declaration.
+    let withQuantityCeilings (ceilings: QuantityCeiling seq) (coverage: HostCoverage) : HostCoverage =
+        { coverage with
+            QuantityCeilings = List.ofSeq ceilings }
 
 /// Why a demanded document was refused, as a CLASS rather than a message.
 ///
@@ -895,6 +955,24 @@ module Demanded =
         | ServerConstraintClause.QuantityPerWindow(argument, _, _) -> 6, argument
         | ServerConstraintClause.Dwell _ -> 7, ""
 
+    /// One entry per (name, unit), the worst cases of the same quantity SUMMED
+    /// in saturating arithmetic, sorted by name then unit (Phase 2261). The sum
+    /// is the one merge that is a bound whatever was joined: projections meet
+    /// here either because they run TOGETHER (a handler's stages, which spend
+    /// their quantities one after another) or because a caller joined
+    /// alternatives, and a sum over alternatives is above the dearest of them.
+    /// `ofTree` takes the MAX over a tree's handlers itself, before this runs,
+    /// because one event reaches one handler and it knows that; this function
+    /// cannot, and does not guess.
+    let private mergeQuantities (quantities: QuantityDemand list) : QuantityDemand list =
+        quantities
+        |> List.groupBy (fun q -> q.Name, q.Unit)
+        |> List.map (fun ((name, unit), group) ->
+            { Name = name
+              Unit = unit
+              WorstCase = group |> List.fold (fun acc q -> Budget.satAdd acc (max q.WorstCase 0)) 0 })
+        |> List.sortBy (fun q -> q.Name, Unit.render q.Unit)
+
     /// Put a projection's every list into the canonical form the document
     /// promises: distinct, sorted, one entry per namespace. The single place
     /// that ordering is decided, so `ofTree`, `ofAction` and `union` cannot
@@ -922,6 +1000,7 @@ module Demanded =
                     Targets = v.Targets |> List.distinct |> List.sort })
             |> List.distinct
             |> List.sortBy (fun v -> v.Value, v.Targets)
+          Quantities = mergeQuantities projection.Quantities
           Server =
             projection.Server
             |> Option.map (fun s ->
@@ -980,7 +1059,21 @@ module Demanded =
           Iterations = []
           OpaqueLeaves = []
           Values = []
+          Quantities = []
           Server = None }
+
+    /// The quantities one action can spend, each at its worst case (Phase
+    /// 2261): every (name, unit) some leaf declares, priced by
+    /// `Budget.quantityCost` over the whole action.
+    let private quantitiesOfAction
+        (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
+        (action: 'Action)
+        : QuantityDemand list =
+        Budget.declaredQuantities witness action
+        |> List.map (fun (name, unit) ->
+            { Name = name
+              Unit = unit
+              WorstCase = Budget.quantityCost witness name unit action })
 
     /// What ONE action can ever ask for, as a projection — the client tier only,
     /// since an action carries no handler.
@@ -1012,7 +1105,8 @@ module Demanded =
                           Written = written
                           Read = not written })
                 Iterations = iterations
-                OpaqueLeaves = opaqueLeaves }
+                OpaqueLeaves = opaqueLeaves
+                Quantities = quantitiesOfAction witness action }
 
     /// Combine projections into one, re-normalised. Order-independent and
     /// idempotent: `union` of the same documents in any order is the same
@@ -1061,6 +1155,9 @@ module Demanded =
               Iterations = projections |> List.collect _.Iterations
               OpaqueLeaves = projections |> List.collect _.OpaqueLeaves
               Values = projections |> List.collect _.Values
+              // Summed by `normalise`: what is joined is a bound on what
+              // runs, see `mergeQuantities`.
+              Quantities = projections |> List.collect _.Quantities
               Server = server }
 
     /// Attach (or replace) the server tier, re-normalised.
@@ -1099,9 +1196,10 @@ module Demanded =
         let fold = DispatchPosition.fold witness.Dispatch
 
         let rec walk (node: 'Node) =
+            let actions = witness.Dispatch.Handlers node |> List.map snd
+
             let own =
-                witness.Dispatch.Handlers node
-                |> List.map snd
+                actions
                 |> List.fold
                     (fun (accE, accH, accN, accI, accL) a ->
                         let e, h, n, i, l = demandsOfAction fold a
@@ -1116,14 +1214,30 @@ module Demanded =
                 else
                     []
 
+            // A tree's quantities are the DEAREST interaction's (Phase 2261):
+            // one event reaches one handler, so the worst case of a quantity
+            // over the tree is the max, per (name, unit), over every handler
+            // action the tree holds — not the sum `normalise` would take of
+            // things that run together.
+            let ownQ = actions |> List.collect (quantitiesOfAction witness)
+
             witness.Walk.Traverse node
             |> List.fold
-                (fun (accE, accH, accN, accO, accI, accL) child ->
-                    let e, h, n, o, i, l = walk child
-                    accE @ e, accH @ h, accN @ n, accO @ o, accI @ i, accL @ l)
-                (ownE, ownH, ownN, ownO, ownI, ownL)
+                (fun (accE, accH, accN, accO, accI, accL, accQ) child ->
+                    let e, h, n, o, i, l, qs = walk child
+                    accE @ e, accH @ h, accN @ n, accO @ o, accI @ i, accL @ l, accQ @ qs)
+                (ownE, ownH, ownN, ownO, ownI, ownL, ownQ)
 
-        let effects, hostCalls, namespaces, opaque, iterations, opaqueLeaves = walk root
+        let effects, hostCalls, namespaces, opaque, iterations, opaqueLeaves, quantities =
+            walk root
+
+        let dearest =
+            quantities
+            |> List.groupBy (fun q -> q.Name, q.Unit)
+            |> List.map (fun ((name, unit), group) ->
+                { Name = name
+                  Unit = unit
+                  WorstCase = group |> List.map _.WorstCase |> List.max })
 
         normalise
             { Effects = effects
@@ -1138,6 +1252,7 @@ module Demanded =
               Iterations = iterations
               OpaqueLeaves = opaqueLeaves
               Values = []
+              Quantities = dearest
               Server = None }
 
     // ─── the projection as a wire document ───────────────────────────────────
@@ -1152,7 +1267,7 @@ module Demanded =
     /// The version this encoder emits, and — see `decodableVersions` — the only
     /// one this reader reads.
     [<Literal>]
-    let Version = 12
+    let Version = 13
 
     // The policy clause's discriminator, written once and read once. A literal
     // spelled at the encoder and again at the reader is the drift this document
@@ -1323,6 +1438,16 @@ module Demanded =
     /// to it whatever number it carried, and the number is what tells it why. A
     /// document for a host declaring no windowed limit differs from its
     /// version-11 bytes in the version alone.
+    ///
+    /// **Version 13 adds the declared quantities** (Phase 2261, D54): the
+    /// `quantities` member, one entry per (name, unit) some leaf declares, each
+    /// with its worst case priced before the run. Present on EVERY document
+    /// from here on — `[]` where the leaves declare none — so an ABSENT member
+    /// says "this producer predates the quantities" and an EMPTY one says
+    /// "priced, and the program spends nothing but steps": a host holding a
+    /// ceiling on heater-minutes is the last reader that should take the first
+    /// for the second. A document for a program declaring no quantity differs
+    /// from its version-12 bytes in the version and the empty member.
     let encode (projection: DemandedProjection) : string =
         let effects = projection.Effects |> List.map q |> arr
 
@@ -1356,6 +1481,12 @@ module Demanded =
             |> List.map (fun v ->
                 let targets = v.Targets |> List.map q |> arr
                 $"""{{"value":{q v.Value},"targets":{targets}}}""")
+            |> arr
+
+        let quantities =
+            projection.Quantities
+            |> List.map (fun d ->
+                $"""{{"name":{q d.Name},"unit":{q (Unit.render d.Unit)},"worstCase":{d.WorstCase}}}""")
             |> arr
 
         let server =
@@ -1437,7 +1568,7 @@ module Demanded =
 
                 $"""{{"effects":{se},"capabilities":{sc},"functions":{fns},"channels":{channels},"reach":{reach},"replay":{replay},"undo":{undo},"constraints":{constraints}}}"""
 
-        $"""{{"kind":{q Kind},"version":{Version},"effects":{effects},"hostCalls":{hostCalls},"stateNamespaces":{namespaces},"opaqueHandlers":{opaque},"iterations":{iterations},"opaqueLeaves":{opaqueLeaves},"values":{values},"server":{server}}}"""
+        $"""{{"kind":{q Kind},"version":{Version},"effects":{effects},"hostCalls":{hostCalls},"stateNamespaces":{namespaces},"opaqueHandlers":{opaque},"iterations":{iterations},"opaqueLeaves":{opaqueLeaves},"values":{values},"quantities":{quantities},"server":{server}}}"""
 
     // ─── the projection as a wire document: reading one back ─────────────────
     //
@@ -1814,6 +1945,31 @@ module Demanded =
             requireStrings version (child path "targets") "targets" value
             |> Result.map (fun targets -> { Value = name; Targets = targets }))
 
+    /// A quantity demand (Phase 2261): the name, the unit as `Unit.render`
+    /// wrote it — read back through `Unit.parse`, and a text the algebra
+    /// refuses is the wrong TYPE for the member, not a unit this reader has
+    /// never heard of — and the worst case.
+    let private decodeQuantity version path value : Result<QuantityDemand, DemandedDecodeFailure> =
+        declaredOnly version path [ "name"; "unit"; "worstCase" ] value
+        |> Result.bind (fun () -> requireString version (child path "name") "name" value)
+        |> Result.bind (fun name ->
+            requireString version (child path "unit") "unit" value
+            |> Result.bind (fun text ->
+                match Unit.parse text with
+                | Ok unit -> Ok unit
+                | Error refusal ->
+                    failWith
+                        DemandedDefect.WrongType
+                        version
+                        (child path "unit")
+                        ("'" + text + "' is not a unit the algebra reads: " + string refusal))
+            |> Result.bind (fun unit ->
+                requireInt version (child path "worstCase") "worstCase" value
+                |> Result.map (fun worstCase ->
+                    { Name = name
+                      Unit = unit
+                      WorstCase = worstCase })))
+
     /// An opaque leaf (Phase 2130): the reason class and the act's name, both
     /// carried as written — a reason class this reader has never heard of is
     /// handed back, never dropped, on the discriminators' terms above.
@@ -2024,8 +2180,9 @@ module Demanded =
 
     /// The four members every version of this document has carried, the
     /// fifth version 7 added (`iterations`, Phase 1991), the sixth version 8
-    /// added (`opaqueLeaves`, Phase 2130) and the seventh version 9 added
-    /// (`values`, Phase 2186).
+    /// added (`opaqueLeaves`, Phase 2130), the seventh version 9 added
+    /// (`values`, Phase 2186) and the eighth version 13 added (`quantities`,
+    /// Phase 2261).
     let private decodeClientTier version root : Result<DemandedProjection, DemandedDecodeFailure> =
         requireStrings version "effects" "effects" root
         |> Result.bind (fun effects ->
@@ -2040,15 +2197,18 @@ module Demanded =
                             requireObjects version "opaqueLeaves" "opaqueLeaves" root decodeOpaqueLeaf
                             |> Result.bind (fun opaqueLeaves ->
                                 requireObjects version "values" "values" root decodeValue
-                                |> Result.map (fun values ->
-                                    { Effects = effects
-                                      HostCalls = hostCalls
-                                      StateNamespaces = namespaces
-                                      OpaqueHandlers = opaque
-                                      Iterations = iterations
-                                      OpaqueLeaves = opaqueLeaves
-                                      Values = values
-                                      Server = None })))))))
+                                |> Result.bind (fun values ->
+                                    requireObjects version "quantities" "quantities" root decodeQuantity
+                                    |> Result.map (fun quantities ->
+                                        { Effects = effects
+                                          HostCalls = hostCalls
+                                          StateNamespaces = namespaces
+                                          OpaqueHandlers = opaque
+                                          Iterations = iterations
+                                          OpaqueLeaves = opaqueLeaves
+                                          Values = values
+                                          Quantities = quantities
+                                          Server = None }))))))))
 
     /// The first member whose read value is not in the canonical order the
     /// document promises. Compared against `normalise` rather than against a
@@ -2071,6 +2231,8 @@ module Demanded =
             Some "opaqueLeaves"
         elif n.Values <> projection.Values then
             Some "values"
+        elif n.Quantities <> projection.Quantities then
+            Some "quantities"
         elif n.Server <> projection.Server then
             Some "server"
         else
@@ -2131,6 +2293,7 @@ module Demanded =
                       "iterations"
                       "opaqueLeaves"
                       "values"
+                      "quantities"
                       "server" ]
                     root
                 |> Result.bind (fun () -> decodeClientTier v root)
@@ -2203,6 +2366,10 @@ module Demanded =
             $"a handler this program can reach needs server capability '%s{capability}', which this host's policy gate refuses"
         | CoverageFinding.UncoveredServerChannel(channel, name) ->
             $"a handler this program can reach names %s{channel} '%s{name}', which is outside this host's declared server channels"
+        | CoverageFinding.QuantityOverCeiling(name, unit, worstCase, ceiling) ->
+            $"the program can spend %d{worstCase} %s{unit} of '%s{name}' in one run, over this host's ceiling of %d{ceiling} %s{unit} — refused before the first stage"
+        | CoverageFinding.QuantityUnitMismatch(name, demanded, declared) ->
+            $"the program declares '%s{name}' in %s{demanded} and this host's ceiling on it is in %s{declared}; the gate converts nothing, so the ceiling cannot be applied"
 
     /// Check an already-computed projection against a host's coverage.
     ///
@@ -2309,11 +2476,48 @@ module Demanded =
                 functionFindings @ capabilityFindings @ channelFindings
             | _ -> []
 
+        // A quantity's worst case against the host's ceiling on it (Phase 2261,
+        // D54): priced from the document alone, so the refusal is decided with
+        // nothing run. Per ceiling, in declaration order; a ceiling whose
+        // quantity the program never spends is silent, and one whose unit the
+        // program does not declare the quantity in cannot be applied and is
+        // reported as that.
+        let quantityFindings =
+            coverage.QuantityCeilings
+            |> List.collect (fun ceiling ->
+                let demanded = projection.Quantities |> List.filter (fun d -> d.Name = ceiling.Name)
+
+                if demanded.IsEmpty then
+                    []
+                else
+                    demanded
+                    |> List.choose (fun d ->
+                        if d.Unit <> ceiling.Unit then
+                            Some(
+                                CoverageFinding.QuantityUnitMismatch(
+                                    d.Name,
+                                    Unit.render d.Unit,
+                                    Unit.render ceiling.Unit
+                                )
+                            )
+                        elif d.WorstCase > ceiling.Ceiling then
+                            Some(
+                                CoverageFinding.QuantityOverCeiling(
+                                    d.Name,
+                                    Unit.render d.Unit,
+                                    d.WorstCase,
+                                    ceiling.Ceiling
+                                )
+                            )
+                        else
+                            None))
+
         effectFindings
         @ callFindings
         @ namespaceFindings
         @ opaqueFindings
         @ serverFindings
+        @ quantityFindings
 
     /// Answer, for one tree and one host, every demand the host cannot cover —
     /// BEFORE any event runs. An empty list means the host can serve everything

@@ -254,6 +254,17 @@ module SignedEnvelope =
           Iterations = except a.Iterations b.Iterations
           OpaqueLeaves = except a.OpaqueLeaves b.OpaqueLeaves
           Values = except a.Values b.Values
+          // A quantity is in excess when `a` spends MORE of it than `b` says
+          // (Phase 2261) — a dearer worst case under the same name and unit,
+          // or a quantity `b` never priced — carried with `a`'s figure so the
+          // reader sees the number the signed one no longer bounds.
+          Quantities =
+            a.Quantities
+            |> List.filter (fun q ->
+                not (
+                    b.Quantities
+                    |> List.exists (fun o -> o.Name = q.Name && o.Unit = q.Unit && o.WorstCase >= q.WorstCase)
+                ))
           Server =
             match a.Server, b.Server with
             | None, _ -> None

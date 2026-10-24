@@ -180,7 +180,7 @@ let tests =
                   (Demanded.encode projection)
                   ($"{{\"kind\":\"demanded\",\"version\":{Demanded.Version},\"effects\":[],\"hostCalls\":[],"
                    + "\"stateNamespaces\":[],"
-                   + "\"opaqueHandlers\":[],\"iterations\":[],\"opaqueLeaves\":[],\"values\":[],\"server\":{\"effects\":[\"ApplyOps\"],\"capabilities\":[\"ApplyOps\"],"
+                   + "\"opaqueHandlers\":[],\"iterations\":[],\"opaqueLeaves\":[],\"values\":[],\"quantities\":[],\"server\":{\"effects\":[\"ApplyOps\"],\"capabilities\":[\"ApplyOps\"],"
                    + "\"functions\":[],\"channels\":[],"
                    + "\"reach\":[{\"capability\":\"ApplyOps\",\"argument\":\"destination\",\"name\":\"local\"},"
                    + "{\"capability\":\"ApplyOps\",\"argument\":\"destination\",\"name\":\"origin\"},"

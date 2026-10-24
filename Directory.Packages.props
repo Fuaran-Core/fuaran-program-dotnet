@@ -35,5 +35,9 @@
     <PackageVersion Include="Fuaran.Compute.DataFrame" Version="0.41.0" />
     <PackageVersion Include="Fuaran.Core.Tree" Version="0.40.2" />
     <PackageVersion Include="Fuaran.Core.OpStream" Version="0.40.2" />
+    <!-- The unit algebra (Phase 2261): a leaf declares a named quantity typed by
+         it, and the demanded document carries the unit as `Unit.render` writes
+         it. Pinned at the substrate release the rest of Core is pinned at. -->
+    <PackageVersion Include="Fuaran.Core.Unit" Version="0.40.2" />
   </ItemGroup>
 </Project>
