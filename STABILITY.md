@@ -20,11 +20,11 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.12.0 — DRAFT, not yet cut — the program wire cites Core's JSON syntax and states its limits (Phase 2259)
+## 0.12.0 — the program wire cites Core's JSON syntax and states its limits (Phase 2259), and what rode the draft (Phases 2213, 2260, 2436, 2261)
 
 **Class: additive surface, narrowed decode.** `v0.11.0` is tagged, so this cannot ride it: the work
-lands for the `0.12.0` slot, which the version ledger opens (`<Version>` still reads `0.11.0` until
-that act). The substrate does not move: `Fuaran.Core.*` 0.40.2 already carries the strict grammar
+lands for the `0.12.0` slot, which the version ledger opened,
+released as `v0.12.0`. The substrate does not move: `Fuaran.Core.*` 0.40.2 already carries the strict grammar
 (fuaran-core#462) and the limits record (fuaran-core#465). DECISIONS.md D50 records the design.
 
 ### What a consumer gains

@@ -199,8 +199,9 @@
          DUs, and the demanded document moves to version 12. Phase 2261 rides it
          too: a leaf declares the quantities it spends (D54), three records gain a
          field, `CoverageFinding` gains two cases, the demanded document moves to
-         version 13 and `Fuaran.Core.Unit` joins the pins. STABILITY.md holds the
-         slot as a DRAFT until it is tagged. -->
+         version 13 and `Fuaran.Core.Unit` joins the pins. Phases 2213 and 2436
+         ride it too (non-empty handler and invocation members, D51 and D53).
+         Released as `v0.12.0`. -->
     <Version>0.12.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
