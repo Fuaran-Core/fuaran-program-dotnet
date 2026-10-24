@@ -4180,3 +4180,96 @@ not CONVERT between compatible units: a ceiling applies in the unit the program 
 algebra's `conversionFactor` stays unused at the gate until a host asks for it. It does not price a
 quantity per NODE of the tree: a node's render cost is the step budget's `treeCost`, and a quantity is
 spent by actions.
+
+## D55 — Argument policy gains a floor and an opt-in presence clause as two clauses of its OWN vocabulary, not Core's decode shapes: `AtLeast(argument, limit)` on `AtMost`'s reading, and `Required(argument)`, the one clause not vacuous over an absent argument, refused as `argument-required:<argument>`; the demanded document carries both at version 14 (2026-10-24)
+
+**Context.** The argument policy had a ceiling on a number (`AtMost`, Phase 1982) and no floor — D25
+deferred one because nothing needed it — and every clause reads an argument the effect does not name
+as vacuously satisfied (Phase 1975), by design: an allow-list bounds what an effect reaches under a
+name, and an effect naming nothing there reaches nothing there. The `device-langsec` target's first
+consumer, Fuaran-Micro (Phase 2264), needs both: a device must not read "no duration given" as "no
+limit", and a duration of zero minutes is as wrong as one of ten thousand.
+
+**Premises checked against the tree first.** The shard's `tests/Fuaran.Program.Server.Tests/` does
+not exist (fuaran#2012 folded the server suites into `Fuaran.Program.Tests`), so the tests land there,
+as Phases 2260 and 2261 reported. The demanded document was at version 13 (D54). The specification
+(`PROGRAM_WIRE.md`) enumerates no policy clause and no refusal token of the argument policy, so no
+specification text moves. Core is pinned at 0.40.2, and `Fuaran.Program` references `Fuaran.Core.Wire`
+only.
+
+**The decision this phase was asked to take first — reuse Core's decode-shape vocabulary, or grow the
+policy's own? Grow the policy's own, and keep it Core-shaped.** Core's shipped surface has two
+candidates. `Decoder.intRange lo hi` and `Decoder.closed known` (`Fuaran.Core.Wire`) decode ONE JSON
+value of a document under construction: a member is a member, absence is `MissingField` (or `Ok None`
+under `optField`), and the result is a decoded value or a `DecodeError`. `ValueSpace.IntRange(lo, hi)`
+with `Space.validate` (`Fuaran.Core.Function`) is a hole's value space at the invocation seam. Neither
+is the argument policy's question, for four reasons, each of which would have to be paid to reuse it:
+
+1. **The policy does not decode a document; it judges what an effect REACHES.** `arguments` flattens
+   five effect arms into `(argument, value)` pairs — a query's sources, an op's declared reach and
+   destination class, a finding's tokens, a host call's top-level members — and one argument may
+   occur many times (three `source` pairs, a `path` per op). Every value must satisfy the clause.
+   `intRange` reads one member of one object; the gate would have to re-wrap each pair as a `JInt`
+   to call it, and the multiplicity and the vacuous reading would still live here.
+2. **The integer reading differs, and the difference is a protection.** D25's R2 admits only the
+   canonical decimal spelling, because a second spelling of one number passes a bound under one
+   reading and reaches the performer under another. `Space.readInt` reads `05` as five, by its own
+   documented rule; reusing it would re-open exactly the hole R2 closed.
+3. **The closure of the clause set is the point** (`ServerConstraintClause`'s header): the demanded
+   document carries the host's declaration to a deployer as data, under one discriminator per clause.
+   Reusing `ValueSpace` would put a second, wider vocabulary (`FloatRange`, `StringLen`, `Enum`,
+   `SlotTree`) on that wire, none of which the gate judges, and move `atMost`'s wire shape — a
+   breaking change to a released clause in exchange for nothing a deployer reads differently.
+4. **It would add a dependency for one constructor.** `Fuaran.Core.Function` is referenced nowhere in
+   this repository; a package pin for the shape of two integers is the opposite of the long-term
+   doctrine's "reuse an existing seam", because the existing seam here is the policy's own
+   `integerOf` and its `AtMost` arm.
+
+**Closed objects** (`Decoder.closed`) answer a different question again — "refuse a member nobody
+declared" — which the policy can already say per argument with `AllowList`, and which the shard does
+not ask for. It is not added. What IS taken from Core is the SHAPE: `AtLeast` and `AtMost` on one
+argument are `intRange`, both ends inclusive; `Required` is `field` where every other clause is
+`optField`. A host that knows Core's vocabulary reads the policy's without a glossary.
+
+**The choice.** Two `ServerConstraintClause` cases, appended so `clauseOrder` extends rather than
+renumbers:
+
+- **`AtLeast(argument, limit)`** — every value under the argument must read as a canonical integer no
+  less than `limit`. `AtMost`'s reading exactly: a non-integer is refused rather than ignored, the
+  refusal is `OffList argument` (`argument-not-allowed:<argument>`), naming the argument the host
+  declared and never the value, and the clause is vacuously true where the effect names nothing under
+  the argument. The two integer bounds now share one reading, `everyInteger`, so they cannot drift.
+- **`Required(argument)`** — the effect must name at least one value under the argument. It decides
+  PRESENCE and nothing else, so it composes: `Required(minutes)` beside `AtLeast(minutes, 1)` refuses
+  no `minutes` under its own token and `0` under the floor's. Its refusal is a new
+  `ServerConstraintDefect.Missing argument`, rendered `argument-required:<argument>` — a token of its
+  own rather than `OffList`'s, because "no value was given" and "the value given is not admitted"
+  are different remedies for a program's author, and neither names a value. "Present" is the
+  policy's own reading of an argument: a host call's top-level string or integer member, never a
+  nested value or a boolean, so a `Required` over a nested member is refused as absent — the
+  conservative side, on the scope the policy module's header already states for every other clause.
+
+The default does not move: every clause other than `Required` keeps the allow-list's vacuous reading,
+and a host that declares no `Required` sees no behaviour change.
+
+**No stated law of the gate moves.** `proofs/EffectGate.fst` takes the argument policy as an
+arbitrary function (`r_policy`), and its staging theorems — `gate_before_perform`,
+`gate_refusal_halts_run`, `policy_sufficient` — hold for every policy. The two clauses are stateless,
+so the `decide` section Phase 2260 added (the windowed clauses, the only clauses the model states one
+by one) is untouched. No model is written first under D14, because there is no model this changes;
+`proofs.json` claims nothing new.
+
+**Version.** Breaking, and so not on the released `0.12.0`: `ServerConstraintClause` and
+`ServerConstraintDefect` gain cases (an exhaustive `match` breaks), and the demanded document moves to
+version 14 on version 12's argument — a discriminator selects a shape, so a reader pinned to version
+13 refuses either clause at the clause. A document for a host declaring neither differs from its
+version-13 bytes in the version alone; the in-repo demanded corpus is bumped in place, as Phases 2195,
+2260 and 2261 bumped it (its `previous-version` vector now carries 13, the version immediately before,
+as its description says; it had been left at 11).
+
+**What this does not do, stated.** It adds no floor or presence clause on any shape but an integer
+argument and a named argument: a string length, a real number and a nested member stay out of the
+vocabulary, by the closure argument above, until a consumer needs one. It does not extend the demanded
+corpus's `declared-argument-policy` vector with the two discriminators: that corpus is the UI tier's
+emitter's output and is regenerated there (it does not carry Phase 2260's windowed clauses either);
+the round trip of both is pinned here by `ArgumentFloorTests`.

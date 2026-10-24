@@ -619,6 +619,11 @@ type ServerConstraintDefect =
     /// the token the recorded run refused with, carried whole so a resumed run
     /// reports exactly the refusal the dead run reported. Rendered as itself.
     | Recorded of token: string
+    /// The effect names nothing under an argument the host declared `Required`
+    /// (Phase 2262, D55). A token of its own rather than `OffList`'s, because
+    /// "no value was given" and "the value given is not admitted" are different
+    /// remedies for the program's author, and neither names a value.
+    | Missing of argument: string
 
 /// The three limits over TIME one capability declares (Phase 2260, D52) —
 /// the windowed clauses of its argument policy, read together, because an
@@ -717,7 +722,9 @@ module WindowedLimit =
                     | Fuaran.Program.Bounded.ServerConstraintClause.Ceiling _
                     | Fuaran.Program.Bounded.ServerConstraintClause.Label _
                     | Fuaran.Program.Bounded.ServerConstraintClause.DenyList _
-                    | Fuaran.Program.Bounded.ServerConstraintClause.AtMost _ -> Ok declared))
+                    | Fuaran.Program.Bounded.ServerConstraintClause.AtMost _
+                    | Fuaran.Program.Bounded.ServerConstraintClause.AtLeast _
+                    | Fuaran.Program.Bounded.ServerConstraintClause.Required _ -> Ok declared))
             (Ok None)
 
 module WindowedLimiter =
@@ -1127,6 +1134,30 @@ module ServerArgumentPolicy =
 
             Some(if negative then -magnitude else magnitude)
 
+    /// The integer bounds' one reading (Phase 1982; Phase 2262 gave it its
+    /// second clause): the allow-list's reading over a number — vacuously true
+    /// when the effect names nothing under the argument, and every value it
+    /// does name must read as an integer `admits` accepts. A value that does
+    /// not read as one is refused under the allow-list's token, which names
+    /// the argument and never the value.
+    let private everyInteger
+        (ops: Fuaran.Program.Bounded.StateWitness<'Node, 'Op>)
+        (effect: ServerEffect<'Op>)
+        (argument: string)
+        (admits: int64 -> bool)
+        : Result<unit, ServerConstraintDefect> =
+        if
+            arguments ops effect
+            |> List.forall (fun (name, value) ->
+                name <> argument
+                || (match integerOf value with
+                    | Some n -> admits n
+                    | None -> false))
+        then
+            Ok()
+        else
+            Error(ServerConstraintDefect.OffList argument)
+
     /// Check one effect's arguments against one declared clause.
     ///
     /// `Label` decides NOTHING and admits everything, deliberately: it is a word
@@ -1175,22 +1206,19 @@ module ServerArgumentPolicy =
             else
                 Error(ServerConstraintDefect.OffList argument)
         | Fuaran.Program.Bounded.ServerConstraintClause.AtMost(argument, limit) ->
-            // Phase 1982 — the allow-list's reading over a number: vacuously
-            // true when the effect names nothing under the argument, and every
-            // value it does name must read as an integer no greater than the
-            // limit. A value that does not read as one is refused under the
-            // same token, which names the argument and never the value.
-            if
-                arguments ops effect
-                |> List.forall (fun (name, value) ->
-                    name <> argument
-                    || (match integerOf value with
-                        | Some n -> n <= int64 limit
-                        | None -> false))
-            then
+            everyInteger ops effect argument (fun n -> n <= int64 limit)
+        | Fuaran.Program.Bounded.ServerConstraintClause.AtLeast(argument, limit) ->
+            // Phase 2262 — `AtMost`'s reading with the other end bounded.
+            everyInteger ops effect argument (fun n -> n >= int64 limit)
+        | Fuaran.Program.Bounded.ServerConstraintClause.Required argument ->
+            // Phase 2262 — the one clause NOT vacuous over an absent argument,
+            // and it decides presence alone: a present value is the other
+            // clauses' to judge, so `Required` beside a floor refuses an
+            // absent value here and a low one there, each under its own token.
+            if arguments ops effect |> List.exists (fun (name, _) -> name = argument) then
                 Ok()
             else
-                Error(ServerConstraintDefect.OffList argument)
+                Error(ServerConstraintDefect.Missing argument)
         // The windowed clauses (Phase 2260) are decided TOGETHER, after every
         // stateless clause, by `check` through the registry's limiter: an
         // admission is counted only once the whole policy has admitted the
@@ -1274,6 +1302,7 @@ module ServerArgumentPolicy =
         | ServerConstraintDefect.WithinDwell window -> "within-dwell:" + string window
         | ServerConstraintDefect.Unjudgeable reason -> "limit-unjudgeable:" + reason
         | ServerConstraintDefect.Recorded token -> token
+        | ServerConstraintDefect.Missing argument -> "argument-required:" + argument
 
 // ============================================================================
 //  WINDOWED LIMITS (Phase 2260, D52): the one decision the gate takes from a

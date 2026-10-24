@@ -90,7 +90,7 @@ registry
          ServerConstraintClause.Label "pii" ]
 ```
 
-Three clauses, closed: an **allow-list** over one named argument, a **ceiling** on the declarative
+The first three clauses of a closed set: an **allow-list** over one named argument, a **ceiling** on the declarative
 payload's canonical bytes, and a **label** that is carried for a deployer and decides nothing. The
 check runs in the gate's own position — after the capability is admitted by name, and still before
 the pipeline, the apply engine and the performer lookup — so an off-list endpoint is refused with
@@ -106,12 +106,35 @@ admitted — it can never widen one it refused.
 **A capability nobody constrained is unconstrained**, exactly as a host that declares no call surface
 is not checked against one, so a host that declares nothing behaves as it did before this existed.
 Two limits are stated rather than assumed: a host call's arguments are read **one level deep** and
-string-valued only, so a bound belongs on the top-level argument the performer takes; and a ceiling
-bounds a **declarative payload** — a host call's arguments, a notification's payload — never an op
-sequence.
+string- or integer-valued only, so a bound belongs on the top-level argument the performer takes; and a ceiling
+bounds a **declarative payload** — a host call's arguments, a notification's payload, an op
+sequence's canonically encoded ops — never a query's pipeline.
 
 The declared policy travels in the capability envelope below, so a deployer reads *HTTP to
 api.example.com, ≤ 64 KB* rather than *HTTP*.
+
+### A floor, and an argument that must be given
+
+Every clause reads an argument the effect does not name as satisfied: an allow-list bounds what an
+effect reaches under a name, and an effect naming nothing there reaches nothing there. For a device
+that reading is a hole — "no duration given" must not mean "no limit" — so two clauses close it
+(Phase 2262):
+
+```fsharp
+registry
+|> ServerEffectRegistry.constrain
+       "host:heat"
+       [ ServerConstraintClause.Required "minutes"
+         ServerConstraintClause.AtLeast("minutes", 1)
+         ServerConstraintClause.AtMost("minutes", 30) ]
+```
+
+`AtLeast` is `AtMost`'s reading with the other end bounded — canonical decimal integers only, a
+value that is not one refused, an absent argument vacuously satisfied — so the pair is an inclusive
+range. `Required` is the one clause that is **not** vacuous over an absent argument, and it decides
+presence alone: a call with no `minutes` is refused `argument-required:minutes`, a call with `0`
+`argument-not-allowed:minutes`. It is opt-in; a policy that declares no `Required` reads exactly as
+it did.
 
 ### Limits over time: a count per window, a quantity per window, a dwell
 

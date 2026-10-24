@@ -145,9 +145,9 @@ let projection =
 let document =
     testList
         "Phase 2130 — the demanded document carries opaqueLeaves at version 8"
-        [ test "the version is 13, and it is the only one read" {
-              Expect.equal Demanded.Version 13 "the version"
-              Expect.equal Demanded.decodableVersions [ 13 ] "the versions read"
+        [ test "the version is 14, and it is the only one read" {
+              Expect.equal Demanded.Version 14 "the version"
+              Expect.equal Demanded.decodableVersions [ 14 ] "the versions read"
           }
 
           test "the member is encoded between iterations and values, and round-trips" {

@@ -453,7 +453,7 @@ let private journal =
 let private demanded =
     testList
         "the demanded document"
-        [ test "the three clauses ride the document at version 13 and read back clause for clause" {
+        [ test "the three clauses ride the document (since version 12) and read back clause for clause" {
               let performed = ref 0
 
               let registry =
@@ -468,8 +468,8 @@ let private demanded =
                   |> ServerDemanded.withConstraints registry
 
               let document = Demanded.encode projection
-              Expect.equal Demanded.Version 13 "the version Phase 2261 moved it to; the clauses rode 12"
-              Expect.stringContains document "\"version\":13" "carried in the document"
+              Expect.equal Demanded.Version 14 "the version Phase 2262 moved it to; the clauses rode 12"
+              Expect.stringContains document "\"version\":14" "carried in the document"
 
               Expect.stringContains
                   document

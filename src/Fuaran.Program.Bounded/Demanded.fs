@@ -172,7 +172,7 @@ type UndoPosture =
 /// One clause of a capability's declared argument policy — the vocabulary a
 /// host writes a bound in, and the one this document carries it in.
 ///
-/// **A closed set of eight, and the closure is the point**: this is what a
+/// **A closed set of ten, and the closure is the point**: this is what a
 /// policy gate can decide about an effect's ARGUMENTS without interpreting a
 /// payload, so a further kind is a deliberate widening of what the gate reasons
 /// over rather than a new option on a record. The fourth, `DenyList`, was such a
@@ -183,9 +183,13 @@ type UndoPosture =
 /// `QuantityPerWindow` and `Dwell` (Phase 2260) — are the first clauses decided
 /// from a STATE rather than from the effect alone: a limit over time, kept in
 /// counters the store holds under the host-reserved prefix and judged against a
-/// clock reading the host supplies once per invocation. Every number here is a
-/// 32-bit integer, as every other number in this document is; a window and a
-/// dwell are in the HOST CLOCK's unit, whatever unit the host reads it in.
+/// clock reading the host supplies once per invocation. `AtLeast` and
+/// `Required` (Phase 2262, D55) close the two holes a device's interface met
+/// first: a number had a ceiling and no floor, and an argument the effect never
+/// named passed every clause vacuously, so "no duration given" read as "no
+/// limit". Every number here is a 32-bit integer, as every other number in this
+/// document is; a window and a dwell are in the HOST CLOCK's unit, whatever
+/// unit the host reads it in.
 ///
 /// **A clause is PRESENT or it is not; there is no "unconstrained" clause.** An
 /// argument nobody allow-listed, a payload nobody bounded and a capability
@@ -241,6 +245,20 @@ type ServerConstraintClause =
     /// capability (Phase 2260): a minimum dwell. A decision inside it is
     /// refused; one at or past it is admitted on the other clauses' terms.
     | Dwell of window: int
+    /// A floor on one named argument's INTEGER value (Phase 2262, D55): every
+    /// value under the argument must be an integer no LESS than `limit`. On
+    /// `AtMost`'s reading exactly — canonical decimal only, a value that does
+    /// not read as an integer refused rather than ignored, and vacuously true
+    /// where the effect names nothing under the argument. `AtLeast` and
+    /// `AtMost` on one argument are Core's `intRange`, both ends inclusive.
+    | AtLeast of argument: string * limit: int
+    /// The named argument must be PRESENT (Phase 2262, D55): the effect names
+    /// at least one value under it. The one clause that is not vacuous over an
+    /// absent argument — opt-in, so every other clause keeps the allow-list's
+    /// reading, and a host that wants "no duration given" refused rather than
+    /// read as "no limit" says so here. It decides presence and nothing else:
+    /// what the value may be is the other clauses' business.
+    | Required of argument: string
 
 /// One capability's declared argument policy, as the document carries it.
 ///
@@ -954,6 +972,8 @@ module Demanded =
         | ServerConstraintClause.PerWindow _ -> 5, ""
         | ServerConstraintClause.QuantityPerWindow(argument, _, _) -> 6, argument
         | ServerConstraintClause.Dwell _ -> 7, ""
+        | ServerConstraintClause.AtLeast(argument, _) -> 8, argument
+        | ServerConstraintClause.Required argument -> 9, argument
 
     /// One entry per (name, unit), the worst cases of the same quantity SUMMED
     /// in saturating arithmetic, sorted by name then unit (Phase 2261). The sum
@@ -1267,7 +1287,7 @@ module Demanded =
     /// The version this encoder emits, and — see `decodableVersions` — the only
     /// one this reader reads.
     [<Literal>]
-    let Version = 13
+    let Version = 14
 
     // The policy clause's discriminator, written once and read once. A literal
     // spelled at the encoder and again at the reader is the drift this document
@@ -1295,6 +1315,12 @@ module Demanded =
 
     [<Literal>]
     let ClauseDwell = "dwell"
+
+    [<Literal>]
+    let ClauseAtLeast = "atLeast"
+
+    [<Literal>]
+    let ClauseRequired = "required"
 
     /// The three common control characters keep their short escapes; every other
     /// control character (U+0000–U+001F) is escaped as `\u00XX`. A raw control
@@ -1448,6 +1474,13 @@ module Demanded =
     /// ceiling on heater-minutes is the last reader that should take the first
     /// for the second. A document for a program declaring no quantity differs
     /// from its version-12 bytes in the version and the empty member.
+    ///
+    /// **Version 14 widens the policy-clause vocabulary again** (Phase 2262,
+    /// D55): `atLeast` and `required` join the clause discriminators. No member
+    /// moves. The version moves on version 12's argument — a discriminator
+    /// selects a shape, so a reader pinned to version 13 refuses either at the
+    /// clause — and a document for a host declaring neither differs from its
+    /// version-13 bytes in the version alone.
     let encode (projection: DemandedProjection) : string =
         let effects = projection.Effects |> List.map q |> arr
 
@@ -1560,7 +1593,11 @@ module Demanded =
                                 | ServerConstraintClause.QuantityPerWindow(argument, quantity, window) ->
                                     $"""{{"clause":{q ClauseQuantityPerWindow},"argument":{q argument},"quantity":{quantity},"window":{window}}}"""
                                 | ServerConstraintClause.Dwell window ->
-                                    $"""{{"clause":{q ClauseDwell},"window":{window}}}""")
+                                    $"""{{"clause":{q ClauseDwell},"window":{window}}}"""
+                                | ServerConstraintClause.AtLeast(argument, limit) ->
+                                    $"""{{"clause":{q ClauseAtLeast},"argument":{q argument},"limit":{limit}}}"""
+                                | ServerConstraintClause.Required argument ->
+                                    $"""{{"clause":{q ClauseRequired},"argument":{q argument}}}""")
                             |> arr
 
                         $"""{{"capability":{q c.Capability},"clauses":{clauses}}}""")
@@ -2117,6 +2154,16 @@ module Demanded =
                 declaredOnly version path [ "clause"; "window" ] value
                 |> Result.bind (fun () -> requireInt version (child path "window") "window" value)
                 |> Result.map ServerConstraintClause.Dwell
+            | ClauseAtLeast ->
+                declaredOnly version path [ "clause"; "argument"; "limit" ] value
+                |> Result.bind (fun () -> requireString version (child path "argument") "argument" value)
+                |> Result.bind (fun argument ->
+                    requireInt version (child path "limit") "limit" value
+                    |> Result.map (fun limit -> ServerConstraintClause.AtLeast(argument, limit)))
+            | ClauseRequired ->
+                declaredOnly version path [ "clause"; "argument" ] value
+                |> Result.bind (fun () -> requireString version (child path "argument") "argument" value)
+                |> Result.map ServerConstraintClause.Required
             | other ->
                 failWith
                     DemandedDefect.WrongType

@@ -20,6 +20,44 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
+## 0.13.0 — DRAFT, not yet cut — argument policy gains a floor and an opt-in Required clause (Phase 2262)
+
+**Class: breaking.** `v0.12.0` is tagged, so this cannot ride it: two closed DUs gain cases and the
+demanded document's version moves, so the work lands for the `0.13.0` slot, which the version ledger
+opens. The substrate does not move. `DECISIONS.md` D55 records the design, including why the clauses
+are the policy's own rather than Core's `intRange` / `closed` decode shapes.
+
+### What a consumer gains
+
+- Two policy clauses on `ServerConstraintClause`: `AtLeast(argument, limit)` — every value under the
+  argument must be a canonical integer no less than `limit`, on `AtMost`'s reading (a non-integer
+  refused, an absent argument vacuously satisfied), refused `argument-not-allowed:<argument>`; and
+  `Required(argument)` — the effect must name the argument, the one clause NOT vacuous over an absent
+  argument, refused `argument-required:<argument>`. Declared with `constrain`, carried by
+  `withConstraints`, decided by `ServerArgumentPolicy.check` in declaration order with the other
+  stateless clauses.
+- One defect on `ServerConstraintDefect`: `Missing argument`, rendered `argument-required:<argument>`.
+- The demanded document's clause discriminators `atLeast` (`argument`, `limit`) and `required`
+  (`argument`).
+
+### What a consumer pays
+
+- **Two closed DUs gain cases**: an exhaustive `match` over `ServerConstraintClause` (two new) or
+  `ServerConstraintDefect` (one new) must take them.
+- **The demanded document moves to version 14.** `Demanded.Version` and `decodableVersions` are `14`;
+  a version-13 document is refused `UnknownVersion`, and an envelope signed under version 13 reports
+  `Unreadable` drift until re-signed. A reader pinned to 13 refuses the two discriminators at the
+  clause. A document for a host declaring neither clause differs from its version-13 bytes in the
+  version alone.
+
+### What did not move
+
+Every existing clause's reading — `Required` is opt-in, and the vacuous reading of an absent argument
+stands for every other clause — every denial and refusal token, every byte any encoder writes for a
+host declaring neither clause (the demanded document's version excepted), the specification, and
+every theorem in `proofs/EffectGate.fst`: the staging theorems quantify over an arbitrary argument
+policy, and the two clauses are stateless.
+
 ## 0.12.0 — the program wire cites Core's JSON syntax and states its limits (Phase 2259), and what rode the draft (Phases 2213, 2260, 2436, 2261)
 
 **Class: additive surface, narrowed decode.** `v0.11.0` is tagged, so this cannot ride it: the work

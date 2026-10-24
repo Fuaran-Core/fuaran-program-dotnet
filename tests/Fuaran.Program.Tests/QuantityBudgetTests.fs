@@ -141,12 +141,12 @@ let private document =
                   "what is joined runs together: the sum, which is a bound either way"
           }
 
-          test "the document carries the quantities at version 13 and reads back whole" {
+          test "the document carries the quantities (since version 13) and reads back whole" {
               let projection = Demanded.ofTree witness (treeOf [ "run", workedExample ])
               let encoded = Demanded.encode projection
 
-              Expect.equal Demanded.Version 13 "the version the quantities widened"
-              Expect.stringContains encoded "\"version\":13" "carried in the document"
+              Expect.equal Demanded.Version 14 "the version Phase 2262 moved it to; the quantities rode 13"
+              Expect.stringContains encoded "\"version\":14" "carried in the document"
 
               Expect.stringContains
                   encoded

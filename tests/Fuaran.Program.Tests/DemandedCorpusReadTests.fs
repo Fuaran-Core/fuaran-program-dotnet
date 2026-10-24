@@ -150,7 +150,16 @@ let private renderTier (tier: ServerDemand option) =
                             + string window
                             + "}"
                         | ServerConstraintClause.Dwell window ->
-                            "{\"clause\":\"dwell\",\"window\":" + string window + "}")
+                            "{\"clause\":\"dwell\",\"window\":" + string window + "}"
+                        // The floor and the presence clause (Phase 2262).
+                        | ServerConstraintClause.AtLeast(argument, limit) ->
+                            "{\"clause\":\"atLeast\",\"argument\":"
+                            + q argument
+                            + ",\"limit\":"
+                            + string limit
+                            + "}"
+                        | ServerConstraintClause.Required argument ->
+                            "{\"clause\":\"required\",\"argument\":" + q argument + "}")
                     |> arr
 
                 "{\"capability\":" + q c.Capability + ",\"clauses\":" + clauses + "}")
