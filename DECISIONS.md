@@ -4042,6 +4042,55 @@ theorem here: the counter-level invariants are, and `proofs.json` keeps the trac
 not-claimed rung with that reason. A second declaration of one kind on one capability replaces the
 first, on `constrain`'s and the throttle's terms.
 
+## D53 — The invocation's `endpoint` and `nodeId` are held non-empty by the SAME check the handler decoder uses, which moves down to `ProgramWire`; an empty one is refused on `missing-member`; the corpus vectors wait on the specification's `phase-2213` branch (2026-10-24)
+
+**2026-10-24. Phase 2436** (the first of the three disagreements D51 reported rather than guessed at).
+`PROGRAM_WIRE.md` §8.3 gives the invocation document's `endpoint` and `nodeId` the type "string,
+non-empty". `ProgramWire.decodeInvocation` read both with `requireString`, so an invocation naming no
+entry point, or no originating node, decoded. This host accepted documents the specification it
+certifies against calls malformed.
+
+**Premises checked against the tree first.** (1) *The invocation decoder checks neither member.* True:
+both went through `requireString` and nothing else. (2) *D51's helper sits one tier above this decoder.*
+True: `HandlerWire.requireNonEmpty` was private to `Fuaran.Program.Server`, and `Fuaran.Program.Bounded`,
+where the invocation decoder lives, is the tier `Server` depends on. (3) *Only this repository certifies
+the toy subject, so toy vectors are safe on the specification's main.* No longer true, and also beside
+the point: a second host now certifies the toy subject, and the invocation is a vocabulary-free
+document, which every host runs at whichever subject it certifies. There is no toy copy to make.
+
+**Decided: one check, one tier down.** `ProgramWire.requireNonEmpty` is the helper D51 wrote, moved
+beside `requireString` and made public; `HandlerWire` deletes its private copy and calls it, and
+`decodeInvocation` calls it for both members. The class (`missing-member`, the class an absent member
+is refused on) and the detail (`member '<name>' is empty`) are D51's exactly, so every handler refusal
+is unchanged and the two decoders cannot drift. §8.3 names no class for an empty member; the one the
+handler document's §5.1 uses is the reading that keeps the specification's one rule one rule.
+
+**Decided: the encoder does not refuse.** As in D51: an empty member in a typed `InvocationRecord` is a
+construction the host made. The encoder writes it as it is, and the decoder refuses what it wrote.
+
+**The rest of the file.** Section 8 marks only these two members, and the key, non-empty; the key was
+already refused present-and-empty on its own class. The logic-tree reference's `ref` (§9.2) is already
+refused empty, with its own detail and a length cap, so it keeps its own check.
+
+**Where the vectors go.** `invocation/reject-empty-endpoint` and `invocation/reject-empty-node-id`, each
+refused as `missing-member`. Run against a specification checkout carrying them, this repository's
+suite and the Rust toy-subject host's both stay green; the downstream host certifying the referenced
+subject accepts the empty endpoint, because its released codec predates this rule. A vector reaches
+the specification's main only when every host that runs it stays green, so both ride the `phase-2213`
+branch beside D51's referenced-subject counterparts, for the same raise.
+
+**Why the class is the draft's.** One public member is added and documents no conformant encoder writes
+stop decoding: the narrowed decode the `0.12.0` draft already carries. It rides that draft.
+
+**Not done here.** `HostCall`'s `into` and an outcome notification's `channel` stay as D51 left them:
+the schemas mark them non-empty and the text does not, and that is the specification's question to
+settle, not this decoder's.
+
+Files reviewed for the tidy: `ProgramWire.fs`, `HandlerWire.fs`, the test project, `DECISIONS.md` and
+`STABILITY.md`. Removed: `HandlerWire`'s private `requireNonEmpty`, replaced by the one in
+`ProgramWire`. Considered and kept: the reference decoder's empty-`ref` check (its own detail and a
+length cap), and the control journal's own `requireNonEmpty` in `Journal.fs`, which refuses on
+`empty-name`, a different class, for a document the specification does not define.
 ## D54 — A leaf DECLARES the named quantities it spends, typed by the Core unit algebra; the budget prices each with D35's rules and no step, saturating; the demanded document carries the worst case per (name, unit) at version 13; a host's ceiling in the same unit refuses an over-ceiling program before the first stage, and converts nothing (2026-10-24)
 
 **Context.** `Budget.actionCascadeCost` prices one quantity — the STEP — and the G2 gate refuses on it

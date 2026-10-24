@@ -127,6 +127,26 @@ declaring no windowed clause (the demanded document's version excepted), and eve
 `proofs/EffectGate.fst` above the new section: the staging theorems quantify over the policy arrow
 the decision is composed into.
 
+### Rides the draft: the invocation decoder refuses an empty endpoint and an empty nodeId (Phase 2436)
+
+**Class: additive surface, narrowed decode** — the draft's own class, so it rides rather than advances
+it. One public member is added and nothing moves. `DECISIONS.md` D53 records what was decided.
+
+**What a consumer pays: documents that decoded before are refused.** `PROGRAM_WIRE.md` §8.3 says an
+invocation's `endpoint` and `nodeId` are non-empty strings, and `ProgramWire.decodeInvocation` read both
+with a bare string check. Now it refuses an invocation whose `endpoint` is `""` or whose `nodeId` is
+`""`, on `missing-member`, with the detail `member '<name>' is empty` — the class and sentence the
+handler decoder gives `fn`, `name` and `channel`. A caller that stored such an invocation can no longer
+read it back. No conformant encoder writes one.
+
+**What a consumer gains: `ProgramWire.requireNonEmpty`.** The check Phase 2213 wrote as a private helper
+in `HandlerWire` now lives once in `Fuaran.Program.Bounded`, beside `requireString`, and both decoders
+call it. `HandlerWire`'s refusals are byte-for-byte unchanged.
+
+**What did not move:** every encoder. A typed `InvocationRecord` with an empty `Endpoint` or `NodeId`
+still encodes; the document it encodes to is the one now refused, so such a record round-trips only
+when both members are non-empty. The idempotency key's two refusals, and their order after these, are
+unchanged.
 ### Rides the draft: a domain declares a quantity per leaf, and the budget prices its worst case before the program runs (Phase 2261)
 
 **Class: breaking** — the draft's own class, so it rides rather than advances it. `DECISIONS.md` D54

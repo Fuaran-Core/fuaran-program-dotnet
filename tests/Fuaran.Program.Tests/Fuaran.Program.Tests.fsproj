@@ -71,6 +71,7 @@
     <Compile Include="ReceiptTests.fs" />
     <Compile Include="ReportTests.fs" />
     <Compile Include="NonEmptyMemberTests.fs" />
+    <Compile Include="InvocationNonEmptyTests.fs" />
     <!-- Phase 2220 (D47): the derived view. -->
     <Compile Include="DerivedViewTests.fs" />
     <Compile Include="WindowedLimitTests.fs" />

@@ -327,6 +327,20 @@ module ProgramWire =
             | JStr s -> Ok s
             | _ -> refuse RefusalClass.MissingMember ("member '" + name + "' is not a string"))
 
+    /// A member the specification marks non-empty: the handler document's `fn`,
+    /// `name`, `channel`, `code` and `severity` (§5.1; Phase 2213, D51) and the
+    /// invocation's `endpoint` and `nodeId` (§8.3; Phase 2436, D53). Present and
+    /// empty is refused on the class an absent one is, because an empty name
+    /// names nothing a host could hold; the refusal names the member, never the
+    /// token. One copy, here, so the two decoders cannot drift apart.
+    let requireNonEmpty (name: string) (value: JVal) : Result<string, WireRefusal> =
+        requireString name value
+        |> Result.bind (fun text ->
+            if text = "" then
+                refuse RefusalClass.MissingMember ("member '" + name + "' is empty")
+            else
+                Ok text)
+
     let tryString (name: string) (value: JVal) : string option =
         match tryMember name value with
         | Some(JStr s) -> Some s
@@ -858,9 +872,9 @@ module ProgramWire =
 
     let decodeInvocation (value: JVal) : Result<InvocationRecord, WireRefusal> =
         declaredOnly [ "$type"; "endpoint"; "idempotencyKey"; "nodeId" ] value
-        |> Result.bind (fun () -> requireString "endpoint" value)
+        |> Result.bind (fun () -> requireNonEmpty "endpoint" value)
         |> Result.bind (fun endpoint ->
-            requireString "nodeId" value
+            requireNonEmpty "nodeId" value
             |> Result.bind (fun nodeId ->
                 // Present-and-empty is a DIFFERENT claim from absent: only
                 // omission means "this caller is not asking for deduplication",
