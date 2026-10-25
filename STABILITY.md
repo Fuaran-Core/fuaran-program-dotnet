@@ -20,6 +20,39 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
+## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
+
+**Class: no contract change.** `v0.13.0` is tagged, so this cannot ride it: the work lands for the
+`0.13.1` slot. No public type or member moves; the rendered public surface of `Fuaran.Program.Server`
+is identical to `v0.13.0`'s. `DECISIONS.md` D57 records the design and the measurements.
+
+### What a consumer gains
+
+- **A single typed read no longer hashes its content.** `Reads.Read` memoises a decode per codec name
+  and subject, and computes a SHA-256 only once a slot's content has moved within the run. On a 21 MB
+  store document the hash was about 190 ms of a read whose decode is about 830 ms; the bench
+  (`tests/Fuaran.Program.Bench`) measured a single read at 990 ms before and 780–843 ms after, which is
+  the decode alone within its noise.
+- **A second read of unchanged content is served by an ordinal comparison**, about 1 ms on the same
+  document where it was a 190 ms hash.
+
+### What a consumer pays
+
+- **Nothing in code.** One behaviour is observable through `Decodes` and only there: an equal content
+  read under two DIFFERENT subjects now decodes once per subject, where 0.13.0 decoded it once for
+  both. A host that reads the same bytes under two names and asserts on `Decodes` sees the count move.
+- A slot's first read holds its content until the slot's content moves or the run ends; the decode the
+  memo already held is usually larger.
+
+### What did not move
+
+What the memo may serve: a decode of a content equal to this read's, never a key over store metadata,
+so a same-length rewrite inside one clock tick still decodes fresh. Each read is still its own
+journaled answer recording the content (D39, D41), a resumed run still decodes the recorded content,
+and every byte any encoder writes is unchanged. The journalled clock read (D52) is unchanged: measured
+at about 4.5 µs of Program-side cost per invocation, clock read and one windowed decision together,
+with four journal appends (D57 states why none of it is removable).
+
 ## 0.13.0 — argument policy gains a floor and an opt-in Required clause (Phase 2262)
 
 **Class: breaking.** `v0.12.0` is tagged, so this cannot ride it: two closed DUs gain cases and the

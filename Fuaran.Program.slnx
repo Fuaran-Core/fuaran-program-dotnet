@@ -7,5 +7,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Fuaran.Program.Tests/Fuaran.Program.Tests.fsproj" />
+    <Project Path="tests/Fuaran.Program.Bench/Fuaran.Program.Bench.fsproj" />
   </Folder>
 </Solution>

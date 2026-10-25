@@ -209,7 +209,12 @@
          document moves to version 14 (DECISIONS.md D55). Phase 2263 adds the
          profile-scoped conformance leg and moves no surface.
          Released as `v0.13.0`. -->
-    <Version>0.13.0</Version>
+    <!-- 0.13.1 — fuaran#2461. ADVANCES rather than rides: v0.13.0 is TAGGED.
+         A typed read hashes its content only when a second read of the same
+         codec and subject could use the memo (DECISIONS.md D57). No public
+         type or member moves (the rendered surface of every package is
+         unchanged); a cost leaves the common path. -->
+    <Version>0.13.1</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
          else. Undeclared would read as `local-feed`, under which a pin only this

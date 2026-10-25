@@ -66,7 +66,9 @@ let private shapeOf (action: ToyAction) : string =
 /// (`FUARAN_PROGRAM_FAMILIES`) — except in a suite listed in `ignoresSelection`,
 /// which reads its families on every run.
 let certifies: (string * string list) list =
-    [ "Fuaran.Program.Parity.Fable", [ Family ]
+    [ // fuaran#2461: the bench times reads and a durable invocation, and reads no family.
+      "Fuaran.Program.Bench", []
+      "Fuaran.Program.Parity.Fable", [ Family ]
       "Fuaran.Program.Tests", [ Family ] ]
 
 /// The declared families this repository does NOT certify, each with where it

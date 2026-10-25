@@ -1,7 +1,7 @@
 # Tests
 
-One Expecto assembly runner, plus the Fable parity leg. `pwsh ./run.ps1` runs both; `-SkipFable`
-drops the second. `-Lane fast` runs the runner but skips the Fable leg, and `-Lane pure` — whose
+One Expecto assembly runner, the bench (fuaran#2461), plus the Fable parity leg. `pwsh ./run.ps1` runs all three; `-SkipFable`
+drops the last. `-Lane fast` runs the runner and the bench but skips the Fable leg, and `-Lane pure` — whose
 runner list is empty since fuaran#2012 — builds and runs no suite — see
 [Gate lanes](../README.md#gate-lanes).
 
@@ -9,6 +9,7 @@ runner list is empty since fuaran#2012 — builds and runs no suite — see
 |---|---|
 | `Fuaran.Program.Tests` | the skeleton package; the generic core at a NON-UI toy witness (`ToyDomain.fs`): the specification's `driver-semantics-toy` family and toy-subject wire vectors, the proof oracle's differentials, the demanded corpus's readings, the core's source guards, and the boundary test that nothing in this repository references the UI tier, declared or resolved |
 | `Fuaran.Program.Parity.Fable` | the toy family's tier-parity leg (c) — the shared runner compiled to JavaScript and run under node |
+| `Fuaran.Program.Bench` | fuaran#2461: the cost of one large typed read (decode, hash, single and repeat reads) and of the journalled clock read, median of N; the gate runs its quick mode (1 MB, N = 5) and fails only on a functional check, `-- --measure` is the 21 MB run DECISIONS.md D57 records |
 
 **The UI-typed suites left with the UI adapters (fuaran#2012, DECISIONS.md D32).** The bounded,
 runtime, server and parity suites, the parity project, the `RunQuery` benchmark, the UI-vocabulary

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- fuaran#2461: the cost of a typed read and of the journalled clock read,
+       median of N. The gate runs it like every Exe under tests/, in its quick
+       mode (a small store, few repetitions, a functional check on what it
+       timed); run with the `measure` switch (see Program.fs) is the measured run whose figures
+       DECISIONS.md D57 records. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The toy witness, linked as source rather than referenced through the
+         test runner: the clock-read measurement runs a durable invocation over
+         it, and a bench that referenced an Expecto runner would carry it. -->
+    <Compile Include="..\Fuaran.Program.Tests\ToyDomain.fs" Link="ToyDomain.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Fuaran.Program.Bounded\Fuaran.Program.Bounded.fsproj" />
+    <ProjectReference Include="..\..\src\Fuaran.Program.Runtime\Fuaran.Program.Runtime.fsproj" />
+    <ProjectReference Include="..\..\src\Fuaran.Program.Server\Fuaran.Program.Server.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+</Project>

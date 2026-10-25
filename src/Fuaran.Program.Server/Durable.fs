@@ -211,6 +211,15 @@ module ReadRecord =
         | Fuaran.Core.JObj [ name, Fuaran.Core.JStr reason ] when name = UnavailableMember -> Ok(Error reason)
         | _ -> Error Malformed
 
+/// One (codec, subject)'s memo within a run (fuaran#2461). Every read of the
+/// pair so far answered ONE content: it is held as read, with its decode, and
+/// nothing has been hashed. The first read whose content differs promotes the
+/// slot to decodes keyed by a SHA-256 over each content, and the content
+/// strings are released.
+type private ReadSlot =
+    | Unhashed of content: string * decoded: obj
+    | ByContent of System.Collections.Generic.Dictionary<string, obj>
+
 /// **The typed, codec-named reads of ONE run** (Phase 2175, D41), over the
 /// run's `EntryReader` — so every read is journaled at its ordinal and served
 /// on replay exactly as 2165's entry read is (D39), and a resumed run decodes
@@ -233,23 +242,42 @@ module ReadRecord =
 ///     that precedes its first performed op — any `Apply` of the plan phase,
 ///     since every op is performed after the plan completes (D8) — can
 ///     therefore refuse "this run could not read X" without host machinery.
-///   * The DECODE is memoised for the run, keyed by the codec's name and a
-///     SHA-256 over the content read — never by metadata about the store, which
-///     a same-length rewrite inside one tick of a coarse clock leaves
-///     unchanged. A second read of an unchanged store decodes nothing; a read
-///     whose content moved decodes the new content. The raw read itself is
-///     never memoised: each read is its own journaled answer, so the memo can
-///     only ever serve a decode of the bytes this read answered — on a resume,
-///     the journaled bytes. `Decodes` counts what the codecs actually ran.
+///   * The DECODE is memoised for the run by CONTENT — never by metadata about
+///     the store, which a same-length rewrite inside one tick of a coarse clock
+///     leaves unchanged — and a content hash is computed only when a read
+///     could be served by an earlier decode whose content differs from its
+///     own (fuaran#2461, amending D41's cost). The memo is slotted by codec
+///     name and subject. A slot's first read decodes and holds the content it
+///     read, unhashed, so a single read hashes nothing. A later read of the
+///     slot is served the held decode when its content is ordinally EQUAL to
+///     the held content, which hashes nothing either. The first read whose
+///     content differs hashes both contents once, keys the slot's decodes by
+///     those hashes and releases the held content; from then on each read of
+///     the slot hashes its own content and is served a decode only under an
+///     equal hash. `Decodes` counts what the codecs actually ran.
+///
+/// **Why a served decode is always the decode of this read's content.** The
+/// memo serves `d` to a read of content `c` only when `d` was produced by the
+/// same-named codec from a content `c'` that is ordinally equal to `c`, or
+/// whose SHA-256 equals `c`'s — the collision resistance D41 already relied
+/// on. A codec is a pure function of its content (`ReadCodec`), so serving
+/// `d` is indistinguishable from decoding `c`. Nothing about the store but its
+/// content reaches the comparison, so a same-length rewrite inside one clock
+/// tick decodes fresh. And the raw read itself is never memoised: each read
+/// is its own journaled answer, so the memo can only ever serve a decode of
+/// the bytes this read answered — on a resume, the journaled bytes (D39).
 ///
 /// Mutable for the reason the run's cursor is: the plan fold it is threaded
 /// through does not know it exists. It is deterministic under replay — the
 /// same served answers, in the same order, rebuild the same ledger and memo.
 [<Sealed>]
 type Reads(reader: EntryReader) =
-    let memo = System.Collections.Generic.Dictionary<string, obj>()
+    let slots =
+        System.Collections.Generic.Dictionary<struct (string * string), ReadSlot>()
+
     let degraded = ResizeArray<ReadUnavailable>()
     let mutable decodes = 0
+    let mutable contentHashes = 0
 
     let unavailable (subject: string) (cause: ReadCause) =
         let why = { Subject = subject; Cause = cause }
@@ -258,6 +286,46 @@ type Reads(reader: EntryReader) =
             degraded.Add why
 
         why
+
+    let hash (content: string) =
+        contentHashes <- contentHashes + 1
+        Fuaran.Core.Hash.sha256Hex content
+
+    /// The decode of `content` the slot's memo holds, or a fresh one recorded
+    /// under the slot's content key.
+    let decodeIn (slot: struct (string * string)) (codec: ReadCodec<'T>) (content: string) : Result<'T, string> =
+        let decode () =
+            decodes <- decodes + 1
+            codec.Decode content
+
+        let byContent (keyed: System.Collections.Generic.Dictionary<string, obj>) =
+            let key = hash content
+
+            match keyed.TryGetValue key with
+            | true, (:? Result<'T, string> as known) -> known
+            | _ ->
+                let fresh = decode ()
+                keyed[key] <- box fresh
+                fresh
+
+        match slots.TryGetValue slot with
+        | true, Unhashed(held, (:? Result<'T, string> as known)) when
+            System.String.Equals(held, content, System.StringComparison.Ordinal)
+            ->
+            known
+        | true, Unhashed(held, decoded) when not (System.String.Equals(held, content, System.StringComparison.Ordinal)) ->
+            let keyed = System.Collections.Generic.Dictionary<string, obj>()
+            keyed[hash held] <- decoded
+            slots[slot] <- ByContent keyed
+            byContent keyed
+        | true, ByContent keyed -> byContent keyed
+        | _ ->
+            // The slot's first read — or a held decode another codec type
+            // wrote under the same name, which is decoded again rather than
+            // served.
+            let fresh = decode ()
+            slots[slot] <- Unhashed(content, box fresh)
+            fresh
 
     /// The run's typed reads over `reader`.
     static member Over(reader: EntryReader) : Reads = Reads reader
@@ -273,18 +341,7 @@ type Reads(reader: EntryReader) =
             match raw with
             | Error reason -> Read.Unavailable(unavailable subject (ReadCause.NotRead reason))
             | Ok content ->
-                let key = codec.Name + "|" + Fuaran.Core.Hash.sha256Hex content
-
-                let decoded =
-                    match memo.TryGetValue key with
-                    | true, (:? Result<'T, string> as known) -> known
-                    | _ ->
-                        decodes <- decodes + 1
-                        let fresh = codec.Decode content
-                        memo[key] <- box fresh
-                        fresh
-
-                match decoded with
+                match decodeIn (struct (codec.Name, subject)) codec content with
                 | Ok value -> Read.Available value
                 | Error reason -> Read.Unavailable(unavailable subject (ReadCause.Undecodable(codec.Name, reason))))
 
@@ -299,6 +356,10 @@ type Reads(reader: EntryReader) =
 
     /// How many decodes the codecs actually ran this run — the memo's evidence.
     member _.Decodes: int = decodes
+
+    /// How many content hashes the memo computed this run (fuaran#2461): none
+    /// until a slot's content moves. Internal — the evidence the tests read.
+    member internal _.ContentHashes: int = contentHashes
 
 // ============================================================================
 //  A DERIVED VIEW is computed once per input value and journaled AS DERIVED

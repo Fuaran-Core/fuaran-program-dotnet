@@ -2863,7 +2863,8 @@ with the empty object, and its `Apply` reads the empty object as `no-match`.
   any `Apply` of the plan phase precedes the first performed op. A plan whose commit step refuses on
   `Refusal ()` halts with nothing performed, naming each read it could not make, and the durable tier
   records the run as uncommitted like any other refusal.
-- *Content-keyed memoisation.* The DECODE is memoised for the run, keyed by the codec's name and a
+- *Content-keyed memoisation.* (Its cost amended by D57: the hash is computed only once a slot's content
+  moves.) The DECODE is memoised for the run, keyed by the codec's name and a
   SHA-256 over the content read. A second read of an unchanged store decodes nothing; a same-length
   rewrite inside one tick decodes the new content. The falsifier test holds the store's (length, write
   time) equal across the rewrite and asserts the answer moved; changing the key to the content's
@@ -4336,3 +4337,68 @@ of the exponent vector carried the second spelling.
 families: a profile narrows what a CODEC accepts. It carries no profile vector at the referenced
 subject or for the two vocabulary-free documents. And it pins no vector for §2.3's acceptance of any
 member order, for the reason given above, which the specification records as open.
+
+## D57 — A typed read hashes its content only when a second read could use the memo: the decode memo is slotted by codec name and subject, a slot's first read holds its content unhashed, an equal re-read is served by an ordinal comparison, and SHA-256 keys appear only once a slot's content moves; amends D41's cost, not its correctness rule (2026-10-25)
+
+**Context.** D41 memoises each typed read's DECODE for the run, keyed by the codec's name and a SHA-256
+over the content read, and computed that hash on EVERY read, before it could know whether any later
+read would look the key up. Most subjects are read once per run, so on the common path the hash was
+pure cost. A consumer migrating its read-only commands onto `Reads` measured it on its own 21 MB store:
+a migrated read ran 7.6% slower than the code it replaced (4,726 → 5,085 ms, median of 9) with
+byte-identical output (fuaran#2461).
+
+**Premises checked against the tree first.** (1) The cost is the hash and nothing else in `Read`: this
+repository's bench (`tests/Fuaran.Program.Bench`, a 21.0 MB document of 490,957 records, median of 9,
+Release) measured the codec's decode alone at 826 ms, a SHA-256 over the content alone at 188 ms, and a
+single `Reads.Read` at 991 ms: the read's overhead over its decode, 165 ms, is the hash. (2) The shard
+named a `Fuaran.Program.Server.Tests` project and a `Fuaran.Program.Bench` to extend; both left this
+repository with the UI adapters (fuaran#2012, D32). The tests extend the typed-read suite where it
+lives (`Fuaran.Program.Tests/TypedReadTests.fs`) and the bench is a new project over the toy witness.
+
+**Decision.**
+
+1. **The memo is slotted by (codec name, subject).** A slot's FIRST read decodes and holds the content
+   it read, unhashed. A single read therefore hashes nothing.
+2. **A later read of the slot whose content is ordinally EQUAL to the held content is served the held
+   decode, without a hash.** The comparison is over the content, never a reference and never metadata;
+   it costs one pass over the bytes, and stops at the first difference.
+3. **The first read whose content differs promotes the slot**: both contents are hashed once, the
+   slot's decodes are keyed by those hashes, and the held content is released. From then on each read
+   of the slot hashes its own content and is served a decode only under an equal hash — D41's key,
+   now paid only where a content has moved and an earlier decode may still apply. A run that reads A,
+   then B, then A again still decodes twice.
+4. **D41's correctness rule is unchanged, and its proof restated** on `Reads`: a decode is served to a
+   read only when it was produced by the same-named codec from an ordinally equal content, or from a
+   content of equal SHA-256 (the collision resistance D41 relied on); a codec is a pure function of
+   its content, so serving is indistinguishable from decoding. A same-length rewrite inside one tick of
+   a coarse clock decodes fresh. Each read is still its own journaled answer recording the content, and
+   a resumed run decodes the recorded content (D39).
+5. **The hash count is internal evidence** (`Reads.ContentHashes`, visible to the test suite and to no
+   host), so the public surface does not move: the rendered surface of `Fuaran.Program.Server` is
+   identical to `v0.13.0`'s, and the version advances to the patch `0.13.1`.
+
+**Measured** (the same bench, before → after, median of 9): a single read 991 → 780–843 ms across two
+runs, the decode alone being 818–848 ms in the same runs, so the hash is gone within the decode's own
+noise; a second read of unchanged content, given a distinct string with the same characters, 187 →
+1.3 ms; a second read of MOVED same-length content 990 → 1,138 ms, because the promotion hashes the
+held content as well as the new one. That is the same two hashes over the run that D41 paid, moved to
+the read that can use them.
+
+**Rejected.** *Hashing on the second read only* (the shard's sketch), comparing hashes of both reads:
+it costs two hashes where an equal re-read needs none, and an ordinal comparison is exact where a hash
+is collision-resistant. *Keeping every distinct content and comparing ordinally* instead of promoting
+to hashes: it holds every distinct content of a moving subject for the run. *Keeping D41's
+cross-subject sharing*: two subjects with equal content shared one decode under D41, and finding that
+equality without a hash means comparing against every slot; the slot keying is the shard's and the
+cost of the edge is one decode per subject, observable only through `Decodes`.
+
+**The journalled clock read (D52), measured.** A durable invocation of one host call over the toy
+witness, in-memory journal, Release, median of 9 batches of 2,000: 2.2 µs unlimited (3 journal
+appends) and 6.7 µs under a per-window limit (7 appends) — the clock read and one windowed decision
+together cost Program 4.5 µs and four appends, two of them the clock read's `Attempted` and
+`Completed`. Nothing in that is avoidable without changing what the journal records: the `Attempted`
+record precedes every performer, the clock's included, so a death inside it reads as indeterminate
+rather than never-attempted (the header's contract), and the reading is read once per invocation and
+only at the first windowed decision. The ~150 ms per run the consumer attributed to the clock read is
+therefore not Program's in-process cost; it is consistent with what that host's own journal pays to
+make two appends durable, which is the host's to measure and to batch.

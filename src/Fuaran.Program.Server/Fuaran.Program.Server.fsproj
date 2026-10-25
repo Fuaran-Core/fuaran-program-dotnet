@@ -53,6 +53,11 @@
   <ItemGroup>
     <ProjectReference Include="..\Fuaran.Program.Bounded\Fuaran.Program.Bounded.fsproj" />
   </ItemGroup>
+  <!-- fuaran#2461: the typed-read memo's hash count (`Reads.ContentHashes`) is
+       internal evidence, read by the typed-read suite and by no host. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Fuaran.Program.Tests" />
+  </ItemGroup>
   <!-- Domain-generic since Phase 1896 (DECISIONS.md D18): the handler loop,
        the server-effect vocabulary and its codecs are written over a domain's
        witness, and this package references NO UI-tier package — a test reads

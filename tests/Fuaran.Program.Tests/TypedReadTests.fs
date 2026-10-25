@@ -414,6 +414,73 @@ let private memo =
               Expect.equal second (Ok(Read.Available "n-2")) "the rewritten content, not a memo of the first"
               Expect.equal third (Ok(Read.Available "n-1")) "the first content again"
               Expect.equal reads.Decodes 2 "two distinct contents, two decodes: the third read decoded nothing"
+
+              Expect.equal
+                  reads.ContentHashes
+                  3
+                  "fuaran#2461: the moved read hashed both contents once, the third read hashed its own"
+          }
+
+          // fuaran#2461 — the content key is computed only when a second read
+          // could use it. `ContentHashes` is the evidence: a hash nobody could
+          // use is the cost the phase removed.
+          test "fuaran#2461: a single read computes no content hash" {
+              let reads = Reads.Over EntryReader.live
+
+              Expect.equal
+                  (reads.Read(recordCodec, "bundle", (fun () -> Ok recordOne)))
+                  (Ok(Read.Available "n-1"))
+                  "the read answers its decode"
+
+              Expect.equal reads.Decodes 1 "the codec ran once"
+              Expect.equal reads.ContentHashes 0 "and nothing was hashed: no second read could use a key yet"
+          }
+
+          test "fuaran#2461: a second read of an EQUAL content is served the decode and hashes nothing" {
+              let reads = Reads.Over EntryReader.live
+              // Another string instance with the same characters: the memo
+              // compares content, never a reference.
+              let copy = System.String(recordOne.ToCharArray())
+              Expect.isFalse (obj.ReferenceEquals(copy, recordOne)) "premise: a distinct instance"
+
+              let first = reads.Read(recordCodec, "bundle", (fun () -> Ok recordOne))
+              let second = reads.Read(recordCodec, "bundle", (fun () -> Ok copy))
+
+              Expect.equal first (Ok(Read.Available "n-1")) "the first read"
+              Expect.equal second (Ok(Read.Available "n-1")) "the second read, served"
+              Expect.equal reads.Decodes 1 "the second read decoded nothing"
+              Expect.equal reads.ContentHashes 0 "an equal content is served without a hash"
+          }
+
+          test "fuaran#2461: a moved content decodes fresh, hashing each content once; a later read hashes only its own" {
+              let reads = Reads.Over EntryReader.live
+
+              let read (content: string) =
+                  reads.Read(recordCodec, "bundle", (fun () -> Ok content))
+
+              read recordOne |> ignore
+
+              Expect.equal (read recordTwo) (Ok(Read.Available "n-2")) "the moved content's own decode"
+              Expect.equal reads.Decodes 2 "decoded fresh"
+              Expect.equal reads.ContentHashes 2 "the held content and the new one, each hashed once"
+
+              Expect.equal (read recordTwo) (Ok(Read.Available "n-2")) "served"
+              Expect.equal reads.Decodes 2 "served from the content-keyed memo"
+              Expect.equal reads.ContentHashes 3 "one hash: this read's own content"
+          }
+
+          test
+              "fuaran#2461: the memo is slotted by codec and subject; an equal content under another subject decodes again" {
+              let reads = Reads.Over EntryReader.live
+              reads.Read(recordCodec, "left", (fun () -> Ok recordOne)) |> ignore
+
+              Expect.equal
+                  (reads.Read(recordCodec, "right", (fun () -> Ok recordOne)))
+                  (Ok(Read.Available "n-1"))
+                  "the other subject's read"
+
+              Expect.equal reads.Decodes 2 "each subject's first read decodes"
+              Expect.equal reads.ContentHashes 0 "and neither hashed"
           }
 
           test "a resume decodes the JOURNALED content, never the moved world's or a memo of it" {
