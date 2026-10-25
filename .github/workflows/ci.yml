@@ -153,7 +153,7 @@ jobs:
           # The corpus-free runners the pure lane leaves out (it runs only the suites
           # that read neither the filesystem nor the corpus). Named ONCE; the reduced
           # job runs them after the pure lane.
-          $corpusFreeOutsidePure = @('Fuaran.Program.Tests')
+          $corpusFreeOutsidePure = @('Fuaran.Program.Tests', 'Fuaran.Program.Bench')
           $corpusBound = @()
           $known = $pure + $corpusFreeOutsidePure + $corpusBound
           $unclassified = $runners | Where-Object { $_ -notin $known }
@@ -195,7 +195,7 @@ jobs:
         working-directory: Fuaran/Fuaran-Program
         shell: pwsh
         run: |
-          foreach ($p in @('Fuaran.Program.Tests')) {
+          foreach ($p in @('Fuaran.Program.Tests', 'Fuaran.Program.Bench')) {
               Write-Host "-- tests: $p --"
               dotnet run --project (Join-Path 'tests' $p)
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
