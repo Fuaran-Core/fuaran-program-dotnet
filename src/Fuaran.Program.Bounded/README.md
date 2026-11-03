@@ -74,6 +74,20 @@ per interaction, and a breach is a structured refusal, never a hang and never a 
 
 Bounded code + bounded cost is what makes a program safe to run untrusted on shared infrastructure.
 
+## Deciding a leaf's arguments: `ArgumentPolicy`
+
+A witness that gates its own leaves decides each one's arguments against the declared
+`ServerConstraintClause` set (`AtMost`, `AtLeast`, `Required`, and the windowed clauses) with
+`ArgumentPolicy.check`, which lives here beside the clauses because it is a pure function of the
+clauses and what one effect carries (Phase 2440, `DECISIONS.md` D59). It takes a `WindowedLimiter`,
+the capability name, the clauses, the arguments as `ArgumentPolicy.ofObject` reads them (flat string
+and integer members; integers canonical only, a non-integer refused, an absent argument vacuous except
+under `Required`) and the payload's byte count, and answers admit or a `ServerConstraintDefect`, which
+`ArgumentPolicy.describe` spells. A witness with no clock passes `WindowedLimiter.unjudgeable`, under
+which a windowed clause refuses as `limit-unjudgeable:no-clock` rather than silently admitting. The
+server placement calls this same check from `ServerArgumentPolicy`, so a leaf-gating witness and the
+server give the same refusals token for token with no server package referenced.
+
 ## Asking before running: the demanded-effect projection
 
 `Demanded.ofTree` answers, for any program tree, **what that program can ever ask for** — the client
