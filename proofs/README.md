@@ -154,7 +154,8 @@ warned about.
 | `w_resolve` | `ExprWitness.Resolve` | a total pure arrow, the same answer for the same store; nothing depends on WHAT it answers | `fold_total`, `fold_reserved_untouched` |
 | `w_is_reserved`, `w_reserved_prefix` | `StoreWitness.IsReserved` / `ReservedPrefix` | a total predicate and a constant (K5); `fold_reserved_untouched` is quantified over every such predicate | `fold_total`, `fold_reserved_untouched` |
 | `w_is_true` | the core's own `jv = JBool true` — NOT a witness member in F# | a total predicate; an arrow here only because the model's value type is abstract, exactly as its store is concrete where the core's is abstract. Nothing proved depends on what it answers. The differential host wires it to that comparison; the UI witness fills it with the fail-closed constant, and `ui_view_no_require` proves it is never reached there | `fold_total` (the guard clause), `fold_no_require_no_halt` |
-| `answer` | `HandlerArm.Answer` | what a call MEANS at this placement; opaque, and its store, effects and diagnostics are its own | `fold_total` names the answered case and excludes it; `fold_reserved_untouched` carries `arm_preserves_reserved` as a hypothesis |
+| `w_refusals` | `ActionWitness.Refusals` (Phase 2441) | a CONSTANT of the witness, one of two readings (`Continues`, today's and the UI witness's; `Halts`), declared once and read by `refusal` at every refusal and by `settle` at the run's end. Every theorem is quantified over both readings; `may_halt` names it, and `fold_no_require_no_halt` takes `Continues` as a hypothesis | `fold_total` (the halted clause), `fold_no_halting_shape_no_halt`, `halting_run_all_or_nothing`, `continuing_run_is_fold` |
+| `answer` | `HandlerArm.Answer` | what a call MEANS at this placement; opaque, and its store, effects and diagnostics are its own | `fold_total` names the answered case and excludes it; `fold_reserved_untouched` carries `arm_preserves_reserved` as a hypothesis; `halting_run_all_or_nothing` carries `arm_refuses_nothing` the same way |
 
 **The store is modelled concretely, on purpose.** D18 §3.4 makes the store abstract behind
 `StoreWitness.Assign`; the model keeps a keyed association list and `write`, because
@@ -260,11 +261,48 @@ Phase 1967's statement, "a view with no guard never halts", is FALSE over the wi
 with no guard halts on an undecided condition), so `fold_no_require_no_halt` keeps its name as the
 corollary for a view without the new shapes — the extra hypothesis is exactly what 1976 changed.
 
+**Phase 2441 adds a fourth source, declared by the witness.** Under a witness whose `w_refusals` is
+`Halts`, any shape the fold can refuse — a write, a call, a leaf — halts on its refusal, so `may_halt`
+now takes the witness and reads the declaration beside the shapes (`has_refusable`), and
+`fold_no_require_no_halt` takes `Continues` as a hypothesis exactly as it took the absence of flow
+shapes from 1976. At a witness declaring `Continues` — every witness that existed before 2441, and
+the UI witness — each statement says what it said. The reading, and what it buys, are section 12.
+
 `ui_view_no_require` and `ui_view_no_flow` prove the UI witness's `View` produces no `VRequire`, no
-`VChoose` and no `VRepeat` at any depth, and `ui_never_halts` is the corollary: the UI tier never
-halts, so a leaf's refusal is a diagnostic and the chain carries on, exactly as before either shape
-existed. It is these lemmas, not a convention, that let `run_total`, `run_no_closure`,
-`chain_homomorphism` and `reserved_untouched` keep their pre-1967 statements word for word.
+`VChoose` and no `VRepeat` at any depth, `ui_witness` declares `Continues`, and `ui_never_halts` is
+the corollary: the UI tier never halts, so a leaf's refusal is a diagnostic and the chain carries
+on, exactly as before either shape or the declaration existed. It is these lemmas, not a convention,
+that let `run_total`, `run_no_closure`, `chain_homomorphism` and `reserved_untouched` keep their
+pre-1967 statements word for word.
+
+### 12. `halting_run_all_or_nothing` / `halted_ends_with_refusal` / `continuing_run_is_fold` — the halting reading (Phase 2441)
+
+A witness over an actuator needs a plan to be ALL OR NOTHING, and under today's reading the fold
+keeps what was emitted before a refusal, by design. So the reading is DECLARED per witness
+(`w_refusals`; `ActionWitness.Refusals`), read at every refusal by one constructor (`refusal`:
+`refused` under `Continues`, `halted` under `Halts`) and once more at the run's end (`settle`: under
+`Halts` a halted outcome becomes the entry store with no effect, diagnostics kept). The theorem is
+about the RUN (`run_action`), the unit an actuator dispatches; the fold's own steps keep their
+prefix semantics under both readings, which is what lets sections 1–11 stand over both.
+
+`halting_run_all_or_nothing`: under `Halts`, and an arm whose answers refuse nothing
+(`arm_refuses_nothing`, the same shape as `arm_preserves_reserved`, discharged by
+`inert_arm_refuses_nothing` for the handler-free placements), a run either did not halt — then it is
+the fold's own outcome, every effect standing, and it met no refusal
+(`halting_unhalted_is_refusal_free`) — or it halted, and then its store is the entry store, its
+effects are empty, and its last diagnostic is the refusal that halted it. **Conditional** on the arm.
+
+`halted_ends_with_refusal`: a halted outcome's last diagnostic is the refusal that halted it, under
+EVERY witness — true since 1967, stated now because the halting reading makes it load-bearing: it is
+how the outcome names the refused step, after the declines that ran before it. Unconditional.
+
+`continuing_run_is_fold`: under `Continues` a run IS the fold, so a witness declaring today's reading
+folds byte for byte as before the declaration existed. Unconditional. `traced_run_settles_alike`
+carries `traced_agrees` through `settle`, so the statement covers `runTraced`.
+
+The differential host (`ToyBoundedFoldOracleTests`) derives the model witness from whichever
+production witness it is handed and runs the whole toy corpus at BOTH readings; `DECISIONS.md` D60
+records the design and how it composes with the handler's atomicity (D8).
 
 ### 6. `reverse_run` / `reversible_run_undoes` — the reversible fragment undoes itself (Phase 1976)
 
@@ -469,9 +507,10 @@ Over the generic tier's view, for every witness (Phase 1898):
 5. **No closure invocation, for any witness that meets its obligation** — `run_action_blind`.
    **Conditional** on `blind_to`: the witness's `View` sends related actions to same-shaped views.
 6. **Which shapes halt** — `fold_no_halting_shape_no_halt`, with `fold_total`'s guard clause
-   (Phase 1967, widened by Phase 1976: a guard, a branch, a repeat, and nothing else);
-   `fold_no_require_no_halt` kept as the corollary for a view without the new shapes.
-   Unconditional.
+   (Phase 1967, widened by Phase 1976: a guard, a branch, a repeat, and nothing else at a witness
+   declaring `Continues`; Phase 2441: and any refusable shape at a witness declaring `Halts`, the
+   hypothesis `may_halt` reading the witness); `fold_no_require_no_halt` kept as the corollary for a
+   view without the new shapes at a continuing witness. Unconditional.
 7. **The reversible fragment undoes itself** — `reverse_run` / `reversible_run_undoes`, with
    `traced_agrees` (the traced fold is the fold) and `write_restore` (Phase 1976). **Conditional**
    on `restorable`: every key the run overwrote was present before it.
@@ -493,6 +532,13 @@ Over the generic tier's view, for every witness (Phase 1898):
     substitution over the value the state resolved, stated under "Assumed"),
     `let_of_unresolved_plans_nothing` and `let_of_errored_plans_nothing` (unconditional), all on the
     op axis in `Staging.fst` (Phase 2186).
+13. **A halting witness's run is all or nothing** — `halting_run_all_or_nothing` (Phase 2441):
+    under `Halts`, a run either did not halt and is the fold's own outcome with no refusal met, or
+    halted and is the entry store, no effect, the refusal last. **Conditional** on
+    `arm_refuses_nothing`, discharged by `inert_arm_refuses_nothing` for the handler-free placements.
+    Beside it, unconditional: `halted_ends_with_refusal` (every halted outcome, every witness),
+    `continuing_run_is_fold` (a witness declaring `Continues` folds as before the declaration
+    existed) and `traced_run_settles_alike`.
 
 At the UI witness (Phase 1715's five, each a corollary of the generic theorem above it):
 
@@ -509,7 +555,8 @@ At the UI witness (Phase 1715's five, each a corollary of the generic theorem ab
 
 **The conditional theorems, named:** `fold_reserved_untouched` and `reserved_untouched` (on the
 placement seam); `run_action_blind` (on the witness's blindness); `reverse_run` and
-`reversible_run_undoes` (on the trace's restorability). Every other theorem is quantified
+`reversible_run_undoes` (on the trace's restorability); `halting_run_all_or_nothing` (on the
+placement seam's diagnostics, Phase 2441). Every other theorem is quantified
 over the witness's members as total arrows — the table under "Every parameter of the model is an
 assumption" — and on nothing else. A domain instantiating the generic tier inherits 1–3
 outright, 4 once its arm preserves its reserved keys, and 5 once it proves — or differentially

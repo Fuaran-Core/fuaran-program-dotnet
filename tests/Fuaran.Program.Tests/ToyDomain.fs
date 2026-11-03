@@ -355,7 +355,11 @@ let witness: FullWitness<ToyNode, ToyAction, ToyExpr, ToyStore, ToyOp, ToyEffect
                         { Class = "malformed-referenced-value"
                           Detail = "the toy decodes nothing" }
               Substitute = substitute
-              Placeholders = placeholders }
+              Placeholders = placeholders
+              // Today's reading (Phase 2441): a refused beep is a diagnostic
+              // the sequence carries on past. `ToyDomain.halting` is the same
+              // witness declaring the other reading.
+              Refusals = RefusalReading.Continues }
           Expr =
             { Resolve = fun store expr -> resolveWith (fun k -> Map.tryFind k store) expr
               Uses =
@@ -382,3 +386,16 @@ let witness: FullWitness<ToyNode, ToyAction, ToyExpr, ToyStore, ToyOp, ToyEffect
                     Error
                         { Class = "unknown-effect-arm"
                           Detail = "the toy decodes no effect" } } } }
+
+/// The SAME toy witness declaring the OTHER reading of a refusal (Phase 2441):
+/// its refusals halt, and a run is all or nothing. Nothing else differs, so a
+/// test comparing the two witnesses on one program measures the declaration
+/// and nothing beside it — the shape a leaf-gating witness over an actuator
+/// takes.
+let halting: FullWitness<ToyNode, ToyAction, ToyExpr, ToyStore, ToyOp, ToyEffect> =
+    { witness with
+        Dispatch =
+            { witness.Dispatch with
+                Action =
+                    { witness.Dispatch.Action with
+                        Refusals = RefusalReading.Halts } } }

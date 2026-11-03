@@ -918,6 +918,34 @@ type LeafOutcome<'Effect> =
     | Refuse of reason: string
     | Decline
 
+/// How a witness's REFUSALS read in the fold (Phase 2441), declared once per
+/// witness on `ActionWitness.Refusals`.
+///
+/// `Continues` is today's reading and the default a witness with no reason to
+/// declare otherwise picks: a refusal is a diagnostic the sequence carries on
+/// past, and what was emitted before it stands. The UI tier's reading — an
+/// inert action is harmless there — and the reading every witness had before
+/// the declaration existed, byte for byte.
+///
+/// `Halts` is the reading a witness over an actuator declares. EVERY refusal
+/// — the leaf's `Refuse` and the fold's own four (a write to a reserved key,
+/// a write whose source did not resolve or errored, a call declaring a result
+/// target) — HALTS the fold exactly as a guard that does not hold does, and
+/// the RUN is all or nothing: `BoundedActions.run` settles a halted run to the
+/// ENTRY store with NO effect, keeping the diagnostics, so the outcome holds
+/// either every effect of a run every step of which was admitted, or none,
+/// with the refusal that halted it as its last diagnostic (the model's
+/// `halting_run_all_or_nothing`). The fold's own refusals are covered because
+/// an actuator's placement reads every refusal as refusing the plan; a
+/// declaration that left them carrying on would leave that wrapper in place.
+/// A guard halt and a flow halt settle the same way under this reading. The
+/// server placement's handler atomicity (D8) meets a settled halt as it meets
+/// any halt — the two readings cannot disagree for one program (D60).
+[<RequireQualifiedAccess>]
+type RefusalReading =
+    | Continues
+    | Halts
+
 type ActionWitness<'Action, 'Expr, 'Store, 'Effect> =
     {
         /// One level of the action. Applied repeatedly it must unfold a FINITE
@@ -949,6 +977,12 @@ type ActionWitness<'Action, 'Expr, 'Store, 'Effect> =
         /// through the view. Read by the scope check before anything runs; a
         /// domain with no placeholders answers `[]`.
         Placeholders: 'Action -> string list
+        /// How this witness's refusals READ (Phase 2441): `Continues`, today's
+        /// reading and the default, or `Halts`, under which every refusal
+        /// halts and a run is all or nothing. Declared once; the fold reads
+        /// it at every refusal and once more when a run settles. The model's
+        /// `w_refusals`.
+        Refusals: RefusalReading
     }
 
 module ActionWitness =

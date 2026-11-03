@@ -116,9 +116,14 @@ let rec private toyModelViewIn (entry: ToyStore) (a: ToyAction) : BoundedFold.ac
         )
     | ActionView.Leaf _ -> BoundedFold.VLeaf a
 
-/// The model witness, lowering a store-bound `Each` over the extent `entry`
-/// holds (the production store the case starts from).
-let private toyModelWitnessIn (entry: ToyStore) : BoundedFold.witness<ToyAction, ToyExpr, JVal, ToyEffect> =
+/// The model witness DERIVED from a production toy witness (`ToyDomain.witness`
+/// or, since Phase 2441, `ToyDomain.halting`, which differs from it only in
+/// its declared reading of a refusal), lowering a store-bound `Each` over the
+/// extent `entry` holds (the production store the case starts from).
+let private toyModelWitnessOf
+    (prod: FullWitness<ToyNode, ToyAction, ToyExpr, ToyStore, ToyOp, ToyEffect>)
+    (entry: ToyStore)
+    : BoundedFold.witness<ToyAction, ToyExpr, JVal, ToyEffect> =
     { w_view = toyModelViewIn entry
       w_lower =
         fun nodeId action s ->
@@ -126,15 +131,15 @@ let private toyModelWitnessIn (entry: ToyStore) : BoundedFold.witness<ToyAction,
             | LeafOutcome.Emit effect -> BoundedFold.Emit effect
             | LeafOutcome.Refuse reason -> BoundedFold.Refuse reason
             | LeafOutcome.Decline -> BoundedFold.Decline
-      w_describe = toyWitness.Dispatch.Action.Describe
+      w_describe = prod.Dispatch.Action.Describe
       w_resolve =
         fun s expr ->
             match resolveWith (toyLookup s) expr with
             | ExprResolution.Resolved value -> BoundedFold.Resolved value
             | ExprResolution.NotResolved -> BoundedFold.NotResolved
             | ExprResolution.Errored message -> BoundedFold.Errored message
-      w_is_reserved = toyWitness.Dispatch.Store.IsReserved
-      w_reserved_prefix = toyWitness.Dispatch.Store.ReservedPrefix
+      w_is_reserved = prod.Dispatch.Store.IsReserved
+      w_reserved_prefix = prod.Dispatch.Store.ReservedPrefix
       // The core's own `jv = JBool true`, an arrow here because the model's
       // value type is abstract — see the model's `w_is_true`.
       w_is_true = fun jv -> jv = JBool true
@@ -150,11 +155,17 @@ let private toyModelWitnessIn (entry: ToyStore) : BoundedFold.witness<ToyAction,
         fun jv ->
             match jv with
             | JArr xs -> BoundedFold.OSome xs
-            | _ -> BoundedFold.ONone }
+            | _ -> BoundedFold.ONone
+      // The witness's declared reading of a refusal (Phase 2441), a
+      // constructor for a constructor.
+      w_refusals =
+        match prod.Dispatch.Action.Refusals with
+        | RefusalReading.Continues -> BoundedFold.Continues
+        | RefusalReading.Halts -> BoundedFold.Halts }
 
-/// The model witness at the empty store — for the walks that read no store.
-let private toyModelWitness: BoundedFold.witness<ToyAction, ToyExpr, JVal, ToyEffect> =
-    toyModelWitnessIn Map.empty
+/// The model witness derived from `ToyDomain.witness`, today's reading.
+let private toyModelWitnessIn (entry: ToyStore) : BoundedFold.witness<ToyAction, ToyExpr, JVal, ToyEffect> =
+    toyModelWitnessOf toyWitness entry
 
 let private toyNoCall = fun () -> failwith "a carried closure was invoked"
 
@@ -379,10 +390,13 @@ let private toyModelArm: BoundedFold.handler_arm<JVal, ToyEffect, int> =
             else
                 BoundedFold.ONone }
 
-/// Run a corpus through both, threading each side's store and placement from
-/// step to step, and report every step where the store, the effects, the
-/// diagnostics, the halt flag or the placement disagree.
-let private toyDivergences
+/// Run a corpus through both — the production fold and the extraction at the
+/// model witness `modelOf` derives from the production store — threading each
+/// side's store and placement from step to step, and report every step where
+/// the store, the effects, the diagnostics, the halt flag or the placement
+/// disagree.
+let private toyDivergencesAt
+    (modelOf: ToyStore -> BoundedFold.witness<ToyAction, ToyExpr, JVal, ToyEffect>)
     (fold: ToyFold)
     (corpus: (string * ToyAction) list)
     (prodArm: HandlerArm<ToyStore, ToyEffect, int>)
@@ -396,7 +410,7 @@ let private toyDivergences
             let prod, prodCount' = fold prodArm "n1" action prodStore prodCount
 
             let model, modelCount' =
-                BoundedFold.run_action (toyModelWitnessIn prodStore) modelArm "n1" action modelStore modelCount
+                BoundedFold.run_action (modelOf prodStore) modelArm "n1" action modelStore modelCount
 
             let prodState = prod.Store |> Map.toList
             let modelState = model.o_store |> List.sortBy fst
@@ -430,6 +444,22 @@ let private toyDivergences
             prod.Store, model.o_store, prodCount', modelCount', found')
         (seed, Map.toList seed, 0, 0, [])
     |> fun (_, _, _, _, found) -> found
+
+/// The comparison at today's reading: `ToyDomain.witness` beside the model
+/// witness derived from it.
+let private toyDivergences: ToyFold -> (string * ToyAction) list -> _ -> _ -> string list =
+    toyDivergencesAt toyModelWitnessIn
+
+/// Production at the HALTING toy witness (Phase 2441): the same domain
+/// declaring that its refusals halt and a run is all or nothing. Compared
+/// against the model witness derived from THAT witness, so the only thing
+/// that can disagree is, again, the fold — now its `refusal` constructor and
+/// its `settle`.
+let private haltingProduction: ToyFold =
+    fun arm nodeId action s placement -> BoundedActions.run ToyDomain.halting arm nodeId action s placement
+
+let private haltingDivergences: ToyFold -> (string * ToyAction) list -> _ -> _ -> string list =
+    toyDivergencesAt (toyModelWitnessOf ToyDomain.halting)
 
 // ─── fuaran#2011 — the toy driver-semantics FAMILY through the generic fold ──
 //
@@ -675,6 +705,33 @@ let tests =
               match toyDivergences production toyCorpus toyArm toyModelArm with
               | [] -> ()
               | first :: _ -> failtestf "the generic model and the ported core disagree on the answered call:\n%s" first
+          }
+
+          test "and at the HALTING toy witness, where every refusal halts and a run settles (Phase 2441)" {
+              // The same corpus, the same arm, the other declared reading on
+              // both sides: every case that refuses now halts and settles to
+              // its entry store with no effect, and the extraction's `refusal`
+              // and `settle` must agree with the core's at every step. The
+              // corpus is threaded, so a settled case changes what the next
+              // case starts from — on both sides alike, which is the point.
+              Expect.isTrue
+                  (toyCorpus
+                   |> List.exists (fun (_, action) ->
+                       let outcome, _ = haltingProduction HandlerArm.inert "n1" action Map.empty 0
+                       outcome.Halted))
+                  "the corpus reaches a refusal that halts under this reading, so the comparison is not vacuous"
+
+              match haltingDivergences haltingProduction toyCorpus HandlerArm.inert (BoundedFold.inert_arm ()) with
+              | [] -> ()
+              | first :: _ ->
+                  failtestf "the generic model and the ported core disagree at the halting witness:\n%s" first
+
+              match haltingDivergences haltingProduction toyCorpus toyArm toyModelArm with
+              | [] -> ()
+              | first :: _ ->
+                  failtestf
+                      "the generic model and the ported core disagree at the halting witness, answered call:\n%s"
+                      first
           }
 
           test "GO RED: a fold that invokes a carried closure loses the comparison at the toy witness" {

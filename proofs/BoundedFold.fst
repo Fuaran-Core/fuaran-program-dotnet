@@ -51,7 +51,17 @@
 /// the fold runs the sequence of those elements. Every theorem below
 /// extends over it as over a sequence, and `each_is_lowering` (section 9)
 /// is the equation: an `Each` folds, traces, reverses and prices exactly
-/// as the sequence of its elements.
+/// as the sequence of its elements. Since Phase 2441 the witness also
+/// DECLARES how its refusals read (`w_refusals`, D18's
+/// `ActionWitness.Refusals`): under `Continues`, today's reading and the
+/// UI tier's, a refusal is a diagnostic the sequence carries on past;
+/// under `Halts` — the reading a leaf-gating witness over an actuator
+/// declares — every refusal halts, and a halted RUN is all or nothing:
+/// the entry store, no effect, and the refusal the last word
+/// (`halting_run_all_or_nothing`, section 12). The shapes do not move;
+/// one constructor (`refusal`) reads the declaration, and `run_action`
+/// settles a halted run under it. A witness declaring `Continues` folds
+/// exactly as before the declaration existed (`continuing_run_is_fold`).
 /// Every definition is captioned with the D18 contract member it models
 /// (§3.2 the action view, §3.3 expressions, §3.4 the store).
 ///
@@ -94,6 +104,12 @@
 ///   * `w_is_reserved` / `w_reserved_prefix` (D18 `StoreWitness`) — a
 ///     total predicate and a constant (K5). `fold_reserved_untouched` is
 ///     quantified over every such predicate.
+///   * `w_refusals` (D18 `ActionWitness.Refusals`, Phase 2441) — a
+///     CONSTANT of the witness, one of two readings, declared once and
+///     read by `refusal` and by `run_action`. It is what makes
+///     `halting_run_all_or_nothing` a theorem about a declaration rather
+///     than about a placement's wrapper: every theorem above it is
+///     quantified over both readings, and `may_halt` names it.
 ///   * `answer` (the placement arm, `HandlerArm.Answer`) — what a call
 ///     MEANS at this placement, opaque. `fold_total` names the answered
 ///     case and excludes it; `fold_reserved_untouched` carries the seam's
@@ -140,6 +156,13 @@
 ///     property, as an equation, now over `VSequence`.
 ///   * `fold_reserved_untouched` — the output store agrees with the input
 ///     at every reserved key, for any arm that preserves them.
+///   * `halting_run_all_or_nothing` (Phase 2441) — under a witness that
+///     declares `Halts`, and an arm whose answers refuse nothing, a run
+///     either did not halt — and then it is the fold's own outcome and
+///     met no refusal — or it halted, and then its store is the entry
+///     store, it emitted nothing, and its last diagnostic is the refusal
+///     that halted it. `continuing_run_is_fold` is the other half: under
+///     `Continues` a run IS the fold, as before the declaration existed.
 ///
 ///   The UI witness (each a corollary of the generic theorem at
 ///   `ui_witness`, keeping its Phase-1715 name and statement):
@@ -326,6 +349,23 @@ type leaf_outcome (eff: Type0) =
   | Refuse : reason: string -> leaf_outcome eff
   | Decline : leaf_outcome eff
 
+/// D18 §3.2 `RefusalReading` (Phase 2441) — how a witness's refusals READ
+/// in the fold, declared once per witness. `Continues` is today's reading
+/// and the UI tier's: a refusal is a diagnostic the sequence carries on
+/// past, and what was emitted before it stands. `Halts` is the reading a
+/// witness over an actuator declares: every refusal — the leaf's `Refuse`
+/// and the fold's own four (a reserved-key write, an unresolved or an
+/// errored write source, a call declaring a result target) — HALTS the
+/// fold exactly as a guard does, and the RUN is all or nothing: a halted
+/// run is settled to the entry store with no effect (`settle`), and the
+/// refusal that halted it is its last diagnostic. The fold's own refusals
+/// are covered too because an actuator's placement reads EVERY refusal as
+/// refusing the plan; a declaration that left the fold's refusals carrying
+/// on would leave that per-placement rule in place.
+type refusal_reading =
+  | Continues : refusal_reading
+  | Halts : refusal_reading
+
 /// The fold-read members of D18's `ProgramWitness`, as one record: the
 /// three of `ActionWitness` (§3.2), `ExprWitness.Resolve` (§3.3), and
 /// the two of `StoreWitness` the refusal needs (§3.4). `Assign` is
@@ -363,6 +403,11 @@ noeq type witness (a: Type0) (e: Type0) (v: Type0) (eff: Type0) = {
   /// arrow as `w_as_count` — the core reads `JArr xs` itself; here `v` is
   /// abstract. Nothing proved here depends on what it answers.
   w_as_elements: v -> opt (list v);
+  /// `ActionWitness.Refusals` (Phase 2441): how this witness's refusals
+  /// read. A constant of the witness, not an arrow: the declaration is
+  /// made once, and the fold reads it at every refusal and once more at
+  /// the run's end (`settle`).
+  w_refusals: refusal_reading;
 }
 
 /// F#: `BoundedDiagnostic` — program-owned, so not generic. The action
@@ -443,6 +488,21 @@ let halted_after (#v: Type0) (#eff: Type0)
     o_diagnostics = app o.o_diagnostics [ DRefused node_id description reason ];
     o_halted = true }
 
+/// F#: `BoundedActions.refusal` (Phase 2441) — a REFUSAL as the witness
+/// declared it reads: under `Continues` exactly `refused` (the diagnostic,
+/// no halt), under `Halts` exactly `halted` (the same diagnostic, and the
+/// flag the enclosing sequence stops on). The one place the fold reads
+/// the declaration while it runs; every refusal site in `fold` and
+/// `fold_traced` goes through it, so there is no refusal the declaration
+/// does not cover.
+let refusal (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0)
+            (w: witness a e v eff)
+            (node_id: string) (description: string) (reason: string) (s: store v)
+  : bounded_outcome v eff =
+  match w.w_refusals with
+  | Continues -> refused node_id description reason s
+  | Halts -> halted node_id description reason s
+
 /// F#: the `Result<JVal option, string>` the `Assign` arm computes.
 type jval_payload (v: Type0) =
   | POk : value: opt v -> jval_payload v
@@ -475,7 +535,7 @@ let rec fold (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
   // that the tree is untrusted.
   | VAssign act state_key value value_from ->
     (if w.w_is_reserved state_key then
-       refused node_id (w.w_describe act)
+       refusal w node_id (w.w_describe act)
          (strcat "State key '"
            (strcat state_key
              (strcat "' is under the host-reserved '" (strcat w.w_reserved_prefix "' namespace")))) s
@@ -492,9 +552,9 @@ let rec fold (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
        match payload with
        | POk (OSome jv) -> store_only (write s state_key jv)
        | POk ONone ->
-         refused node_id (w.w_describe act) "valueFrom did not resolve to a value — no write performed" s
+         refusal w node_id (w.w_describe act) "valueFrom did not resolve to a value — no write performed" s
        | PErr m ->
-         refused node_id (w.w_describe act)
+         refusal w node_id (w.w_describe act)
            (strcat "valueFrom errored: " (strcat m " — no write performed")) s),
     pl
 
@@ -504,7 +564,7 @@ let rec fold (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
   // what the call MEANS here; declining is the documented no-op.
   | VCall act endpoint declares_target ->
     if declares_target then
-      (refused node_id (w.w_describe act)
+      (refusal w node_id (w.w_describe act)
          "the call declares a result target; a handler declares where its own results land" s,
        pl)
     else
@@ -537,7 +597,7 @@ let rec fold (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
   | VLeaf act ->
     (match w.w_lower node_id act s with
      | Emit emitted -> { o_store = s; o_effects = [ emitted ]; o_diagnostics = []; o_halted = false }
-     | Refuse reason -> refused node_id (w.w_describe act) reason s
+     | Refuse reason -> refusal w node_id (w.w_describe act) reason s
      | Decline -> declined node_id (w.w_describe act) s),
     pl
 
@@ -666,13 +726,31 @@ and fold_repeat (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
         o_halted = o2.o_halted },
       p2
 
-/// The action-level entry the generic core exposes: view, then fold.
+/// F#: `BoundedActions.settle` (Phase 2441) — a RUN's outcome under the
+/// witness's declaration. Under `Continues` the fold's outcome, untouched.
+/// Under `Halts` a halted outcome is settled to ALL OR NOTHING: the entry
+/// store and no effect, with the diagnostics — the declines that ran and
+/// the refusal that halted it, in order — kept, so the outcome still says
+/// what happened. An outcome that did not halt is untouched under either
+/// reading. This is the one place the fold rolls back, and it is the run
+/// and not a step that rolls: the handler's own atomicity (D8) is the same
+/// act one level up, which is what keeps the two readings from disagreeing
+/// about one program.
+let settle (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0)
+           (w: witness a e v eff) (s: store v) (o: bounded_outcome v eff)
+  : bounded_outcome v eff =
+  match w.w_refusals with
+  | Continues -> o
+  | Halts -> if o.o_halted then { o with o_store = s; o_effects = [] } else o
+
+/// The action-level entry the generic core exposes: view, fold, settle.
 /// F#: `BoundedActions.run witness arm nodeId action store placement`.
 let run_action (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
                (w: witness a e v eff) (ar: handler_arm v eff p)
                (node_id: string) (act: a) (s: store v) (pl: p)
   : bounded_outcome v eff & p =
-  fold w ar node_id (w.w_view act) s pl
+  let (o, pl') = fold w ar node_id (w.w_view act) s pl in
+  (settle w s o, pl')
 
 (* ───────────────────────────────────────────────────────────────────
    THE GENERIC THEOREMS
@@ -740,13 +818,16 @@ let answered_view (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
 /// structurally: the placement is untouched, the store is either
 /// unchanged or written at exactly one key the reserved predicate
 /// rejects, at most one effect and at most one diagnostic are emitted,
-/// and ONLY A GUARD HALTS among them. For a leaf that is K3 made a
+/// and among them ONLY A GUARD HALTS — or, under a witness declaring
+/// `Halts` (Phase 2441), a refused step, which then writes nothing and
+/// emits nothing exactly as a guard does. For a leaf that is K3 made a
 /// theorem: whatever `w_lower` answers, this is the most it can do. For a
 /// guard it is the Phase-1967 clause: it writes nothing, emits nothing,
-/// and is the one non-composition shape whose step can halt. (A branch
-/// and a repeat halt too — on a condition that cannot be decided, a
-/// violated exit assertion, an over-bound count — and
-/// `fold_no_halting_shape_no_halt` names all three.)
+/// and under `Continues` is the one non-composition shape whose step can
+/// halt. (A branch and a repeat halt too — on a condition that cannot be
+/// decided, a violated exit assertion, an over-bound count — and
+/// `fold_no_halting_shape_no_halt` names all three, and the fourth source
+/// the declaration adds.)
 let fold_total (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
                (w: witness a e v eff) (ar: handler_arm v eff p)
                (node_id: string) (x: action_view a e v) (s: store v) (pl: p)
@@ -758,7 +839,8 @@ let fold_total (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
           pl' == pl /\
           at_most_one o.o_effects /\
           at_most_one o.o_diagnostics /\
-          (o.o_halted ==> VRequire? x) /\
+          (o.o_halted ==> (VRequire? x \/ Halts? w.w_refusals)) /\
+          (o.o_halted ==> (o.o_store == s /\ o.o_effects == [])) /\
           (VRequire? x ==> (o.o_store == s /\ o.o_effects == [])) /\
           (o.o_store == s \/
            (VAssign? x /\
@@ -1223,16 +1305,44 @@ and has_flow_list (#a: Type0) (#e: Type0) (#v: Type0) (ops: list (action_view a 
   | [] -> false
   | x :: rest -> has_flow x || has_flow_list rest
 
-/// The shapes whose step can halt: a guard that does not hold; a
-/// selection whose condition cannot be decided or whose exit assertion is
-/// violated; a repeat whose bound cannot be read or is over its range.
+/// A view holds a shape the fold can REFUSE — a write, a call or a leaf
+/// — at any depth (Phase 2441). Under a witness declaring `Halts` each is
+/// a shape whose step can halt; under `Continues` none is, which is why
+/// `may_halt` below reads the declaration beside the shape.
 [@@ noextract_to "FSharp"]
-let may_halt (#a: Type0) (#e: Type0) (#v: Type0) (x: action_view a e v) : bool =
-  has_require x || has_flow x
+let rec has_refusable (#a: Type0) (#e: Type0) (#v: Type0) (x: action_view a e v)
+  : Tot bool (decreases %[x; 0]) =
+  match x with
+  | VSequence _ ops -> has_refusable_list ops
+  | VAssign _ _ _ _ -> true
+  | VCall _ _ _ -> true
+  | VLeaf _ -> true
+  | VRequire _ _ -> false
+  | VChoose _ _ when_true when_false _ -> has_refusable when_true || has_refusable when_false
+  | VRepeat _ _ body -> has_refusable body
+  | VEach _ elements -> has_refusable_list elements
+  | VEachOf _ _ _ _ elements -> has_refusable_list elements
+
+and has_refusable_list (#a: Type0) (#e: Type0) (#v: Type0) (ops: list (action_view a e v))
+  : Tot bool (decreases %[ops; 1]) =
+  match ops with
+  | [] -> false
+  | x :: rest -> has_refusable x || has_refusable_list rest
+
+/// The shapes whose step can halt UNDER A WITNESS: a guard that does not
+/// hold; a selection whose condition cannot be decided or whose exit
+/// assertion is violated; a repeat whose bound cannot be read or is over
+/// its range; and, under `Halts` (Phase 2441), any shape the fold can
+/// refuse.
+[@@ noextract_to "FSharp"]
+let may_halt (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0)
+             (w: witness a e v eff) (x: action_view a e v) : bool =
+  has_require x || has_flow x || (Halts? w.w_refusals && has_refusable x)
 
 [@@ noextract_to "FSharp"]
-let may_halt_list (#a: Type0) (#e: Type0) (#v: Type0) (ops: list (action_view a e v)) : bool =
-  has_require_list ops || has_flow_list ops
+let may_halt_list (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0)
+                  (w: witness a e v eff) (ops: list (action_view a e v)) : bool =
+  has_require_list ops || has_flow_list ops || (Halts? w.w_refusals && has_refusable_list ops)
 
 /// **`fold_no_halting_shape_no_halt`.** A view with no guard, no selection
 /// and no repeat in it never halts, under every witness and every
@@ -1244,11 +1354,14 @@ let may_halt_list (#a: Type0) (#e: Type0) (#v: Type0) (ops: list (action_view a 
 /// own atomicity unit (D8) and a handler that failed rolled ITSELF back
 /// and the fold carries on. Phase 1976 widened this from the guard alone
 /// (`fold_no_require_no_halt`, kept below as the corollary it now is) to
-/// the three halting shapes.
+/// the three halting shapes; Phase 2441 made the hypothesis read the
+/// WITNESS too, because under `Halts` a refusable shape is a fourth
+/// source of halting (`may_halt`), and under `Continues` the statement
+/// is exactly what it was.
 let rec fold_no_halting_shape_no_halt (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
                                       (w: witness a e v eff) (ar: handler_arm v eff p)
                                       (node_id: string) (x: action_view a e v) (s: store v) (pl: p)
-  : Lemma (requires not (may_halt x))
+  : Lemma (requires not (may_halt w x))
           (ensures not (fst (fold w ar node_id x s pl)).o_halted)
           (decreases %[x; 0; 0]) =
   match x with
@@ -1283,7 +1396,7 @@ and fold_no_halting_shape_no_halt_list (#a: Type0) (#e: Type0) (#v: Type0) (#eff
                                        (w: witness a e v eff) (ar: handler_arm v eff p)
                                        (node_id: string) (ops: list (action_view a e v))
                                        (s: store v) (pl: p)
-  : Lemma (requires not (may_halt_list ops))
+  : Lemma (requires not (may_halt_list w ops))
           (ensures not (fst (fold_many w ar node_id ops s pl)).o_halted)
           (decreases %[ops; 1; 0]) =
   match ops with
@@ -1300,10 +1413,14 @@ and fold_no_halting_shape_no_halt_list (#a: Type0) (#e: Type0) (#v: Type0) (#eff
 /// as written is false there, and this is the form that stays true — at
 /// any view without a selection or a repeat, which is every view the UI
 /// witness produces (`ui_view_no_flow`), it is exactly the old theorem.
+/// Phase 2441 adds the witness's reading to the hypothesis for the same
+/// reason 1976 added the shapes: under `Halts` a view with no guard halts
+/// on a refusal, so the 1967 statement is false there, and `Continues` —
+/// the UI witness's declaration — is the form that stays true.
 let fold_no_require_no_halt (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
                             (w: witness a e v eff) (ar: handler_arm v eff p)
                             (node_id: string) (x: action_view a e v) (s: store v) (pl: p)
-  : Lemma (requires not (has_require x) /\ not (has_flow x))
+  : Lemma (requires not (has_require x) /\ not (has_flow x) /\ Continues? w.w_refusals)
           (ensures not (fst (fold w ar node_id x s pl)).o_halted) =
   fold_no_halting_shape_no_halt w ar node_id x s pl
 
@@ -1368,7 +1485,7 @@ let rec fold_traced (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0
   match x with
   | VAssign act state_key value value_from ->
     if w.w_is_reserved state_key then
-      (refused node_id (w.w_describe act)
+      (refusal w node_id (w.w_describe act)
          (strcat "State key '"
            (strcat state_key
              (strcat "' is under the host-reserved '" (strcat w.w_reserved_prefix "' namespace")))) s,
@@ -1386,16 +1503,16 @@ let rec fold_traced (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0
       (match payload with
        | POk (OSome jv) -> (store_only (write s state_key jv), pl, TWrote (lookup s state_key))
        | POk ONone ->
-         (refused node_id (w.w_describe act) "valueFrom did not resolve to a value — no write performed" s,
+         (refusal w node_id (w.w_describe act) "valueFrom did not resolve to a value — no write performed" s,
           pl, TNothing)
        | PErr m ->
-         (refused node_id (w.w_describe act)
+         (refusal w node_id (w.w_describe act)
             (strcat "valueFrom errored: " (strcat m " — no write performed")) s,
           pl, TNothing))
 
   | VCall act endpoint declares_target ->
     if declares_target then
-      (refused node_id (w.w_describe act)
+      (refusal w node_id (w.w_describe act)
          "the call declares a result target; a handler declares where its own results land" s,
        pl, TNothing)
     else
@@ -1419,7 +1536,7 @@ let rec fold_traced (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0
   | VLeaf act ->
     ((match w.w_lower node_id act s with
       | Emit emitted -> { o_store = s; o_effects = [ emitted ]; o_diagnostics = []; o_halted = false }
-      | Refuse reason -> refused node_id (w.w_describe act) reason s
+      | Refuse reason -> refusal w node_id (w.w_describe act) reason s
       | Decline -> declined node_id (w.w_describe act) s),
      pl, TNothing)
 
@@ -1531,7 +1648,8 @@ let run_action_traced (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Typ
                       (w: witness a e v eff) (ar: handler_arm v eff p)
                       (node_id: string) (act: a) (s: store v) (pl: p)
   : bounded_outcome v eff & p & trace v =
-  fold_traced w ar node_id (w.w_view act) s pl
+  let (o, pl', tr) = fold_traced w ar node_id (w.w_view act) s pl in
+  (settle w s o, pl', tr)
 
 /// **`traced_agrees`.** The traced fold IS the fold, with a trace beside
 /// it: the outcome and the placement are equal at every view, store and
@@ -2223,6 +2341,363 @@ let each_of_priced_within_ceiling (#a: Type0) (#e: Type0) (#v: Type0)
   view_cost_list_within c elements;
   times_monotone (length elements) ceiling c
 
+// ─── 12. The halting reading (Phase 2441) ────────────────────────────
+
+(* ───────────────────────────────────────────────────────────────────
+   A witness over an actuator needs a plan to be ALL OR NOTHING: a run
+   that performed two actuations and refused the third has left the
+   device in a state the plan never described, which is exactly the
+   partial actuation an attacker wants. Under `Continues` the fold keeps
+   what was emitted before a refusal, by design — an inert UI action is
+   harmless, and the chain carrying on is the UI tier's contract
+   (`ui_never_halts`). So the reading is DECLARED per witness
+   (`w_refusals`), read at every refusal (`refusal`) and once more at the
+   run's end (`settle`), and this section is what the declaration buys.
+
+   The theorem is about the RUN (`run_action`), because the run is the
+   unit an actuator dispatches. The fold's own steps keep their prefix
+   semantics under both readings — a composition still carries the
+   members that ran before the halt, as `sequence_homomorphism` says —
+   which is what lets every theorem above stand over both readings with
+   its hypothesis reading the declaration where it must (`may_halt`).
+   The arm hypothesis is the same shape as `arm_preserves_reserved`: a
+   placement's answer is opaque, so what it reports is assumed rather
+   than proved, and `inert_arm_refuses_nothing` discharges it for the
+   placements that run no handlers.
+   ─────────────────────────────────────────────────────────────────── *)
+
+/// No diagnostic in the list is a refusal.
+[@@ noextract_to "FSharp"]
+let rec refusal_free (ds: list diagnostic) : Tot bool (decreases ds) =
+  match ds with
+  | [] -> true
+  | DRefused _ _ _ :: _ -> false
+  | DUnsupported _ _ :: rest -> refusal_free rest
+
+let rec refusal_free_app (xs: list diagnostic) (ys: list diagnostic)
+  : Lemma (ensures refusal_free (app xs ys) = (refusal_free xs && refusal_free ys)) (decreases xs) =
+  match xs with
+  | [] -> ()
+  | DRefused _ _ _ :: _ -> ()
+  | DUnsupported _ _ :: rest -> refusal_free_app rest ys
+
+/// The list's LAST diagnostic is a refusal — the shape of every halted
+/// outcome's diagnostics, below.
+[@@ noextract_to "FSharp"]
+let rec last_is_refusal (ds: list diagnostic) : Tot bool (decreases ds) =
+  match ds with
+  | [] -> false
+  | [ DRefused _ _ _ ] -> true
+  | [ DUnsupported _ _ ] -> false
+  | _ :: rest -> last_is_refusal rest
+
+let rec last_is_refusal_app (xs: list diagnostic) (ys: list diagnostic)
+  : Lemma (requires last_is_refusal ys) (ensures last_is_refusal (app xs ys)) (decreases xs) =
+  match xs with
+  | [] -> ()
+  | _ :: rest -> last_is_refusal_app rest ys
+
+/// The placement's answers refuse nothing. An ASSUMPTION about the seam,
+/// exactly as `arm_preserves_reserved` is: the arm returns diagnostics of
+/// its own, so the fold cannot bound what the placement reported.
+[@@ noextract_to "FSharp"]
+let arm_refuses_nothing (#v: Type0) (#eff: Type0) (#p: Type0) (ar: handler_arm v eff p) : prop =
+  forall (node_id: string) (endpoint: string) (s: store v) (pl: p).
+    (match ar.answer node_id endpoint s pl with
+     | ONone -> True
+     | OSome ans -> refusal_free ans.h_diagnostics)
+
+/// The arm that declines every call refuses nothing, so the theorem
+/// below is unconditional at every placement that runs no handlers.
+let inert_arm_refuses_nothing (#v: Type0) (#eff: Type0) (#p: Type0)
+  : Lemma (ensures arm_refuses_nothing (inert_arm #v #eff #p)) = ()
+
+/// **`halted_ends_with_refusal`.** A halted outcome's LAST diagnostic is
+/// the refusal that halted it — under EVERY witness and every arm, not
+/// only a halting one. A halt is always `halted` or `halted_after`, each
+/// of which ends the diagnostics with a `DRefused`; a composition that
+/// halted is its halting member's answer with the earlier members'
+/// diagnostics in front; and an answered call never halts. This is what
+/// "the refusal is reported with its position" rests on: the outcome
+/// names the refused step last, after the declines that ran before it,
+/// by the node and the witness's description of the step.
+let rec halted_ends_with_refusal (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
+                                 (w: witness a e v eff) (ar: handler_arm v eff p)
+                                 (node_id: string) (x: action_view a e v) (s: store v) (pl: p)
+  : Lemma (ensures (let (o, _) = fold w ar node_id x s pl in
+                    o.o_halted ==> last_is_refusal o.o_diagnostics))
+          (decreases %[x; 0; 0]) =
+  match x with
+  | VAssign _ state_key value value_from ->
+    if w.w_is_reserved state_key then ()
+    else
+      (match value_from with
+       | OSome expr ->
+         (match w.w_resolve s expr with
+          | Resolved _ -> ()
+          | _ -> ())
+       | ONone -> (match value with | OSome _ -> () | ONone -> ()))
+  | VCall _ endpoint declares_target ->
+    if declares_target then ()
+    else
+      (match ar.answer node_id endpoint s pl with
+       | ONone -> ()
+       | OSome _ -> ())
+  | VRequire _ condition ->
+    (match w.w_resolve s condition with
+     | Resolved jv -> if w.w_is_true jv then () else ()
+     | NotResolved -> ()
+     | Errored _ -> ())
+  | VLeaf act ->
+    (match w.w_lower node_id act s with
+     | Emit _ -> ()
+     | Refuse _ -> ()
+     | Decline -> ())
+  | VSequence _ ops -> halted_ends_with_refusal_list w ar node_id ops s pl
+  | VEach _ elements -> halted_ends_with_refusal_list w ar node_id elements s pl
+  | VEachOf _ source ceiling _ elements ->
+    (match w.w_resolve s source with
+     | Resolved jv ->
+       (match w.w_as_elements jv with
+        | OSome xs -> if length xs <= ceiling then halted_ends_with_refusal_list w ar node_id elements s pl else ()
+        | ONone -> ())
+     | _ -> ())
+  // A branch: its arm's halt is its halt (by induction), and a violated
+  // or undecidable exit assertion appends the refusal that halts it.
+  | VChoose act entry when_true when_false exit ->
+    (match w.w_resolve s entry with
+     | Resolved jv ->
+       let took_true = w.w_is_true jv in
+       (if took_true then halted_ends_with_refusal w ar node_id when_true s pl
+        else halted_ends_with_refusal w ar node_id when_false s pl);
+       let (o1, _) =
+         if took_true then fold w ar node_id when_true s pl
+         else fold w ar node_id when_false s pl
+       in
+       if o1.o_halted then ()
+       else
+         (match exit with
+          | ONone -> ()
+          | OSome assertion ->
+            (match w.w_resolve o1.o_store assertion with
+             | Resolved jv' ->
+               if w.w_is_true jv' = took_true then ()
+               else
+                 last_is_refusal_app o1.o_diagnostics
+                   [ DRefused node_id (w.w_describe act)
+                       (if took_true then "the exit assertion did not hold after the true arm"
+                        else "the exit assertion held after the false arm") ]
+             | NotResolved ->
+               last_is_refusal_app o1.o_diagnostics
+                 [ DRefused node_id (w.w_describe act) "the exit assertion did not resolve to a value" ]
+             | Errored m ->
+               last_is_refusal_app o1.o_diagnostics
+                 [ DRefused node_id (w.w_describe act) (strcat "the exit assertion errored: " m) ]))
+     | NotResolved -> ()
+     | Errored _ -> ())
+  | VRepeat _ count body ->
+    (match count with
+     | BLiteral n -> halted_ends_with_refusal_repeat w ar node_id body n s pl
+     | BParameter expr lo hi ->
+       (match w.w_resolve s expr with
+        | Resolved jv ->
+          (match w.w_as_count jv with
+           | OSome n -> if lo <= n && n <= hi then halted_ends_with_refusal_repeat w ar node_id body n s pl else ()
+           | ONone -> ())
+        | _ -> ()))
+
+and halted_ends_with_refusal_list (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
+                                  (w: witness a e v eff) (ar: handler_arm v eff p)
+                                  (node_id: string) (ops: list (action_view a e v))
+                                  (s: store v) (pl: p)
+  : Lemma (ensures (let (o, _) = fold_many w ar node_id ops s pl in
+                    o.o_halted ==> last_is_refusal o.o_diagnostics))
+          (decreases %[ops; 1; 0]) =
+  match ops with
+  | [] -> ()
+  | x :: rest ->
+    halted_ends_with_refusal w ar node_id x s pl;
+    let (o1, p1) = fold w ar node_id x s pl in
+    if o1.o_halted then ()
+    else begin
+      halted_ends_with_refusal_list w ar node_id rest o1.o_store p1;
+      let (o2, _) = fold_many w ar node_id rest o1.o_store p1 in
+      if o2.o_halted then last_is_refusal_app o1.o_diagnostics o2.o_diagnostics else ()
+    end
+
+and halted_ends_with_refusal_repeat (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
+                                    (w: witness a e v eff) (ar: handler_arm v eff p)
+                                    (node_id: string) (body: action_view a e v) (n: nat)
+                                    (s: store v) (pl: p)
+  : Lemma (ensures (let (o, _) = fold_repeat w ar node_id body n s pl in
+                    o.o_halted ==> last_is_refusal o.o_diagnostics))
+          (decreases %[body; 2; n]) =
+  if n = 0 then ()
+  else begin
+    halted_ends_with_refusal w ar node_id body s pl;
+    let (o1, p1) = fold w ar node_id body s pl in
+    if o1.o_halted then ()
+    else begin
+      halted_ends_with_refusal_repeat w ar node_id body (n - 1) o1.o_store p1;
+      let (o2, _) = fold_repeat w ar node_id body (n - 1) o1.o_store p1 in
+      if o2.o_halted then last_is_refusal_app o1.o_diagnostics o2.o_diagnostics else ()
+    end
+  end
+
+/// **`halting_unhalted_is_refusal_free`.** Under a witness declaring
+/// `Halts`, and an arm whose answers refuse nothing, an outcome that did
+/// NOT halt carries no refusal: every refusal the fold can produce went
+/// through `refusal`, which halts under this reading, and a composition
+/// that did not halt is the composition of members that did not. So "the
+/// run did not halt" and "every step was admitted" are one fact.
+let rec halting_unhalted_is_refusal_free (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
+                                         (w: witness a e v eff) (ar: handler_arm v eff p)
+                                         (node_id: string) (x: action_view a e v) (s: store v) (pl: p)
+  : Lemma (requires Halts? w.w_refusals /\ arm_refuses_nothing ar)
+          (ensures (let (o, _) = fold w ar node_id x s pl in
+                    not o.o_halted ==> refusal_free o.o_diagnostics))
+          (decreases %[x; 0; 0]) =
+  match x with
+  | VAssign _ state_key value value_from ->
+    if w.w_is_reserved state_key then ()
+    else
+      (match value_from with
+       | OSome expr ->
+         (match w.w_resolve s expr with
+          | Resolved _ -> ()
+          | _ -> ())
+       | ONone -> (match value with | OSome _ -> () | ONone -> ()))
+  | VCall _ endpoint declares_target ->
+    if declares_target then ()
+    else
+      (match ar.answer node_id endpoint s pl with
+       | ONone -> ()
+       | OSome _ -> ())
+  | VRequire _ condition ->
+    (match w.w_resolve s condition with
+     | Resolved jv -> if w.w_is_true jv then () else ()
+     | NotResolved -> ()
+     | Errored _ -> ())
+  | VLeaf act ->
+    (match w.w_lower node_id act s with
+     | Emit _ -> ()
+     | Refuse _ -> ()
+     | Decline -> ())
+  | VSequence _ ops -> halting_unhalted_is_refusal_free_list w ar node_id ops s pl
+  | VEach _ elements -> halting_unhalted_is_refusal_free_list w ar node_id elements s pl
+  | VEachOf _ source ceiling _ elements ->
+    (match w.w_resolve s source with
+     | Resolved jv ->
+       (match w.w_as_elements jv with
+        | OSome xs ->
+          if length xs <= ceiling then halting_unhalted_is_refusal_free_list w ar node_id elements s pl else ()
+        | ONone -> ())
+     | _ -> ())
+  // A branch that did not halt is its arm's outcome, and the arm did
+  // not halt; an exit assertion that failed halted it, so there is
+  // nothing to show there.
+  | VChoose _ entry when_true when_false _ ->
+    (match w.w_resolve s entry with
+     | Resolved jv ->
+       if w.w_is_true jv then halting_unhalted_is_refusal_free w ar node_id when_true s pl
+       else halting_unhalted_is_refusal_free w ar node_id when_false s pl
+     | _ -> ())
+  | VRepeat _ count body ->
+    (match count with
+     | BLiteral n -> halting_unhalted_is_refusal_free_repeat w ar node_id body n s pl
+     | BParameter expr lo hi ->
+       (match w.w_resolve s expr with
+        | Resolved jv ->
+          (match w.w_as_count jv with
+           | OSome n ->
+             if lo <= n && n <= hi then halting_unhalted_is_refusal_free_repeat w ar node_id body n s pl else ()
+           | ONone -> ())
+        | _ -> ()))
+
+and halting_unhalted_is_refusal_free_list (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
+                                          (w: witness a e v eff) (ar: handler_arm v eff p)
+                                          (node_id: string) (ops: list (action_view a e v))
+                                          (s: store v) (pl: p)
+  : Lemma (requires Halts? w.w_refusals /\ arm_refuses_nothing ar)
+          (ensures (let (o, _) = fold_many w ar node_id ops s pl in
+                    not o.o_halted ==> refusal_free o.o_diagnostics))
+          (decreases %[ops; 1; 0]) =
+  match ops with
+  | [] -> ()
+  | x :: rest ->
+    halting_unhalted_is_refusal_free w ar node_id x s pl;
+    let (o1, p1) = fold w ar node_id x s pl in
+    if o1.o_halted then ()
+    else begin
+      halting_unhalted_is_refusal_free_list w ar node_id rest o1.o_store p1;
+      let (o2, _) = fold_many w ar node_id rest o1.o_store p1 in
+      refusal_free_app o1.o_diagnostics o2.o_diagnostics
+    end
+
+and halting_unhalted_is_refusal_free_repeat (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
+                                            (w: witness a e v eff) (ar: handler_arm v eff p)
+                                            (node_id: string) (body: action_view a e v) (n: nat)
+                                            (s: store v) (pl: p)
+  : Lemma (requires Halts? w.w_refusals /\ arm_refuses_nothing ar)
+          (ensures (let (o, _) = fold_repeat w ar node_id body n s pl in
+                    not o.o_halted ==> refusal_free o.o_diagnostics))
+          (decreases %[body; 2; n]) =
+  if n = 0 then ()
+  else begin
+    halting_unhalted_is_refusal_free w ar node_id body s pl;
+    let (o1, p1) = fold w ar node_id body s pl in
+    if o1.o_halted then ()
+    else begin
+      halting_unhalted_is_refusal_free_repeat w ar node_id body (n - 1) o1.o_store p1;
+      let (o2, _) = fold_repeat w ar node_id body (n - 1) o1.o_store p1 in
+      refusal_free_app o1.o_diagnostics o2.o_diagnostics
+    end
+  end
+
+/// **`halting_run_all_or_nothing`** — THE ATOMICITY THEOREM (Phase 2441).
+/// Under a witness declaring `Halts`, and an arm whose answers refuse
+/// nothing, a run is one of exactly two things. Either it did not halt:
+/// then it is the fold's own outcome, placement included — every effect
+/// it emitted stands — and it met NO refusal, so every step was admitted.
+/// Or it halted: then its store is the ENTRY store, it emitted NOTHING,
+/// and its last diagnostic is the refusal (or the guard, or the undecided
+/// branch, or the over-bound repeat) that halted it, after the declines
+/// that ran before it. There is no third outcome, which is the atomicity
+/// unit an actuator relies on: a plan is performed whole or not at all,
+/// decided by the core rather than by a wrapper at the placement.
+let halting_run_all_or_nothing (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
+                               (w: witness a e v eff) (ar: handler_arm v eff p)
+                               (node_id: string) (act: a) (s: store v) (pl: p)
+  : Lemma (requires Halts? w.w_refusals /\ arm_refuses_nothing ar)
+          (ensures (let (o, pl') = run_action w ar node_id act s pl in
+                    let (f, pf) = fold w ar node_id (w.w_view act) s pl in
+                    pl' == pf /\
+                    (not o.o_halted ==> (o == f /\ refusal_free o.o_diagnostics)) /\
+                    (o.o_halted ==> (o.o_store == s /\ o.o_effects == [] /\ last_is_refusal o.o_diagnostics)))) =
+  halting_unhalted_is_refusal_free w ar node_id (w.w_view act) s pl;
+  halted_ends_with_refusal w ar node_id (w.w_view act) s pl
+
+/// **`continuing_run_is_fold`.** Under `Continues` a run IS the fold —
+/// `settle` is the identity and `refusal` is `refused` — so a witness
+/// that declares today's reading folds byte for byte as it did before
+/// the declaration existed. The UI tier is one such witness
+/// (`ui_witness`), which is why its five theorems keep their statements.
+let continuing_run_is_fold (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
+                           (w: witness a e v eff) (ar: handler_arm v eff p)
+                           (node_id: string) (act: a) (s: store v) (pl: p)
+  : Lemma (requires Continues? w.w_refusals)
+          (ensures run_action w ar node_id act s pl == fold w ar node_id (w.w_view act) s pl) = ()
+
+/// The traced run settles exactly as the run does — `traced_agrees`,
+/// carried through `settle` — so `halting_run_all_or_nothing` is a
+/// statement about `runTraced` too.
+let traced_run_settles_alike (#a: Type0) (#e: Type0) (#v: Type0) (#eff: Type0) (#p: Type0)
+                             (w: witness a e v eff) (ar: handler_arm v eff p)
+                             (node_id: string) (act: a) (s: store v) (pl: p)
+  : Lemma (ensures (let (o, pl', _) = run_action_traced w ar node_id act s pl in
+                    (o, pl') == run_action w ar node_id act s pl)) =
+  traced_agrees w ar node_id (w.w_view act) s pl
+
 (* ═══════════════════════════════════════════════════════════════════
    THE UI WITNESS — today's fourteen arms seen through the view.
 
@@ -2544,7 +3019,11 @@ let ui_witness (#v: Type0) (#b: Type0) (#k: Type0) (ax: axioms v b)
     // Unreachable too: no arm views as a repeat (`ui_view_no_flow`). The
     // same fail-closed constant — an unreadable count halts.
     w_as_count = (fun _ -> ONone);
-    w_as_elements = (fun _ -> ONone) }
+    w_as_elements = (fun _ -> ONone);
+    // Today's reading, declared (Phase 2441): a UI leaf's refusal is a
+    // diagnostic the chain carries on past. This is the declaration
+    // `ui_never_halts` stands on, beside the two shape lemmas.
+    w_refusals = Continues }
 
 /// **The fold at the UI witness** — `BoundedActions.runBoundedActionWith`
 /// today, `BoundedActions.run uiWitness` after Phase 1897. Phase 1715's

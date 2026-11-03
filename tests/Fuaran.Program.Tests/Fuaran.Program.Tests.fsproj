@@ -36,6 +36,9 @@
     <Compile Include="EachTests.fs" />
     <!-- Phase 1991: Each over a collection the store holds, the dispatch axis -->
     <Compile Include="StoredEachTests.fs" />
+    <!-- Phase 2441: the witness's declared reading of a refusal — a halting
+         witness's run is all or nothing; a continuing one keeps the prefix. -->
+    <Compile Include="HaltingRefusalTests.fs" />
     <!-- Phase 1992: the FOURTH witness — a grid of cells by identity, at the
          state axis, exercising Each against a spreadsheet's loops. -->
     <Compile Include="GridDomain.fs" />

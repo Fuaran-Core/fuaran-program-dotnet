@@ -192,21 +192,22 @@
       "id": "view-only-guard-halts",
       "level": "proved",
       "phase": "Phase 1967",
-      "claim": "A view with no Require shape in it — at its root or inside a sequence at any depth — folds to an outcome that is not halted, under every witness and every placement arm; with fold_total's clause that a halted step is a Require step, a guard is the only thing that halts. An answered call never halts: the placement's answer carries no halt, by its type, because a handler is its own atomicity unit (D8).",
+      "claim": "A view with no Require shape in it — at its root or inside a sequence at any depth — folds to an outcome that is not halted, under every witness declaring today's reading of a refusal (Continues) and every placement arm; with fold_total's clause that a halted step is a Require step or a step under a witness declaring Halts, at such a witness a guard is the only thing that halts. An answered call never halts: the placement's answer carries no halt, by its type, because a handler is its own atomicity unit (D8).",
       "evidence": {
         "theorem": "fold_no_require_no_halt",
         "model": "proofs/BoundedFold.fst",
         "prover": "proofs/fstar-pin.json",
         "supporting": [
-          "fold_no_require_no_halt_list",
+          "fold_no_halting_shape_no_halt",
           "has_require",
           "has_require_list"
         ],
         "definitions": [
           "halted",
-          "bounded_outcome"
+          "bounded_outcome",
+          "refusal_reading"
         ],
-        "note": "unconditional. The fold does not roll back on a halt — the outcome's store is the store as of the halt — and the placement that rolls back is the handler (D8); `Staging.fst`'s plan phase treats a halted Compute stage as a halt of the handler"
+        "note": "unconditional at a witness declaring Continues, which is every witness that existed before Phase 2441 and the UI witness; Phase 2441 added that reading to the hypothesis, as Phase 1976 added the absence of flow shapes, because under Halts a refusal halts (see halting-run-all-or-nothing). The fold does not roll back on a halt — the outcome's store is the store as of the halt — and the placement that rolls back is the handler (D8); `Staging.fst`'s plan phase treats a halted Compute stage as a halt of the handler. Under Halts the RUN settles (the model's settle), which is the one exception, stated in D60"
       }
     },
     {
@@ -221,9 +222,10 @@
         "supporting": [
           "ui_view_no_require",
           "ui_view_no_require_list",
-          "fold_no_require_no_halt"
+          "ui_view_no_flow",
+          "fold_no_halting_shape_no_halt"
         ],
-        "note": "unconditional; `ui_witness` fills `w_is_true` with the fail-closed constant, and this theorem is why that arrow is never read"
+        "note": "unconditional; `ui_witness` fills `w_is_true` with the fail-closed constant, and this theorem is why that arrow is never read. Since Phase 2441 `ui_witness` also declares w_refusals = Continues, and this theorem stands on that declaration beside the two shape lemmas: the UI tier's reading of a refusal is unchanged by the declaration's existence"
       }
     },
     {
@@ -1361,7 +1363,7 @@
       "id": "flow-shapes-halting",
       "level": "proved",
       "phase": "Phase 1976",
-      "claim": "Over the view widened with selection (Choose) and bounded iteration (Repeat), a view with no guard, no branch and no repeat in it never halts, under every witness and every placement arm; the three are the whole account of halting, and Phase 1967's guard-only statement is kept as the corollary for a view without the new shapes.",
+      "claim": "Over the view widened with selection (Choose) and bounded iteration (Repeat), a view with no guard, no branch and no repeat in it never halts, under every witness declaring today's reading of a refusal (Continues) and every placement arm; the three are the whole account of halting at such a witness, and under a witness declaring Halts (Phase 2441) a refusable shape — a write, a call, a leaf — is the fourth source, named by may_halt. Phase 1967's guard-only statement is kept as the corollary for a view without the new shapes at a continuing witness.",
       "evidence": {
         "theorem": "fold_no_halting_shape_no_halt",
         "model": "proofs/BoundedFold.fst",
@@ -1375,10 +1377,11 @@
         "definitions": [
           "has_require",
           "has_flow",
+          "has_refusable",
           "may_halt",
           "composition"
         ],
-        "note": "fold_total's structural characterisation now excludes the three COMPOSITION shapes (sequence, selection, repeat) rather than the one; the UI tier views nothing as either new shape (ui_view_no_flow), so every UI theorem keeps its pre-1967 statement word for word"
+        "note": "fold_total's structural characterisation now excludes the three COMPOSITION shapes (sequence, selection, repeat) rather than the one; the UI tier views nothing as either new shape (ui_view_no_flow), so every UI theorem keeps its pre-1967 statement word for word. Since Phase 2441 may_halt takes the witness: the hypothesis reads the declared reading beside the shapes, and at a witness declaring Continues it is exactly the 1976 hypothesis"
       }
     },
     {
@@ -2496,6 +2499,117 @@
         "assumption": "the whole-run durable differential excludes reporting programs; the finding is compared recorder to recorder at its own ordinal"
       },
       "mitigation": "ReportTests pins the sequence on production (a report at ordinal 0, the staged calls after it); a production run whose Invoked/Replayed lists did not shift by the report count would be the falsifier"
+    },
+    {
+      "id": "halting-run-all-or-nothing",
+      "level": "proved",
+      "phase": "Phase 2441",
+      "claim": "Under a witness declaring that its refusals halt (w_refusals = Halts; ActionWitness.Refusals = RefusalReading.Halts), and a placement arm whose answers carry no refusal, a run is one of exactly two things. Either it did not halt: then it is the fold's own outcome, placement included — every effect it emitted stands — and its diagnostics carry no refusal, so every step was admitted. Or it halted: then its store is the ENTRY store, it emitted NOTHING, and its last diagnostic is the refusal (or the guard, the undecided branch, the over-bound repeat) that halted it, after the declines that ran before it. There is no third outcome.",
+      "conditional_on": "arm_refuses_nothing ar — the placement seam's answers carry no DRefused diagnostic; discharged by inert_arm_refuses_nothing for the placements that run no handlers",
+      "evidence": {
+        "theorem": "halting_run_all_or_nothing",
+        "model": "proofs/BoundedFold.fst",
+        "prover": "proofs/fstar-pin.json",
+        "supporting": [
+          "halting_unhalted_is_refusal_free",
+          "halting_unhalted_is_refusal_free_list",
+          "halting_unhalted_is_refusal_free_repeat",
+          "halted_ends_with_refusal",
+          "refusal_free_app",
+          "last_is_refusal_app",
+          "inert_arm_refuses_nothing",
+          "traced_run_settles_alike"
+        ],
+        "definitions": [
+          "refusal_reading",
+          "refusal",
+          "settle",
+          "run_action",
+          "refusal_free",
+          "last_is_refusal",
+          "arm_refuses_nothing"
+        ],
+        "note": "every refusal site in fold and fold_traced goes through refusal, which reads the declaration, and run_action / run_action_traced settle through settle; the fold's own steps keep their prefix semantics under both readings, which is why sequence_homomorphism, each_is_lowering, repeat_is_unrolling and traced_agrees are unchanged in statement and only fold_total and may_halt read the declaration. D60 records the design and how it composes with the handler's atomicity (D8). Perturbing settle to keep a halted run's effects made the prover refuse this theorem"
+      }
+    },
+    {
+      "id": "halted-run-ends-with-its-refusal",
+      "level": "proved",
+      "phase": "Phase 2441",
+      "claim": "A halted outcome's last diagnostic is the refusal that halted it — under EVERY witness and every placement arm, whichever reading the witness declares: a halt is always halted or halted_after, each of which ends the diagnostics with a DRefused, a composition that halted is its halting member's answer behind the earlier members' diagnostics, and an answered call never halts. This is what 'the refusal is reported with its position' rests on: the outcome names the halting step last, by node and by the witness's description; a traced run's trace holds the members that ran, so the halting member's ordinal is the trace's length.",
+      "evidence": {
+        "theorem": "halted_ends_with_refusal",
+        "model": "proofs/BoundedFold.fst",
+        "prover": "proofs/fstar-pin.json",
+        "supporting": [
+          "halted_ends_with_refusal_list",
+          "halted_ends_with_refusal_repeat",
+          "last_is_refusal_app"
+        ],
+        "definitions": [
+          "last_is_refusal",
+          "halted",
+          "halted_after"
+        ],
+        "note": "unconditional, and not new behaviour: it was true of every halt since Phase 1967 and is stated now because the halting reading makes it load-bearing"
+      }
+    },
+    {
+      "id": "continuing-witness-folds-as-before",
+      "level": "proved",
+      "phase": "Phase 2441",
+      "claim": "Under a witness declaring today's reading (Continues) a run IS the fold: settle is the identity and refusal is refused, so a witness that declares Continues folds byte for byte as every witness did before the declaration existed. The UI witness declares it, which is why its five theorems keep their statements.",
+      "evidence": {
+        "theorem": "continuing_run_is_fold",
+        "model": "proofs/BoundedFold.fst",
+        "prover": "proofs/fstar-pin.json",
+        "supporting": [
+          "ui_never_halts"
+        ],
+        "definitions": [
+          "settle",
+          "refusal",
+          "ui_witness"
+        ],
+        "note": "unconditional; the differential host at ToyDomain.witness (Continues) is unchanged in substance and still green, which is the tested half of the same claim"
+      }
+    },
+    {
+      "id": "halting-reading-oracle-at-the-toy-witness",
+      "level": "tested",
+      "phase": "Phase 2441",
+      "claim": "At the toy witness declaring Halts, the extraction's run_action and the core's BoundedActions.run agree at every step of the whole hand-written toy corpus, threaded store to store, with the arm that declines every call and with the arm that answers one — so the core's refusal and settle are the model's. The corpus reaches at least one refusal that halts under this reading, asserted so the comparison cannot be vacuous.",
+      "evidence": {
+        "family": "Phase 1715 - the proved bounded fold as oracle at the toy witness",
+        "host": "tests/Fuaran.Program.Tests/ToyBoundedFoldOracleTests.fs",
+        "cases": [
+          "and at the HALTING toy witness, where every refusal halts and a run settles (Phase 2441)"
+        ],
+        "runner": "run.ps1 (the Fuaran.Program.Tests project) and proofs/check.ps1 step 6 (the BoundedFold module's toy host)",
+        "note": "the model witness is DERIVED from whichever production witness the host is handed (toyModelWitnessOf), its w_refusals a constructor for a constructor; ToyDomain.halting is ToyDomain.witness with the one member changed. Keeping a settled run's effects in the core made this case fail"
+      }
+    },
+    {
+      "id": "halting-reading-cases",
+      "level": "tested",
+      "phase": "Phase 2441",
+      "claim": "One program run through the two toy witnesses that differ only in the declaration: a halting witness whose third leaf refuses emits nothing, keeps the entry store and names the leaf last; a non-halting witness keeps the prefix as before; the refused leaf's position is the trace's length; the fold's own four refusals halt under Halts and continue under Continues; a guard halt and two flow halts settle under Halts and keep the prefix under Continues; a fully admitted run is identical under both; every refusal is diagnosed and none halts under Continues; the entry scope refusal settles alike.",
+      "evidence": {
+        "family": "Phase 2441 - the witness's declared reading of a refusal",
+        "host": "tests/Fuaran.Program.Tests/HaltingRefusalTests.fs",
+        "cases": [
+          "a halting witness whose third leaf refuses emits nothing, keeps the entry store, and names the leaf last",
+          "a non-halting witness keeps the prefix as today, byte for byte",
+          "the refused leaf's POSITION is the traced run's length: the members that ran, the refused one last",
+          "the fold's OWN refusals halt under the halting reading too, and continue under today's",
+          "a guard halt and a flow halt settle under the halting reading, and keep the prefix under today's",
+          "a run every step of which was admitted is identical under both readings",
+          "a witness declaring Continues never halts on a refusal — the reading the UI tier declares (ui_never_halts)",
+          "a scope refusal at the fold's entry settles the same way under both readings: nothing ran"
+        ],
+        "runner": "run.ps1 (the Tests project)",
+        "note": "the UI adapters left this repository (fuaran#2012), so 'the UI tier's reading is unchanged' is tested here at the continuing toy witness and proved at ui_witness (ui_never_halts, continuing_run_is_fold); GenericityTests, written before the declaration existed, is unchanged and green"
+      }
     }
   ]
 }

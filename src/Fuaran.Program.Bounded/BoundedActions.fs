@@ -83,10 +83,24 @@ open Fuaran.Core
 //    - `Require` → the HALTING guard (Phase 1967): resolve the condition
 //      against the store; the boolean true holds, anything else halts the
 //      enclosing sequence with a refusal diagnostic and `Halted = true`. The
-//      one shape that halts, and the one the UI tier never produces.
+//      one shape that halts under today's reading, and the one the UI tier
+//      never produces.
 //    - `Leaf` → whatever the witness's `Lower` answers: at most one effect, a
 //      refusal with a reason, or a documented decline. The fold does not look
 //      inside it.
+//
+//  ── The witness's reading of a refusal (Phase 2441, D60) ───────────────────
+//  Every refusal the fold produces — a leaf's `Refuse`, a reserved-key write,
+//  a write whose source did not resolve or errored, a call declaring a result
+//  target — goes through ONE constructor, `refusal`, which reads the witness's
+//  `ActionWitness.Refusals`. Under `RefusalReading.Continues` (today's reading,
+//  the UI tier's) it is a diagnostic the sequence carries on past. Under
+//  `RefusalReading.Halts` it HALTS exactly as a guard does, and `run` /
+//  `runTraced` SETTLE a halted run to the entry store with no effect (the
+//  model's `settle`): the run is all or nothing, which is the atomicity unit
+//  an actuator's witness declares and relies on (`halting_run_all_or_nothing`).
+//  A witness declaring `Continues` folds byte for byte as before the
+//  declaration existed (`continuing_run_is_fold`).
 //
 //  ── The handler-effect arm (DECISIONS.md D7) ────────────────────────────────
 //  Recognising a call action is the FOLD's job, at every depth, because the fold
@@ -143,7 +157,12 @@ type BoundedOutcome<'Store, 'Effect> =
         /// back; a placement that does is the handler, whose atomicity unit it
         /// is (D8). `false` on every outcome the UI tier produces: none of its
         /// arms views as a guard, and the model proves it never halts
-        /// (`ui_never_halts`).
+        /// (`ui_never_halts`). Under a witness declaring
+        /// `RefusalReading.Halts` (Phase 2441) a refusal halts too, and the
+        /// run `run` returns is SETTLED: `Store` is then the entry store and
+        /// `Effects` is empty, with `Diagnostics` ending in the refusal — the
+        /// one case in which the store a run returns is not the store as of
+        /// the halt.
         Halted: bool
     }
 
@@ -282,6 +301,49 @@ module BoundedActions =
           Diagnostics = outcome.Diagnostics @ [ BoundedDiagnostic.Refused(nodeId, description, reason) ]
           Halted = true }
 
+    /// A REFUSAL as the witness declared it reads (Phase 2441): under
+    /// `RefusalReading.Continues` exactly `refused` — the diagnostic, no halt;
+    /// under `RefusalReading.Halts` exactly `halted` — the same diagnostic and
+    /// the flag the enclosing sequence stops on. The ONE place the fold reads
+    /// the declaration while it runs: every refusal site in `runFold` goes
+    /// through it, so there is no refusal the declaration does not cover. The
+    /// model's `refusal`.
+    let private refusal
+        (fold: DispatchFold<'Action, 'Expr, 'Store, 'Effect>)
+        (nodeId: string)
+        (description: string)
+        (reason: string)
+        (s: 'Store)
+        : BoundedOutcome<'Store, 'Effect> =
+        match fold.Action.Refusals with
+        | RefusalReading.Continues -> refused nodeId description reason s
+        | RefusalReading.Halts -> halted nodeId description reason s
+
+    /// A RUN's outcome under the witness's declaration (Phase 2441). Under
+    /// `Continues` the fold's outcome, untouched. Under `Halts` a halted
+    /// outcome is settled to ALL OR NOTHING — the entry store and no effect,
+    /// the diagnostics kept (the declines that ran and the refusal that halted
+    /// it, in order), so the outcome still says what happened. An outcome that
+    /// did not halt is untouched under either reading. The one place the fold
+    /// rolls back, and it is the RUN and not a step that rolls: the handler's
+    /// own atomicity (D8) is the same act one level up, which is what keeps
+    /// the two readings from disagreeing about one program (D60). The model's
+    /// `settle`.
+    let private settle
+        (fold: DispatchFold<'Action, 'Expr, 'Store, 'Effect>)
+        (entry: 'Store)
+        (outcome: BoundedOutcome<'Store, 'Effect>)
+        : BoundedOutcome<'Store, 'Effect> =
+        match fold.Action.Refusals with
+        | RefusalReading.Continues -> outcome
+        | RefusalReading.Halts ->
+            if outcome.Halted then
+                { outcome with
+                    Store = entry
+                    Effects = [] }
+            else
+                outcome
+
     /// Compose two outcomes as a sequence composes its members: the second's
     /// store and halt, the lists concatenated in order. The model's
     /// `composed`.
@@ -377,7 +439,8 @@ module BoundedActions =
         // (`Trace.Wrote`); a refused write records nothing to undo.
         | ActionView.Assign(key, value, from) ->
             if fold.Store.IsReserved key then
-                refused
+                refusal
+                    fold
                     nodeId
                     (fold.Action.Describe action)
                     (sprintf "State key '%s' is under the host-reserved '%s' namespace" key fold.Store.ReservedPrefix)
@@ -407,7 +470,8 @@ module BoundedActions =
 
                     store (fold.Store.Assign key jv s), placement, trace
                 | Ok None ->
-                    refused
+                    refusal
+                        fold
                         nodeId
                         (fold.Action.Describe action)
                         "valueFrom did not resolve to a value — no write performed"
@@ -415,7 +479,8 @@ module BoundedActions =
                     placement,
                     Trace.Nothing
                 | Error m ->
-                    refused
+                    refusal
+                        fold
                         nodeId
                         (fold.Action.Describe action)
                         (sprintf "valueFrom errored: %s — no write performed" m)
@@ -441,7 +506,8 @@ module BoundedActions =
         // endpoint and the target flag, and nothing else.
         | ActionView.Call(endpoint, declaresTarget) ->
             if declaresTarget then
-                refused
+                refusal
+                    fold
                     nodeId
                     (fold.Action.Describe action)
                     "the call declares a result target; a handler declares where its own results land"
@@ -614,8 +680,10 @@ module BoundedActions =
         // A leaf is the domain's: lowered to at most one effect, refused with a
         // reason, or declined — each with a readable diagnostic, so "this action
         // is inert on the generated-app path" is observable. The fold does not
-        // look inside it, and it never recurses into one. A leaf's refusal does
-        // NOT halt: the sequence carries on past it, as it always has.
+        // look inside it, and it never recurses into one. A leaf's refusal
+        // reads as the witness DECLARED (Phase 2441): under `Continues` it does
+        // not halt and the sequence carries on past it, as it always has; under
+        // `Halts` it halts the sequence as a guard does, and the run settles.
         | ActionView.Leaf _ ->
             (match fold.Action.Lower nodeId action s with
              | LeafOutcome.Emit effect ->
@@ -623,7 +691,7 @@ module BoundedActions =
                    Effects = [ effect ]
                    Diagnostics = []
                    Halted = false }
-             | LeafOutcome.Refuse reason -> refused nodeId (fold.Action.Describe action) reason s
+             | LeafOutcome.Refuse reason -> refusal fold nodeId (fold.Action.Describe action) reason s
              | LeafOutcome.Decline -> noOp nodeId (fold.Action.Describe action) s),
             placement,
             Trace.Nothing
@@ -745,7 +813,7 @@ module BoundedActions =
         | Some refused -> refused, placement
         | None ->
             let outcome, p, _ = runFold fold arm false nodeId action s placement
-            outcome, p
+            settle fold s outcome, p
 
     /// Interpret one bounded action against the store at a placement that runs
     /// NO handlers — the browser client and the server driver, neither of which
@@ -794,7 +862,9 @@ module BoundedActions =
 
         match scopeRefusal fold nodeId action s with
         | Some refused -> refused, placement, Trace.Nothing
-        | None -> runFold fold arm true nodeId action s placement
+        | None ->
+            let outcome, p, trace = runFold fold arm true nodeId action s placement
+            settle fold s outcome, p, trace
 
     /// Whether an action is in the REVERSIBLE FRAGMENT, decided from the tree
     /// alone: sequence, assign, the guard, a branch WITH an exit assertion, a
@@ -968,7 +1038,11 @@ module BoundedActions =
                   // from its lowered elements — so it is never substituted
                   // into and reads no placeholder.
                   Substitute = fun _ _ reversed -> reversed
-                  Placeholders = fun _ -> [] }
+                  Placeholders = fun _ -> []
+                  // An inverse refuses nothing — its leaves decline and its
+                  // writes restore recorded values — so the reading is moot;
+                  // today's, so an inverse never settles.
+                  Refusals = RefusalReading.Continues }
               Expr = fold.Expr
               Store = fold.Store }
 
