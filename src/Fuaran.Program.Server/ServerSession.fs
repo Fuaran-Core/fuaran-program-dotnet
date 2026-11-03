@@ -360,8 +360,10 @@ module ServerSession =
         (store: 'Store)
         (tree: 'Node)
         : Result<ServerSession<'Node, 'Action, 'Expr, 'Store, 'Op, 'Effect>, ServerStrictFinding list> =
+        // With the registry, so an effect stage's declared quantities reach the
+        // ceilings (Phase 2438, D58).
         let projection =
-            ServerDemanded.ofTreeAndHandlers services.Witness services.Handlers tree
+            ServerDemanded.ofTreeHandlersAndRegistry services.Witness services.Effects services.Handlers tree
 
         let findings =
             (Demanded.checkProjection (coverageOf coverage services) projection

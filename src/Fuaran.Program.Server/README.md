@@ -169,6 +169,34 @@ bound nobody can judge admits nothing. `proofs/EffectGate.fst` proves the decisi
 the window refused, the first past it admitted, the count and the sum never over their caps, the
 dwell kept — and the differential host runs its extraction beside the shipped function.
 
+### What an effect spends, priced before the run
+
+A window counts admissions as they happen. Some bounds must hold before anything starts: the money a
+program can spend through a paid API, the bytes it can send, the minutes a heater can run. The host
+declares what ONE performance of a capability spends, in the shape a leaf declares it (Phase 2438,
+D58):
+
+```fsharp
+registry
+|> ServerEffectRegistry.spends "host:charge" [ { Name = "api-spend"; Unit = cents; Amount = 2 } ]
+```
+
+`Unit` comes from the Core unit algebra (`Unit.parse "c[USD]"`), and `Amount` is the performance's
+worst case, so a negative amount spends nothing. The demanded document prices every effect stage of
+the capability with it, beside what a compute stage's leaves spend (D54). It prices per event, and
+each call is priced through the handler it reaches. One event runs one action, and a call in that
+action runs the handler once per execution. So a repeat of 50 over a call to a handler whose effect
+stage spends 2 prices 100, and a host's ceiling of 50 (`HostCoverage.withQuantityCeilings`) refuses
+the program in `ServerSession.initStrict`, before its first stage. A ceiling in another unit is
+reported as a mismatch and never converted.
+
+The declaration is the registry's, so it enters the document where the argument policy does:
+`ServerDemanded.ofTreeHandlersAndRegistry`, `signWithRegistry`, `verifyWithRegistry` and
+`initStrict`. A walk that takes no registry prices no effect stage. The static price and a
+`QuantityPerWindow` clause are complementary: the first bounds one run before it starts, the second
+bounds the sum of many runs over time. One capability can carry both, and an argument policy and a
+receipted performer besides, all decided for the same effect.
+
 ## Atomicity, stated honestly
 
 The **handler** is the unit. Stages thread a value; nothing commits until the last stage succeeds; a

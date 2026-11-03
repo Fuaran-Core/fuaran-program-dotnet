@@ -47,6 +47,20 @@ module InteractionBudget =
     /// Conservative defaults for the multi-tenant "platform runs your app" case.
     let defaults: InteractionBudget = { MaxActions = 64; MaxNodes = 10_000 }
 
+/// One stage of a CALLED handler, as the quantity walk reads it (Phase 2438,
+/// D58). A call action runs the handler its endpoint names once per execution,
+/// so the walk prices a call by INLINING that handler's stages: a compute stage
+/// is walked as the action it is, with its own calls inert (one hop — a stage's
+/// call runs against the inert arm); an effect stage spends what the host
+/// declared one performance of its capability spends. The handler type is the
+/// server placement's; this is the whole of what the walk needs from it.
+[<RequireQualifiedAccess>]
+type CalledStage<'Action> =
+    /// A compute stage's action, walked with its calls inert.
+    | Walked of action: 'Action
+    /// An effect stage's declared amount of the quantity being priced.
+    | Spent of amount: int
+
 module Budget =
 
     /// Saturating `int` arithmetic — a cost is a budget comparand, and an
@@ -135,35 +149,40 @@ module Budget =
     // figure — the demanded document carries it and `Demanded.checkProjection`
     // refuses an over-ceiling program before its first stage.
 
-    /// The worst case of ONE named quantity over an action — the price a host's
-    /// ceiling is compared against BEFORE the run. A `Sequence` sums its
-    /// members; a `Choose` is its DEARER arm; a `Repeat` is its body times the
-    /// TOP of its bound; an `Each` over a literal collection is its lowered
-    /// elements summed and over a stored collection its body at the ceiling;
-    /// a `Leaf` is the amount it declares under the name, in the given unit,
-    /// or nothing; the assignment, the call and the guard spend nothing. No
-    /// step anywhere: that is `actionCascadeCost`'s quantity, not this one.
-    /// Saturating, through the witness's view, exactly as the cascade cost is.
+    /// `quantityCost` with every CALL priced through the handler it reaches
+    /// (Phase 2438, D58). `called endpoint` is that handler's stages as the
+    /// walk reads them, and a call is priced as the SEQUENCE of them: a compute
+    /// stage walked with its own calls inert, an effect stage at its declared
+    /// amount. So a repeat over a call multiplies the handler's whole spend by
+    /// the top of its bound, by D35's rules unchanged. A call that declares a
+    /// result target is refused by the fold and runs nothing, so it spends
+    /// nothing; an endpoint naming no handler answers `[]` and spends nothing,
+    /// as the inert arm does. One walk: the priced event is an action tree with
+    /// each call replaced by its handler's stages, a shape `proofs/Budget.fst`'s
+    /// quantity laws already cover.
     ///
     /// Reads the DISPATCH axis (the action view) and nothing else.
-    let quantityCost
+    let quantityCostThrough
         (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
+        (called: string -> CalledStage<'Action> list)
         (name: string)
         (unit: Fuaran.Core.UnitOfMeasure)
         (a: 'Action)
         : int =
         let fold = DispatchPosition.fold witness.Dispatch
 
-        let rec cost (a: 'Action) : int =
+        // `through` is false inside a called handler's compute stage: its
+        // calls run against the inert arm, so they reach no handler.
+        let rec cost (through: bool) (a: 'Action) : int =
             match fold.Action.View a with
-            | ActionView.Sequence xs -> xs |> List.fold (fun acc x -> satAdd acc (cost x)) 0
-            | ActionView.Choose(_, whenTrue, whenFalse, _) -> max (cost whenTrue) (cost whenFalse)
-            | ActionView.Repeat(Bound.Literal count, body) -> satMul (max count 0) (cost body)
-            | ActionView.Repeat(Bound.Parameter(_, _, hi), body) -> satMul (max hi 0) (cost body)
+            | ActionView.Sequence xs -> xs |> List.fold (fun acc x -> satAdd acc (cost through x)) 0
+            | ActionView.Choose(_, whenTrue, whenFalse, _) -> max (cost through whenTrue) (cost through whenFalse)
+            | ActionView.Repeat(Bound.Literal count, body) -> satMul (max count 0) (cost through body)
+            | ActionView.Repeat(Bound.Parameter(_, _, hi), body) -> satMul (max hi 0) (cost through body)
             | ActionView.Each(Collection.Literal elements, placeholder, body) ->
                 ActionWitness.lowered fold.Action elements placeholder body
-                |> List.fold (fun acc x -> satAdd acc (cost x)) 0
-            | ActionView.Each(Collection.Stored(_, ceiling), _, body) -> satMul (max ceiling 0) (cost body)
+                |> List.fold (fun acc x -> satAdd acc (cost through x)) 0
+            | ActionView.Each(Collection.Stored(_, ceiling), _, body) -> satMul (max ceiling 0) (cost through body)
             | ActionView.Leaf declaration ->
                 declaration.Quantities
                 |> List.fold
@@ -173,11 +192,39 @@ module Budget =
                         else
                             acc)
                     0
+            | ActionView.Call(endpoint, false) when through ->
+                called endpoint
+                |> List.fold
+                    (fun acc stage ->
+                        match stage with
+                        | CalledStage.Walked action -> satAdd acc (cost false action)
+                        | CalledStage.Spent amount -> satAdd acc (max amount 0))
+                    0
             | ActionView.Assign _
             | ActionView.Call _
             | ActionView.Require _ -> 0
 
-        cost a
+        cost true a
+
+    /// The worst case of ONE named quantity over an action — the price a host's
+    /// ceiling is compared against BEFORE the run. A `Sequence` sums its
+    /// members; a `Choose` is its DEARER arm; a `Repeat` is its body times the
+    /// TOP of its bound; an `Each` over a literal collection is its lowered
+    /// elements summed and over a stored collection its body at the ceiling;
+    /// a `Leaf` is the amount it declares under the name, in the given unit,
+    /// or nothing; the assignment, the call and the guard spend nothing. No
+    /// step anywhere: that is `actionCascadeCost`'s quantity, not this one.
+    /// Saturating, through the witness's view, exactly as the cascade cost is.
+    /// `quantityCostThrough` with no handler behind any call.
+    ///
+    /// Reads the DISPATCH axis (the action view) and nothing else.
+    let quantityCost
+        (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
+        (name: string)
+        (unit: Fuaran.Core.UnitOfMeasure)
+        (a: 'Action)
+        : int =
+        quantityCostThrough witness (fun _ -> []) name unit a
 
     /// Every (name, unit) pair some leaf of the action declares, distinct, in
     /// the order the walk first meets them. A pair here is a quantity the

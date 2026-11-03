@@ -798,6 +798,15 @@ type ServerEffectRegistry =
         /// store's counters that journals every decision, as it replaces
         /// `ReadExtent` and `RecordFinding`.
         Limiter: WindowedLimiter
+        /// The named QUANTITIES one performance of a capability spends, by
+        /// capability (Phase 2438, D58): API spend, egress, heater-minutes —
+        /// the shape a leaf declares (`QuantityDeclaration`, D54), read as ONE
+        /// performance's worst case. Declared DATA beside the argument policy,
+        /// for the same reason: the demanded document prices every effect stage
+        /// of the capability with it, and a host's ceiling refuses an
+        /// over-ceiling program before its first stage. A capability absent
+        /// from this map spends nothing a ceiling can see.
+        Quantities: Map<string, Fuaran.Program.Bounded.QuantityDeclaration list>
     }
 
 module ServerEffectRegistry =
@@ -825,7 +834,9 @@ module ServerEffectRegistry =
           RecordFinding = FindingRecorder.live
           // No clock, so no windowed clause can be judged: refused, never
           // admitted. Supplying one is the durable interpreter's act.
-          Limiter = WindowedLimiter.unjudgeable }
+          Limiter = WindowedLimiter.unjudgeable
+          // Nothing declared: an effect spends no quantity a ceiling can see.
+          Quantities = Map.empty }
 
     /// Register a `HostCall` performer under a function name. Registering does
     /// NOT permit: the gate still decides, and it is asked about `host:<fn>`.
@@ -928,6 +939,27 @@ module ServerEffectRegistry =
         (registry: ServerEffectRegistry)
         : Fuaran.Program.Bounded.ServerConstraintClause list =
         registry.Constraints |> Map.tryFind capability |> Option.defaultValue []
+
+    /// Declare the quantities ONE performance of a capability spends (Phase
+    /// 2438, D58), each at its worst case: a negative amount prices as nothing,
+    /// as a leaf's does (D54). Replaces any declaration already made for the
+    /// capability, on `constrain`'s terms. Declaring does NOT permit: the gate
+    /// is still asked first, and the policy still decides each performance.
+    let spends
+        (capability: string)
+        (quantities: Fuaran.Program.Bounded.QuantityDeclaration list)
+        (registry: ServerEffectRegistry)
+        : ServerEffectRegistry =
+        { registry with
+            Quantities = Map.add capability quantities registry.Quantities }
+
+    /// What one performance of a capability spends, as declared. EMPTY for a
+    /// capability nobody declared, which spends nothing a ceiling can see.
+    let quantitiesFor
+        (capability: string)
+        (registry: ServerEffectRegistry)
+        : Fuaran.Program.Bounded.QuantityDeclaration list =
+        registry.Quantities |> Map.tryFind capability |> Option.defaultValue []
 
 /// The ARGUMENT half of the policy gate: what an effect's arguments are, and
 /// whether a capability's declared clauses admit them.

@@ -20,6 +20,46 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
+## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438)
+
+**Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
+the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded
+document's shape or version. `DECISIONS.md` D58 records the design.
+
+### What a consumer gains
+
+- `ServerEffectRegistry.spends capability declarations` and `ServerEffectRegistry.quantitiesFor`: the
+  named quantities ONE performance of a capability spends, in `QuantityDeclaration`'s shape (D54),
+  held in the registry's new `Quantities` member.
+- `ServerDemanded.ofTreeHandlersAndRegistry` (and so `signWithRegistry`, `verifyWithRegistry` and
+  `ServerSession.initStrict`) prices every effect stage with it, so a host's quantity ceiling refuses
+  money, egress or heater-minutes spent through effects before the first stage.
+- `Budget.quantityCostThrough witness called name unit action` and `CalledStage<'Action>` (`Walked` /
+  `Spent`) in `Fuaran.Program.Bounded`: the quantity walk with each call priced as the stages of the
+  handler it reaches. `Budget.quantityCost` is its no-call case and answers exactly as before.
+
+### What a consumer pays
+
+- **`ServerEffectRegistry` gains a field.** A full record literal fails with FS0764; build from
+  `ServerEffectRegistry.denyAll` (`{ denyAll with … }`), which carries the empty default.
+- **The server placement's quantities are priced per event.** `ServerDemanded.ofTreeAndHandlers`
+  (and every document built on it) used to sum each reachable handler's compute-stage quantities
+  ONCE beside the tree's. It now takes, per (name, unit), the dearest of the tree's actions with each
+  call priced through its handler. A tree that calls a handler inside a repeat now prices higher:
+  the old figure was not a bound for it. A tree whose actions call several handlers in different
+  events can price lower, because one event reaches only the handlers its own action calls. A
+  signed envelope over such a tree reports drift until re-signed.
+- `initStrict` checks the registry-aware document, so a host's declared argument policy joins the
+  projection it checks. The policy adds no finding there, because `checkProjection` does not read it.
+
+### What did not move
+
+The demanded document's members, ordering, encoding and version (14): an effect stage's quantity is
+a `QuantityDemand` like a leaf's. The client tier's quantities (`Demanded.ofTree`, `ofAction`). Every
+refusal token. Every theorem in `proofs/Budget.fst`: the walk prices a call by inlining its handler,
+which is an `act` the model already has, and the oracle host runs the extraction beside
+`quantityCostThrough` over calls (D58 states why the model did not move).
+
 ## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
 
 **Class: no contract change.** `v0.13.0` is tagged, so this cannot ride it: the work lands for the

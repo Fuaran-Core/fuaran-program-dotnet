@@ -4402,3 +4402,118 @@ rather than never-attempted (the header's contract), and the reading is read onc
 only at the first windowed decision. The ~150 ms per run the consumer attributed to the clock read is
 therefore not Program's in-process cost; it is consistent with what that host's own journal pays to
 make two appends durable, which is the host's to measure and to batch.
+
+## D58 — A server effect's quantities are the REGISTRY's, declared per capability as one performance's worst case; the server placement prices them per EVENT, each call priced as the stages of the handler it reaches; the model does not move, and F1 closes on the effect (2026-11-03)
+
+**Context.** D54 put declared quantities on the WITNESS's leaf, so a compute stage's spend is priced
+before the run and an effect stage's is not. D54's last paragraph named the successor: money and
+egress are spent through effects, and a host's ceiling on them was silent. The device domain Phase
+2264 composed on Program recorded the same gap as finding F1: declared quantities are priced only on action-axis
+leaves (D54), while argument policy, time windows and receipts are decided only on server effects
+(D17, D52, D24), so one device effect could have the static bound OR the gate, never both.
+
+**Premises checked against the tree first.**
+
+- A server effect has no per-effect registration. The registry (`ServerEffect.fs`) declares by
+  CAPABILITY: `Gate`, `Constraints` and the `HostCall` performers. An effect stage reaches
+  `ServerDemanded.ofStage` through `ofHandler`, then `ofStage`, then `ofEffect`, and that walk takes
+  no registry. Only `ofTreeHandlersAndRegistry` and the two `…WithRegistry` signing calls do.
+  `ServerSession.initStrict`, the strict path D54 relies on, called the registry-free walk.
+- Nothing repeats an effect STAGE: a handler is a flat stage list. The repetition the acceptance means
+  is a tree action's `Repeat` or `Each` over a `Call` to the handler's endpoint. `BoundedActions` runs
+  the handler once per execution of the call (the answering arm), so a repeat of 50 over a call runs
+  the handler 50 times in one event.
+- That makes D54's server-side sum unsound, and not only for effects. `ofTreeAndHandlers` summed each
+  reachable handler's compute-stage quantities ONCE beside the tree's, which is not a bound for a
+  tree that calls a handler inside a repeat. D54 called the sum "a bound either way"; for a repeated
+  call it is not.
+- The server package may not match an `ActionView` (`CoreSourceGuardTests`), so the call-aware walk
+  belongs in `Budget`, beside the walk it generalises.
+- `Fuaran.Core.Unit` 0.40.2 admits no information unit: `By`, `kBy` and `bit` are `UnknownAtom`. Money
+  has a minor unit (`c[USD]`). Egress is declared in the dimensionless unit `1`, under a name that
+  says bytes. That carries the figure and the gate exactly; what it loses is conversion between byte
+  multiples, which the gate never does anyway (D54). The missing atom is a Core finding, not this
+  repository's to add.
+
+**The choice.**
+
+- **The declaration is the registry's, per capability.** `ServerEffectRegistry.Quantities`,
+  `spends capability declarations` and `quantitiesFor`, in `QuantityDeclaration`'s shape, read as ONE
+  performance's worst case. A negative amount prices as nothing, as D54's does. It is declared data
+  beside `Constraints` for the reason D17 gives for the policy: a bound written down can be read
+  back, carried in the document and signed. It enters the document wherever the policy does:
+  `ofTreeHandlersAndRegistry`, `signWithRegistry`, `verifyWithRegistry`, and now `initStrict`, which
+  takes the registry-aware document. A walk that takes no registry prices no effect stage, on the
+  precedent of the constraints it also omits.
+- **`ofStage` prices an effect stage.** It gets the capability's declared quantities as
+  `QuantityDemand`s, so a handler's document sums its compute and effect stages by D54's merge.
+- **The two-tier document prices per EVENT, through the calls.** `Budget.quantityCostThrough witness
+  called name unit action` is D54's walk with one arm added: a `Call` is priced as the SEQUENCE of the
+  called handler's stages (`CalledStage.Walked` for a compute stage, walked with its own calls inert,
+  one hop; `CalledStage.Spent` for an effect stage's declared amount). A targeted call, which the fold
+  refuses, and an endpoint with no handler spend nothing. `quantityCost` is the same walk with no
+  handler behind any call, so there is one walk. `ServerDemanded` takes, per (name, unit) any leaf or
+  reachable handler declares, the MAX over the tree's actions, because one event runs one action, as
+  `Demanded.ofTree` already reads it. A repeat over a call multiplies the handler's whole spend, and
+  two events price at the dearer rather than the sum. No new gate call site: `checkProjection`
+  decides on the document, as D54 does.
+- **The meaning of `quantities` does not move, so the document's version does not.** It is still the
+  worst case per (name, unit) of what one interaction can spend. Effect stages now contribute to it
+  and the server placement's figure is now a bound. The corpus
+  (`conformance/demanded-effect-projection.json`) carries no quantity-bearing vector and needs none:
+  an effect's quantity is encoded exactly as a leaf's.
+
+**`proofs/Budget.fst` covers effect stages unchanged — decided, not assumed (D14).** The model prices
+an `act`, and its laws (`quantity_saturates_exact`, `quantity_monotone`, the per-shape laws,
+`quantity_gate_exact`) hold for every tree and every leaf amount. The new walk prices a call by
+INLINING its handler: the priced event is the action with each call replaced by `AChain` of its
+stages, a compute stage translated as itself (its calls `ALeaf 0`) and an effect stage as `ALeaf` of
+its declared amount. That is an `act` the model already has, so no stated law moves and the model
+needs no new constructor. A rejected alternative priced a call by the handler's own SATURATED figure.
+That would need a composition law the model does not state: that clipping a handler before
+multiplying it agrees with clipping the inlined event. The oracle host (`ToyBudgetOracleTests`) runs
+the extraction beside `quantityCostThrough` over the inlining translation: repeats, choices, literal
+and stored iterations and parameter bounds over calls, an inert nested call, a negative declaration,
+an absent handler, a targeted call and a saturating repeat. Its go-red case, a price naming each
+called handler once, is reported. The prover was not run, because nothing it checks changed.
+
+**F1 — closed on the EFFECT.** The finding offered two closures: a quantity declared on the server effect, or
+a leaf naming the capability it is gated under. This takes the first:
+
+- The effect already reaches the one gate where argument policy (D17, D55), windows (D52), receipts
+  (D24, D43) and undo are decided, so pricing it adds one declaration and no new path.
+- The second closure would carry a capability on the dispatch axis into a gate the fold never
+  consults. That is a new seam beside the one that exists, which reuse forbids without a third case.
+
+`EffectQuantityTests` shows one device-shaped effect carrying all four protections. The effect is an
+actuation as an op on `ApplyOps`, priced at 15 heater-minutes per performance, allow-listed to one
+target and limited to one per window, with a receipting performer. Two actuations in one event are
+refused under a 20-minute ceiling before the first stage, and one is admitted. At the gate, the first
+admission is performed, journaled at its ordinal and receipted. A second inside the window is
+refused and journaled at its ordinal. An off-list target is refused by the allow-list.
+
+The allow-list refusal is a function of the plan and the declared clauses alone. So, on D52's
+reading, only the invocation's completion is journaled for it, and a replay recomputes the same
+refusal and performs nothing. Only what a clock or a counter decided is recorded at an ordinal.
+
+The device domain's workaround is checked against this and still holds TODAY. Its actuations are
+leaves, and it refuses the windowed clauses as `clause-out-of-reach` because no gate sees a leaf.
+This phase gives the effect shape everything the leaf had (the priced quantity), so the route that
+lifts that refusal is for the domain to carry an actuation as an effect (the shape it rejected
+because it lost the quantity, now unpenalised) and price it with `spends`. That lifting is the
+domain's own later phase, not this one.
+
+**What this does not do, stated.**
+
+- It does not price an effect's quantity from its ARGUMENTS. An argument-read amount needs the
+  arguments in hand, and an effect's arguments are computed at plan time. The declared worst case,
+  held to its bound by the argument policy's `AtMost` and `Required` (D55), is the static figure.
+- It does not carry effect quantities in documents built without a registry (`ofTreeAndHandlers`,
+  `Replay.ofTreeAndHandlers`, `Harvest`). Those take a query posture and not the registry, and they
+  omit the declared policy for the same reason.
+- It does not change the client tier, `Budget.quantityCost`'s answers, or the cascade cost: a call is
+  still one step.
+
+**Version.** `v0.13.1` is tagged, so the change advances to `0.14.0`: `ServerEffectRegistry` gains a
+field (FS0764 for a full literal; `denyAll` carries the default), and the server placement's figure
+moves for a tree that repeats a call. `STABILITY.md` says what a consumer pays.

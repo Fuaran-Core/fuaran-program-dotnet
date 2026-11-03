@@ -42,6 +42,14 @@ open Fuaran.Program.Bounded
 //    results, which is state this placement already owns — not something asked
 //    of anyone. The SOURCE it reads is the demand, and that is projected.
 //
+//  ── Quantities are priced per event, through the calls ──────────────────────
+//  An effect stage spends what the REGISTRY declares one performance of its
+//  capability spends (Phase 2438, D58), and a compute stage what its leaves
+//  declare (D54). The document's quantities are priced per EVENT: one event
+//  runs one action, and each call in it runs the handler it names once per
+//  execution, so `Budget.quantityCostThrough` prices a call as that handler's
+//  stages and a repeat over the call multiplies them.
+//
 //  ── Reachability is one hop, and that is structural ─────────────────────────
 //  Only handlers a tree can actually name contribute. Resolution stops there:
 //  a stage's call action is inert, so no handler can reach another, and the walk
@@ -224,13 +232,33 @@ module ServerDemanded =
                 // the targets its body writes with the value standing.
                 Values = StateWitness.values state ops }
 
-    /// What one stage demands.
+    /// What one performance of an effect spends, as the host declared it for
+    /// the effect's capability (Phase 2438, D58): each declaration at its
+    /// amount, a negative one as nothing (D54). `spends` answers a capability's
+    /// declarations — the registry's, or nothing where no registry was asked.
+    let private quantitiesOfEffect
+        (spends: string -> QuantityDeclaration list)
+        (effect: ServerEffect<'Op>)
+        : QuantityDemand list =
+        spends (ServerEffect.capability effect)
+        |> List.map (fun q ->
+            { Name = q.Name
+              Unit = q.Unit
+              WorstCase = max q.Amount 0 })
+
+    /// What one stage demands. An effect stage spends what its capability
+    /// declares one performance spends (Phase 2438, D58); a compute stage
+    /// spends what its action's leaves declare (D54). A handler's stages run
+    /// one after another, so `ofHandler`'s union SUMS them.
     let private ofStage
+        (spends: string -> QuantityDeclaration list)
         (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
         (stage: HandlerStage<'Action, 'Op>)
         : DemandedProjection =
         match stage with
-        | Effect effect -> ofEffect witness.State effect
+        | Effect effect ->
+            { ofEffect witness.State effect with
+                Quantities = quantitiesOfEffect spends effect }
         | Compute action ->
             let projection = Demanded.ofAction witness action
 
@@ -239,15 +267,29 @@ module ServerDemanded =
                 HostCalls = projection.HostCalls |> List.filter (fun c -> c.Channel <> Demanded.CallChannel)
                 Server = Some noDemand }
 
+    /// `ofHandler`, with each effect stage spending what `spends` declares for
+    /// its capability.
+    let private ofHandlerSpending
+        (spends: string -> QuantityDeclaration list)
+        (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
+        (handler: Handler<'Action, 'Op>)
+        : DemandedProjection =
+        Demanded.union (seed :: (handler.Stages |> List.map (ofStage spends witness)))
+
+    /// No capability's declarations: the walks below that take no registry.
+    let private spendsNothing (_: string) : QuantityDeclaration list = []
+
     /// What one handler can ever ask for, across both tiers. Runs under every
     /// composition (Phase 1974): an effect stage reads the STATE axis (an op's
     /// reach), and only a compute stage — which a composition with no dispatch
-    /// axis cannot hold — reads the dispatch axis.
+    /// axis cannot hold — reads the dispatch axis. Its effect stages spend no
+    /// quantity here: what a performance spends is the registry's declaration
+    /// (D58), and this walk takes none.
     let ofHandler
         (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
         (handler: Handler<'Action, 'Op>)
         : DemandedProjection =
-        Demanded.union (seed :: (handler.Stages |> List.map (ofStage witness)))
+        ofHandlerSpending spendsNothing witness handler
 
     /// What a set of handlers can ever ask for, as one document.
     let ofHandlers
@@ -256,14 +298,6 @@ module ServerDemanded =
         : DemandedProjection =
         Demanded.union (seed :: (handlers |> Seq.map (ofHandler witness) |> List.ofSeq))
 
-    /// **The one call**: what a program tree and the handler registration behind
-    /// it can ever ask for, across both placements, as a single document.
-    ///
-    /// The tree's own demands and the demands of every handler it can NAME,
-    /// unioned — so the answer is about this program on this host, not about
-    /// either in isolation. A registered handler no tree reaches contributes
-    /// nothing: it is a capability the host holds, not one this program can
-    /// exercise.
     /// The registered handlers a tree can actually NAME.
     ///
     /// One hop, and structurally so — see the header. Exposed because the replay
@@ -279,18 +313,108 @@ module ServerDemanded =
         Demanded.calledEndpoints (Demanded.ofTree witness root)
         |> List.choose (fun endpoint -> Map.tryFind endpoint handlers)
 
-    let ofTreeAndHandlers
+    /// A handler's stages as the quantity walk reads them, for one (name, unit):
+    /// a compute stage is walked; an effect stage spends what its capability
+    /// declares under the pair (`Budget.CalledStage`, D58). An endpoint naming
+    /// no handler has no stages, so a call to it spends nothing, as the inert
+    /// arm runs nothing.
+    let private calledStages
+        (spends: string -> QuantityDeclaration list)
+        (handlers: Map<string, Handler<'Action, 'Op>>)
+        (name: string)
+        (unit: Fuaran.Core.UnitOfMeasure)
+        (endpoint: string)
+        : CalledStage<'Action> list =
+        match Map.tryFind endpoint handlers with
+        | None -> []
+        | Some handler ->
+            handler.Stages
+            |> List.map (fun stage ->
+                match stage with
+                | Compute action -> CalledStage.Walked action
+                | Effect effect ->
+                    quantitiesOfEffect spends effect
+                    |> List.filter (fun q -> q.Name = name && q.Unit = unit)
+                    |> List.fold (fun acc q -> Budget.satAdd acc q.WorstCase) 0
+                    |> CalledStage.Spent)
+
+    /// Every handler action a tree holds, over the whole traversal surface —
+    /// the actions `Demanded.ofTree` reads, one per event a node answers.
+    let rec private actionsOf (witness: FullWitness<'Node, 'Action, 'Expr, 'Store, 'Op, 'Effect>) (node: 'Node) =
+        (witness.Dispatch.Handlers node |> List.map snd)
+        @ (witness.Walk.Traverse node |> List.collect (actionsOf witness))
+
+    /// The tree and the handlers it names, as one document, every effect stage
+    /// spending what `spends` declares.
+    ///
+    /// The QUANTITIES are priced per EVENT, with each call priced through the
+    /// handler it reaches (Phase 2438, D58): one event runs one action, and a
+    /// call in it runs the handler once per execution, so the worst case of a
+    /// pair is the MAX over the tree's actions of `Budget.quantityCostThrough`.
+    /// A repeat over a call multiplies the handler's spend; a handler no action
+    /// calls spends nothing. Summing each reachable handler once, which the
+    /// document did before, was not a bound for a tree that calls a handler
+    /// inside a repeat.
+    let private ofTreeAndHandlersSpending
+        (spends: string -> QuantityDeclaration list)
         (witness: FullWitness<'Node, 'Action, 'Expr, 'Store, 'Op, 'Effect>)
         (handlers: Map<string, Handler<'Action, 'Op>>)
         (root: 'Node)
         : DemandedProjection =
         let tree = Demanded.ofTree witness root
 
+        let reached =
+            reachable witness handlers root |> List.map (ofHandlerSpending spends witness)
+
+        let actions = actionsOf witness root
+
+        let quantities =
+            tree :: reached
+            |> List.collect (fun p -> p.Quantities |> List.map (fun q -> q.Name, q.Unit))
+            |> List.distinct
+            |> List.map (fun (name, unit) ->
+                { Name = name
+                  Unit = unit
+                  WorstCase =
+                    actions
+                    |> List.fold
+                        (fun dearest action ->
+                            max
+                                dearest
+                                (Budget.quantityCostThrough
+                                    witness
+                                    (calledStages spends handlers name unit)
+                                    name
+                                    unit
+                                    action))
+                        0 })
+
+        let unpriced (projection: DemandedProjection) = { projection with Quantities = [] }
+
         Demanded.union (
-            tree
+            { Demanded.empty with
+                Quantities = quantities }
+            :: unpriced tree
             :: seed
-            :: (reachable witness handlers root |> List.map (ofHandler witness))
+            :: (reached |> List.map unpriced)
         )
+
+    /// **The one call**: what a program tree and the handler registration behind
+    /// it can ever ask for, across both placements, as a single document.
+    ///
+    /// The tree's own demands and the demands of every handler it can NAME,
+    /// unioned — so the answer is about this program on this host, not about
+    /// either in isolation. A registered handler no tree reaches contributes
+    /// nothing: it is a capability the host holds, not one this program can
+    /// exercise. Its effect stages spend no quantity here (the declaration is
+    /// the registry's — `ofTreeHandlersAndRegistry`); its compute stages' do,
+    /// priced per event through the calls that reach them.
+    let ofTreeAndHandlers
+        (witness: FullWitness<'Node, 'Action, 'Expr, 'Store, 'Op, 'Effect>)
+        (handlers: Map<string, Handler<'Action, 'Op>>)
+        (root: 'Node)
+        : DemandedProjection =
+        ofTreeAndHandlersSpending spendsNothing witness handlers root
 
     /// A server host's coverage, read off the effect registry it was wired with
     /// rather than declared a second time.
@@ -378,13 +502,24 @@ module ServerDemanded =
     /// have to pass a registry to ask the first. It composes on the outside,
     /// which is what lets the replay join compose with it in either order — both
     /// write disjoint members of the same tier.
+    ///
+    /// The registry's declared QUANTITIES price every effect stage here (Phase
+    /// 2438, D58), so the document carries money, egress and heater-minutes
+    /// spent through effects beside what the leaves spend, and a host's
+    /// ceiling refuses an over-ceiling program before its first stage. This is
+    /// the walk `ServerSession.initStrict` checks.
     let ofTreeHandlersAndRegistry
         (witness: FullWitness<'Node, 'Action, 'Expr, 'Store, 'Op, 'Effect>)
         (registry: ServerEffectRegistry)
         (handlers: Map<string, Handler<'Action, 'Op>>)
         (root: 'Node)
         : DemandedProjection =
-        ofTreeAndHandlers witness handlers root |> withConstraints registry
+        ofTreeAndHandlersSpending
+            (fun capability -> ServerEffectRegistry.quantitiesFor capability registry)
+            witness
+            handlers
+            root
+        |> withConstraints registry
 
     // ─── the signed envelope, at this placement ──────────────────────────────
 

@@ -270,22 +270,27 @@ let private beepAmount (declaration: LeafDeclaration) : bigint =
         else
             0I)
 
-let rec private modelCascade (a: ToyAction) : ProvedBudget.act =
+/// The translation, with the CALL arm supplied (Phase 2438): `call endpoint
+/// targeted` is the call's model, or `None` for a call priced as a one-step
+/// leaf spending nothing — `modelCascade`'s reading, and the reading inside a
+/// called handler, whose calls are inert.
+let rec private modelThrough (call: string -> bool -> ProvedBudget.act option) (a: ToyAction) : ProvedBudget.act =
+    let model = modelThrough call
+
     match toyWitness.Dispatch.Action.View a with
-    | ActionView.Sequence members -> ProvedBudget.AChain(members |> List.map modelCascade)
-    | ActionView.Choose(_, whenTrue, whenFalse, _) ->
-        ProvedBudget.AChoose(modelCascade whenTrue, modelCascade whenFalse)
+    | ActionView.Sequence members -> ProvedBudget.AChain(members |> List.map model)
+    | ActionView.Choose(_, whenTrue, whenFalse, _) -> ProvedBudget.AChoose(model whenTrue, model whenFalse)
     | ActionView.Repeat(Bound.Literal count, body) ->
-        ProvedBudget.ARepeat(ProvedBudget.BLiteral(bigint count), modelCascade body)
+        ProvedBudget.ARepeat(ProvedBudget.BLiteral(bigint count), model body)
     | ActionView.Repeat(Bound.Parameter(_, lo, hi), body) ->
-        ProvedBudget.ARepeat(ProvedBudget.BParameter(bigint lo, bigint hi), modelCascade body)
+        ProvedBudget.ARepeat(ProvedBudget.BParameter(bigint lo, bigint hi), model body)
     | ActionView.Each(Collection.Literal elements, _, body) ->
-        ProvedBudget.AEach(List.replicate (List.length elements) (modelCascade body))
+        ProvedBudget.AEach(List.replicate (List.length elements) (model body))
     // A store-bound collection (Phase 1991, D36) is priced as the parameter-
     // bound repeat whose top is its ceiling: one step for the read, the body
     // at the ceiling — the law `repeat_priced_at_top` already covers it.
     | ActionView.Each(Collection.Stored(_, ceiling), _, body) ->
-        ProvedBudget.ARepeat(ProvedBudget.BParameter(bigint 0, bigint ceiling), modelCascade body)
+        ProvedBudget.ARepeat(ProvedBudget.BParameter(bigint 0, bigint ceiling), model body)
     // A leaf carries what it declares of the toy's ONE quantity (Phase 2261):
     // the model prices one (name, unit) per tree, so the host projects every
     // declaration under `beep-minutes`/`min` to its amount, summed where a
@@ -293,9 +298,12 @@ let rec private modelCascade (a: ToyAction) : ProvedBudget.act =
     // which declare nothing — to zero. The cascade cost reads none of this;
     // the quantity cost reads nothing else.
     | ActionView.Leaf declaration -> ProvedBudget.ALeaf(beepAmount declaration)
+    | ActionView.Call(endpoint, targeted) -> call endpoint targeted |> Option.defaultValue (ProvedBudget.ALeaf 0I)
     | ActionView.Assign _
-    | ActionView.Call _
     | ActionView.Require _ -> ProvedBudget.ALeaf 0I
+
+let private modelCascade: ToyAction -> ProvedBudget.act =
+    modelThrough (fun _ _ -> None)
 
 /// The cost function under comparison for the cascade. Production is one; the
 /// go-red case below is another, and it is deliberately wrong.
@@ -392,6 +400,77 @@ let private saturatingQuantities: (string * ToyAction) list =
       Seq
           [ Times(Bound.Literal 1_500_000_000, Beep 1)
             Times(Bound.Literal 1_500_000_000, Beep 1) ] ]
+
+/// The handlers behind the calls the through-price reaches (Phase 2438, D58),
+/// as the walk reads them: an effect stage spending 2, a compute stage beside
+/// an effect stage, a stage whose own call is inert, a negative declaration.
+let private calledStages (endpoint: string) : CalledStage<ToyAction> list =
+    match endpoint with
+    | "/charge" -> [ CalledStage.Spent 2 ]
+    | "/mixed" -> [ CalledStage.Walked(Beep 5); CalledStage.Spent 7 ]
+    | "/relay" -> [ CalledStage.Walked(Ring("/charge", false, ignore)) ]
+    | "/refund" -> [ CalledStage.Spent -5; CalledStage.Walked(Beep 1) ]
+    | _ -> []
+
+/// A call, in the model, is the SEQUENCE of its handler's stages — stated here
+/// from the stages rather than through production: a compute stage is its own
+/// translation with calls inert, an effect stage a leaf spending its declared
+/// amount. A call that declares a result target runs nothing.
+let private modelCall (endpoint: string) (targeted: bool) : ProvedBudget.act option =
+    if targeted then
+        None
+    else
+        calledStages endpoint
+        |> List.map (fun stage ->
+            match stage with
+            | CalledStage.Walked action -> modelCascade action
+            | CalledStage.Spent amount -> ProvedBudget.ALeaf(bigint (max amount 0)))
+        |> ProvedBudget.AChain
+        |> Some
+
+let private productionThrough: CascadeCost =
+    ShippedBudget.quantityCostThrough toyWitness calledStages beepMinutes minute
+
+let private throughDivergence (cost: CascadeCost) (name: string) (action: ToyAction) : string option =
+    let prod = cost action
+
+    let oracle =
+        int (ProvedBudget.quantity_cost satBound (modelThrough modelCall action))
+
+    if prod <> oracle then
+        Some(sprintf "%s\n  production: %d\n  oracle:     %d" name prod oracle)
+    else
+        None
+
+let private call (endpoint: string) = Ring(endpoint, false, ignore)
+
+/// The quantity priced THROUGH calls (Phase 2438), the figure stated beside
+/// each: a call is its handler's stages, so a repeat, a choice and an
+/// iteration over one price by D35's rules over the inlined handler.
+let private throughCases: (string * ToyAction * int) list =
+    [ "an effect stage spending 2, called by a repeat bounded at 50", Times(Bound.Literal 50, call "/charge"), 100
+      "a compute stage and an effect stage, summed, beside the tree's own leaf", Seq [ Beep 3; call "/mixed" ], 15
+      "a choice between a call and a repeat of calls",
+      Pick(Missing, call "/charge", Times(Bound.Literal 3, call "/mixed"), None),
+      36
+      "an iteration over a call", ForEach([ JInt 1; JInt 2; JInt 3 ], "x", call "/mixed"), 36
+      "a store-bound iteration over a call", ForEachOf(Read "xs", 4, "x", call "/charge"), 8
+      "a parameter repeat over a call", Times(Bound.Parameter(Read "n", 0, 6), call "/charge"), 12
+      "a call inside a called handler is inert", call "/relay", 0
+      "a negative declaration spends nothing and buys down nothing", call "/refund", 1
+      "a call naming no handler spends nothing", call "/nobody", 0
+      "a call declaring a result target runs nothing", Ring("/charge", true, ignore), 0 ]
+
+/// The through-price with the defect Phase 2438 closes: each handler a tree
+/// names priced ONCE, beside the tree's own leaves, whatever repeats it.
+let private calledOnceCost: CascadeCost =
+    fun action ->
+        let named =
+            (Demanded.ofAction toyWitness action |> Demanded.calledEndpoints)
+            |> List.sumBy (fun endpoint ->
+                ShippedBudget.quantityCostThrough toyWitness calledStages beepMinutes minute (call endpoint))
+
+        ShippedBudget.satAdd (productionQuantity action) named
 
 /// The proved quantity price with ONE arm changed: a selection priced by its
 /// CHEAPER arm — the defect `quantity_choose_covers_either_arm` excludes.
@@ -791,6 +870,44 @@ let tests =
                   (cheaperArmQuantityCost unequalBranch)
                   dearerArm
                   "the cheaper-arm figure should be below the dearer arm's own spend - that is the whole defect"
+          }
+
+          test "the oracle agrees with production on the quantity priced through calls (Phase 2438)" {
+              for name, action, stated in throughCases do
+                  Expect.equal (productionThrough action) stated (sprintf "%s is priced by the core at %d" name stated)
+
+              Expect.equal
+                  (productionThrough (Beep 3))
+                  (productionQuantity (Beep 3))
+                  "with no call, the through-price is the leaf price"
+
+              Expect.equal
+                  (productionThrough (Times(Bound.Literal System.Int32.MaxValue, call "/charge")))
+                  System.Int32.MaxValue
+                  "a repeat over a call saturates rather than wrapping"
+
+              let divergences =
+                  (throughCases |> List.map (fun (name, action, _) -> name, action))
+                  @ [ "a saturating repeat over a call", Times(Bound.Literal System.Int32.MaxValue, call "/charge") ]
+                  |> List.choose (fun (name, action) -> throughDivergence productionThrough name action)
+
+              match divergences with
+              | [] -> ()
+              | first :: _ -> failtestf "the extracted model and production disagree through a call:\n%s" first
+          }
+
+          test "GO RED: a price naming each called handler once is reported at the toy witness (Phase 2438)" {
+              let repeated = Times(Bound.Literal 50, call "/charge")
+
+              Expect.isNone
+                  (throughDivergence productionThrough "the repeated call" repeated)
+                  "production disagrees with the oracle on the very call the defect is committed against"
+
+              Expect.isSome
+                  (throughDivergence calledOnceCost "the repeated call" repeated)
+                  "the comparison harness did not report a price that counts a repeated call once"
+
+              Expect.equal (calledOnceCost repeated) 2 "the defect reads one call's spend for fifty"
           }
 
           test "GO RED: a cascade pricing a selection by its cheaper arm is reported at the toy witness" {

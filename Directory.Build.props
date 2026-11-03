@@ -214,7 +214,15 @@
          codec and subject could use the memo (DECISIONS.md D57). No public
          type or member moves (the rendered surface of every package is
          unchanged); a cost leaves the common path. -->
-    <Version>0.13.1</Version>
+    <!-- 0.14.0 — Phase 2438. ADVANCES rather than rides: v0.13.1 is TAGGED.
+         A server effect declares the quantities one performance spends:
+         `ServerEffectRegistry` gains `Quantities` (a full record literal
+         breaks with FS0764; `denyAll` carries the default), `spends` and
+         `quantitiesFor`; `Budget.quantityCostThrough` and `CalledStage` price
+         a call through the handler it reaches, and the server placement's
+         demanded quantities are priced per event with it (DECISIONS.md D58).
+         The demanded document's shape and version do not move. -->
+    <Version>0.14.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
          else. Undeclared would read as `local-feed`, under which a pin only this
