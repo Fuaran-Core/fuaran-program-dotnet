@@ -314,7 +314,7 @@ let private modelRegistry
         fun effect ->
             match ServerArgumentPolicy.check witness.State registry (productionEffect effect) with
             | Ok() -> Staging.ONone
-            | Error defect -> Staging.OSome(ServerArgumentPolicy.describe defect)
+            | Error defect -> Staging.OSome(ArgumentPolicy.describe defect)
       r_lookup = fun fn -> Map.tryFind fn registry.HostFunctions |> modelOpt
       r_perf = fun performer args -> performer args |> modelRes
       // The host's declaration, off the registry (Phase 2212, D44): the one
@@ -3541,7 +3541,7 @@ let effectGateTests =
               let describeProduction (d: WindowDecision) =
                   match d with
                   | WindowDecision.Admitted c -> Choice1Of2(toModelCounter c)
-                  | WindowDecision.Refused defect -> Choice2Of2((ServerArgumentPolicy.describe defect).Split(':').[0])
+                  | WindowDecision.Refused defect -> Choice2Of2((ArgumentPolicy.describe defect).Split(':').[0])
 
               let declarations: WindowedLimit list =
                   [ for count in [ None; Some(0, 5); Some(1, 5); Some(2, 3) ] do

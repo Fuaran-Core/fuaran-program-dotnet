@@ -1115,7 +1115,7 @@ module Durable =
                                 (Fuaran.Core.JObj [])
                         with
                         | Ok(Fuaran.Core.JStr text) ->
-                            match ServerArgumentPolicy.integerOf text with
+                            match ArgumentPolicy.integerOf text with
                             | Some now -> Ok now
                             | None -> Error(ServerConstraintDefect.Unjudgeable "clock-malformed")
                         | Ok _ -> Error(ServerConstraintDefect.Unjudgeable "clock-malformed")
@@ -1153,8 +1153,7 @@ module Durable =
                                     (fun _ ->
                                         match WindowedLimits.decide limit now quantity counter with
                                         | WindowDecision.Admitted next -> Ok(WindowCounter.encode next)
-                                        | WindowDecision.Refused defect ->
-                                            Error(ServerArgumentPolicy.describe defect))
+                                        | WindowDecision.Refused defect -> Error(ArgumentPolicy.describe defect))
                                     (Fuaran.Core.JObj [])
                             with
                             | Ok served ->

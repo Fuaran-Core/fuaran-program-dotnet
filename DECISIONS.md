@@ -4517,3 +4517,105 @@ domain's own later phase, not this one.
 **Version.** `v0.13.1` is tagged, so the change advances to `0.14.0`: `ServerEffectRegistry` gains a
 field (FS0764 for a full literal; `denyAll` carries the default), and the server placement's figure
 moves for a tree that repeats a call. `STABILITY.md` says what a consumer pays.
+
+## D59 — The argument-policy CHECK lives in `Fuaran.Program.Bounded` beside the clauses it decides, as `ArgumentPolicy.check limiter capability clauses arguments payloadBytes`; the refusal vocabulary and the windowed-limit shapes move with it; `.Server` reads an effect into the check's inputs, and keeps forwarding names through 0.14.0, removed in 0.15.0 (2026-11-03)
+
+**Context.** The clause vocabulary, `ServerConstraintClause`, has lived in `Fuaran.Program.Bounded`
+since D17, but the check that decides it lived in `Fuaran.Program.Server` as
+`ServerArgumentPolicy.check`. The device domain Phase 2264 composed on Program recorded that as
+finding F2: a witness that gates its own leaves by the argument policy decides them by calling the
+server package's check, so it depends on the .NET server placement, and a constrained or browser
+host of the same vocabulary would have to re-implement the check. Re-implementing it is the
+divergence a shared witness exists to prevent.
+
+**Premises checked against the tree first.**
+
+- The callers of `ServerArgumentPolicy`, in `ServerEffect.fs`: the windowed counter codec reads
+  `integerOf`. Inside the module, `check` reads `arguments`, `payloadBytes`, the private
+  `checkClause` / `everyInteger` / `quantityOf`, `WindowedLimit.ofClauses` and the registry. In
+  `Durable.fs`: `reachOfOp` and `DestinationArgument` (the facet plan), `integerOf` (the clock
+  reading) and `describe` (a refusal journaled at its ordinal). Elsewhere in the package,
+  `Handler.fs` calls `check` and `describe`, and `ServerDemanded.fs` reads `arguments`, `reachOfOp`,
+  `refsOfSource` and `refsOfTransform`.
+- What reads SERVER state, and so stays: `reachOfOp` (the state witness's `Reach`, `View` and
+  `Substitute`), `arguments` and `payloadBytes` (the `ServerEffect` vocabulary and the stream
+  encoder), `refsOfSource` / `refsOfTransform` (the query vocabulary) and the registry lookup. The
+  windowed DECISION (`WindowCounter`, `WindowDecision`, `WindowedLimits.decide`) reads a clock and
+  counters, so it stays too.
+- What is a pure function of the clauses and of what the effect carries: the integer reading
+  (`integerOf`), every stateless clause, the quantity sum, folding the clauses into a windowed limit
+  (`WindowedLimit.ofClauses`), the ordering of stateless before windowed, and `describe`. That is
+  what moves.
+- `Demanded.fs` compiles before `ProgramWire.fs`, so the check cannot measure a payload's canonical
+  bytes itself. It is GIVEN them, as it is given the arguments.
+
+**The choice.**
+
+- **`ArgumentPolicy` in `Fuaran.Program.Bounded`, beside `ServerConstraintClause`.** `check limiter
+  capability clauses arguments payloadBytes` decides every stateless clause in declaration order,
+  reports the first that refuses, then folds the windowed clauses and asks `limiter` once. It is
+  the whole decision `ServerArgumentPolicy.check` made, with the effect-reading taken out:
+  `arguments` is the effect's `(argument, value)` pairs and `payloadBytes` its canonical size.
+  `integerOf`, `quantityOf` and `describe` are public beside it. `ofObject` is the host call's
+  argument reading (top-level string and integer members, D25 and Phase 1982), the one reading every
+  placement shares, so a leaf witness reads a call's arguments exactly as the server does.
+- **The vocabulary moves with it**: `ServerConstraintDefect`, `WindowedLimit` (with `none` and
+  `ofClauses`), `WindowedLimiter` and `WindowedLimiter.unjudgeable`. The check's result is a
+  `ServerConstraintDefect`, so the type has to sit where the check does. The limiter is a PARAMETER
+  rather than left out, because a check that skipped the windowed clauses would admit them, and a
+  caller with no clock would then read a declared rate limit as no limit at all. A leaf witness with
+  no clock passes `WindowedLimiter.unjudgeable` and is refused `limit-unjudgeable:no-clock`, which
+  is what the server placement answers without a clock (D52).
+- **`.Server` reads, then delegates.** `ServerArgumentPolicy.check ops registry effect` is
+  `ArgumentPolicy.check registry.Limiter capability (constraintsFor capability registry) (arguments
+  ops effect) (payloadBytes ops effect)`. Its signature does not move. Every refusal is byte-for-byte
+  the token it was, because there is one `describe`.
+
+**Forwarding: kept for 0.14.0, removed in 0.15.0.** `.Server` keeps `type ServerConstraintDefect`,
+`type WindowedLimit` and `type WindowedLimiter` as abbreviations of the Bounded types. It keeps the
+modules `WindowedLimit` (`none`, `ofClauses`) and `WindowedLimiter` (`unjudgeable`) and
+`ServerArgumentPolicy.describe` as forwards. Each is the same type or the same function, not a
+copy, so values cross between the spellings freely.
+
+- **Why keep them.** A consumer outside this repository calls `ServerArgumentPolicy.describe` and
+  matches `ServerConstraintDefect` cases through `Fuaran.Program.Server`, and it pins `0.14.0`: the
+  draft slot this change rides. Dropping the names would force a call-site change at a version that
+  does not announce it. The abbreviations keep source written against 0.13 compiling unchanged,
+  union-case access through the old name included. One case does not survive: an UNANNOTATED
+  `WindowedLimit` record literal in a file that opens only `Fuaran.Program.Server` no longer finds
+  its field labels (FS0039), because an abbreviation does not bring a record's labels into scope.
+  `{ WindowedLimit.none with … }`, a type annotation or `open Fuaran.Program.Bounded` restores it.
+- **Why not `[<Obsolete>]`.** A consumer building with warnings as errors would fail on the
+  attribute, which is the break the forwarding exists to avoid. The removal version is stated here,
+  in `STABILITY.md`, on each forwarding name's doc comment and in the package README instead.
+- **Why only one version.** Two spellings of one vocabulary is a standing invitation to read them as
+  two. Nothing inside this repository depends on the forwarding names except `Handler.fs`'s one
+  `describe` call: every other file that names a moved type opens `Fuaran.Program.Bounded`, so it
+  reads the original once the forward is gone. So removing them in 0.15.0 is a deletion plus that
+  one call, and the compiler names every consumer site.
+- **Binary compatibility is NOT kept.** The types now live in another assembly. An assembly
+  compiled against 0.13.x and loaded beside 0.14.0 without recompilation fails to load them. That
+  is why the change is breaking-class and rides the draft rather than a patch.
+
+**What does not move.** Every refusal token and the order refusals are reported in. The integer
+reading. The vacuous reading of an absent argument (D25), and `Required`'s exception to it (D55).
+`ServerArgumentPolicy.check`'s signature, `arguments`, `payloadBytes`, `reachOfOp`, the three
+argument-name constants and `refsOfSource` / `refsOfTransform`. The demanded document and its
+version (14). The windowed decision (`WindowedLimits.decide`) and its journal. No theorem moves:
+`proofs/EffectGate.fst` models the gate's decision and carries the argument policy as the
+registry's `r_policy` arrow (D52), and the arrow's meaning is unchanged. `ServerArgumentPolicy.check`,
+which the proofs cite, still exists and decides exactly as before. The prover was not run, because
+nothing it checks changed.
+
+**Tests.** `BoundedArgumentPolicyTests` opens only the substrate and `Fuaran.Program.Bounded`. It
+reproduces every check-level case `AtMostTests` and `ArgumentFloorTests` assert through the server
+placement against `ArgumentPolicy.check`: the integer spellings, the floor, the range, `Required`
+and the two planning tokens. It adds the list clauses, the ceiling and its declaration order, the
+label, the host-call reading, the windowed clauses through a supplied limiter, and an assertion that
+the Bounded assembly references no other `Fuaran.Program` assembly. `ArgumentFloorTests` adds the
+differential: over six clause sets and nine argument objects, the server's verdict and token equal
+the Bounded check's. Weakening `AtMost` to a strict bound in the Bounded check made both the Bounded
+suite and the server's `AtMost` suite fail, so the server decides through it rather than beside it.
+
+**Version.** Rides the `0.14.0` draft (untagged and publicly unpinned, already breaking-class from
+D58). `STABILITY.md` says what a consumer pays.

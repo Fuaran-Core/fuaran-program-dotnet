@@ -106,7 +106,7 @@ let private required =
                   "a different argument is not this one"
 
               Expect.equal
-                  (ServerArgumentPolicy.describe (ServerConstraintDefect.Missing "minutes"))
+                  (ArgumentPolicy.describe (ServerConstraintDefect.Missing "minutes"))
                   "argument-required:minutes"
                   "the token names the argument"
           }
@@ -234,6 +234,52 @@ let private document =
               | Error failure -> Expect.stringContains failure.Field "limit" "refused at the undeclared member"
           } ]
 
+/// Phase 2440 (D59): the server placement's check reads the effect and decides
+/// it with `Fuaran.Program.Bounded.ArgumentPolicy.check` — the check a leaf
+/// witness calls directly. Over every clause set below and every argument
+/// object, the two answer the same verdict, so the same token.
+let private sameCheck =
+    testList
+        "the server placement decides with the check beside the clauses (Phase 2440)"
+        [ test "the server's verdict is the Bounded check's, clause set by clause set and argument by argument" {
+              let clauseSets =
+                  [ [ ServerConstraintClause.Required "minutes"
+                      ServerConstraintClause.AtLeast("minutes", 1) ]
+                    [ ServerConstraintClause.AtMost("minutes", 5)
+                      ServerConstraintClause.AtLeast("minutes", 2) ]
+                    [ ServerConstraintClause.AllowList("minutes", [ "1"; "3" ])
+                      ServerConstraintClause.DenyList("minutes", [ "3" ]) ]
+                    [ ServerConstraintClause.Ceiling 12; ServerConstraintClause.Label "heat" ]
+                    [ ServerConstraintClause.PerWindow(1, 60) ]
+                    [ ServerConstraintClause.Required "minutes"; ServerConstraintClause.Dwell 0 ] ]
+
+              let argumentSets =
+                  [ []
+                    [ "minutes", JInt 0 ]
+                    [ "minutes", JInt 1 ]
+                    [ "minutes", JInt 3 ]
+                    [ "minutes", JInt 6 ]
+                    [ "minutes", JStr "05" ]
+                    [ "minutes", JStr "ten" ]
+                    [ "minutes", JBool true ]
+                    [ "other", JStr "a long enough value" ] ]
+
+              for clauses in clauseSets do
+                  for args in argumentSets do
+                      let server = checkArgs (bounded clauses "host:heat") args
+                      let payload = JObj args
+
+                      let core =
+                          ArgumentPolicy.check
+                              WindowedLimiter.unjudgeable
+                              "host:heat"
+                              clauses
+                              (ArgumentPolicy.ofObject payload)
+                              (System.Text.Encoding.UTF8.GetByteCount(ProgramWire.render payload))
+
+                      Expect.equal server core $"%A{clauses} over %A{args}"
+          } ]
+
 [<Tests>]
 let tests =
-    testList "a floor and an opt-in Required clause (Phase 2262, D55)" [ floor; required; document ]
+    testList "a floor and an opt-in Required clause (Phase 2262, D55)" [ floor; required; document; sameCheck ]

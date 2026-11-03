@@ -136,6 +136,29 @@ presence alone: a call with no `minutes` is refused `argument-required:minutes`,
 `argument-not-allowed:minutes`. It is opt-in; a policy that declares no `Required` reads exactly as
 it did.
 
+### One check, beside its clauses
+
+The check itself is not this package's. It is a pure function of the declared clauses and what one
+effect carries, so it lives in `Fuaran.Program.Bounded` beside `ServerConstraintClause`, as
+`ArgumentPolicy.check` (Phase 2440). This placement's `ServerArgumentPolicy.check` reads an effect
+into the check's inputs (its `arguments` and its `payloadBytes`) and decides it there, with the
+registry's limiter. A witness that gates its own leaves calls the same check with no server package
+referenced, and gets the same refusals token for token:
+
+```fsharp
+ArgumentPolicy.check
+    WindowedLimiter.unjudgeable          // no clock here: a windowed clause refuses
+    "host:heat"
+    clauses
+    (ArgumentPolicy.ofObject arguments)  // the host call's flat string and integer members
+    (UTF8.GetByteCount(ProgramWire.render arguments))
+|> Result.mapError ArgumentPolicy.describe
+```
+
+`ServerConstraintDefect`, `WindowedLimit` and `WindowedLimiter` moved with it. This package keeps
+forwarding names for them, and `ServerArgumentPolicy.describe`, through 0.14.0. They are removed in
+0.15.0 (`DECISIONS.md` D59).
+
 ### Limits over time: a count per window, a quantity per window, a dwell
 
 A gate that judges each command alone admits a legitimate command sent too often for too long. So

@@ -43,6 +43,9 @@
     <Compile Include="HandlerDocumentTests.fs" />
     <Compile Include="AtMostTests.fs" />
     <Compile Include="ArgumentFloorTests.fs" />
+    <!-- Phase 2440: the argument-policy check beside its clauses, called from
+         Fuaran.Program.Bounded alone. -->
+    <Compile Include="BoundedArgumentPolicyTests.fs" />
     <!-- fuaran#2017: the proved staging, undo and effect gate as oracles at
          the toy witness, beside production. -->
     <Compile Include="ToyStagingOracleTests.fs" />

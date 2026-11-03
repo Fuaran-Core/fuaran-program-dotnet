@@ -20,7 +20,7 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438)
+## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phase 2440)
 
 **Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
 the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded
@@ -59,6 +59,51 @@ a `QuantityDemand` like a leaf's. The client tier's quantities (`Demanded.ofTree
 refusal token. Every theorem in `proofs/Budget.fst`: the walk prices a call by inlining its handler,
 which is an `act` the model already has, and the oracle host runs the extraction beside
 `quantityCostThrough` over calls (D58 states why the model did not move).
+
+### Rides the draft: the argument-policy check lives beside its clauses (Phase 2440)
+
+**Class: breaking** — the draft's own class, so it rides rather than advances it. Types move between
+assemblies; source stays compatible through forwarding names, binaries compiled against 0.13.x do
+not. `DECISIONS.md` D59 records what was decided.
+
+**What a consumer gains.**
+
+- `ArgumentPolicy` in `Fuaran.Program.Bounded`, beside `ServerConstraintClause`:
+  `check limiter capability clauses arguments payloadBytes`, the whole argument-policy decision
+  (every stateless clause in declaration order, then the windowed clauses through `limiter`), with
+  `integerOf`, `ofObject` (the host call's flat string and integer members), `quantityOf` and
+  `describe` beside it. A witness that gates its own leaves references only `Fuaran.Program.Bounded`
+  and gets the server placement's refusals token for token.
+- `ArgumentPolicy.integerOf` is public. It was `internal` on `ServerArgumentPolicy`.
+
+**What moved.** From `Fuaran.Program.Server` to `Fuaran.Program.Bounded`, unchanged in shape:
+`ServerConstraintDefect`, `WindowedLimit` (with `WindowedLimit.none` and `ofClauses`),
+`WindowedLimiter` and `WindowedLimiter.unjudgeable`. `ServerArgumentPolicy.describe`'s body moved
+to `ArgumentPolicy.describe`. `ServerArgumentPolicy.check` now reads the effect and delegates; its
+signature is unchanged.
+
+**What a consumer pays.**
+
+- **Nothing at the source, through 0.14.0, with one exception.** `Fuaran.Program.Server` keeps
+  `ServerConstraintDefect`, `WindowedLimit` and `WindowedLimiter` as type abbreviations of the moved
+  types, `WindowedLimit.none` / `ofClauses` and `WindowedLimiter.unjudgeable` as forwards, and
+  `ServerArgumentPolicy.describe` as a forward. Each is the same type or function, so values cross
+  freely. The exception: an unannotated `WindowedLimit` record literal (`{ Count = …; Quantity = …;
+  Dwell = … }`) in a file that opens only `Fuaran.Program.Server` no longer finds its labels
+  (FS0039). Annotate the type, build from `WindowedLimit.none`, or `open Fuaran.Program.Bounded`.
+- **Recompile.** The types live in another assembly now. A binary compiled against 0.13.x fails to
+  load them beside 0.14.0.
+- **The forwarding names are removed in 0.15.0.** Move to the `Fuaran.Program.Bounded` names
+  (`open Fuaran.Program.Bounded`; `ServerArgumentPolicy.describe` becomes `ArgumentPolicy.describe`)
+  before adopting it. They carry no `[<Obsolete>]`, so a build with warnings as errors does not
+  break on 0.14.0. The removal is announced here, in D59 and on each name's doc comment.
+
+**What did not move.** Every refusal token and the order refusals are reported in, the integer
+reading, the vacuous reading of an absent argument and `Required`'s exception to it, and
+`ServerArgumentPolicy`'s `check` signature, `arguments`, `payloadBytes`, `reachOfOp`, constants and
+source readers. Also the windowed decision (`WindowCounter`, `WindowDecision`,
+`WindowedLimits.decide`) and its journal, the demanded document and its version (14), and every
+theorem in `proofs/EffectGate.fst`.
 
 ## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
 

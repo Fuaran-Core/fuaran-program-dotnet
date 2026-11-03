@@ -412,12 +412,12 @@ let private device =
 
               Expect.equal
                   (reasons windowed)
-                  [ "ApplyOps", ServerArgumentPolicy.describe (ServerConstraintDefect.OverWindow(1, 1000)) ]
+                  [ "ApplyOps", ArgumentPolicy.describe (ServerConstraintDefect.OverWindow(1, 1000)) ]
                   "the window refused, naming the declaration"
 
               Expect.equal
                   (reasons offList)
-                  [ "ApplyOps", ServerArgumentPolicy.describe (ServerConstraintDefect.OffList "target") ]
+                  [ "ApplyOps", ArgumentPolicy.describe (ServerConstraintDefect.OffList "target") ]
                   "the allow-list refused, naming the argument"
 
               Expect.equal performed.Value 1 "only the admission was performed"
