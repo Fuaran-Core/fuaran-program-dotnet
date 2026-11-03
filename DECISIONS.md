@@ -4619,3 +4619,124 @@ suite and the server's `AtMost` suite fail, so the server decides through it rat
 
 **Version.** Rides the `0.14.0` draft (untagged and publicly unpinned, already breaking-class from
 D58). `STABILITY.md` says what a consumer pays.
+
+## D60 — A witness DECLARES how its refusals read: `ActionWitness.Refusals` is `Continues` (today's reading, the UI tier's) or `Halts`, under which EVERY refusal halts the fold as a guard does and the RUN settles to all or nothing — the entry store, no effect, the refusal its last diagnostic; the model states and proves it; the handler's atomicity (D8) meets a settled halt as it meets any halt, so the two readings cannot disagree for one program (2026-11-03)
+
+**Context.** The first actuator domain composed on Program (Phase 2264) raised finding F3: a leaf's
+`Refuse` records a diagnostic and the sequence continues, keeping what was emitted before it. That is
+right for a UI, where an inert action is harmless. For an actuator it means a plan can hold a
+performed prefix and a refused remainder, which is exactly the partial actuation an attacker wants.
+That domain applied Program's handler reading at its own placement — a schedule performs nothing if
+any leaf was refused or any guard halted — and recorded that the rule belongs in Program, where
+every host reads it. Phase 2441 lifts it.
+
+**Premises checked against the tree first.**
+
+- Where a refusal arises. `BoundedActions.runFold` produces one at five sites: a write to a
+  reserved key, a write whose source did not resolve, a write whose source errored, a call declaring
+  a result target, and a leaf the witness refused. The scope defect at the fold's entry was already a
+  halt. A guard that does not hold, a branch that cannot decide or whose exit assertion fails and a
+  repeat over its bound halt through `halted` / `haltedAfter`; a composition keeps a halted member's
+  prefix (`composed`), and the fold never rolls back — the handler does (D8).
+- What the model says. `fold_total` stated that only a guard halts among non-composition steps;
+  `may_halt` enumerated the three halting shapes; `fold_no_require_no_halt` and `ui_never_halts`
+  stood on that enumeration. Every one of those statements would be false under a reading in which a
+  refusal halts, unless the statement reads the declaration.
+- Where the witness is constructed in this repository: once in `src` (the inverse program's witness
+  in `runReversed`) and once in the tests (the toy). The UI adapters left the repository
+  (fuaran#2012), so the UI tier's construction site is a consumer's. The opener's index said the
+  test project was new; it is not.
+- What the first consumer's placement rule reads: EVERY refusal the outcome's diagnostics carry, the
+  fold's own as well as the leaf's, and every guard halt — not the leaf's refusal alone.
+
+**The choice.**
+
+- **The declaration is a member of `ActionWitness`, `Refusals: RefusalReading`, with two readings.**
+  It sits where `Lower` and `LeafOutcome` sit because it says how `Lower`'s refusal reads. It is a
+  record member rather than an optional parameter or a second entry point so that every witness SAYS
+  which reading it takes: a witness that cannot be constructed without choosing cannot drift into the
+  wrong reading silently, and the fold reads one declaration at every refusal rather than a flag
+  threaded through call sites. The price is the breaking class — a full literal fails with FS0764 —
+  which rides the `0.14.0` draft that already carries it. `Continues` is today's reading and the
+  default a witness with no reason to declare otherwise names; a witness declaring it folds byte for
+  byte as before the member existed (`continuing_run_is_fold`, and `GenericityTests` unchanged).
+- **Under `Halts`, EVERY refusal halts, not only the leaf's.** The shard names the refused leaf; the
+  decision covers the fold's own four as well, through one constructor (`refusal`) that every
+  refusal site goes through. Two reasons. The consumer's rule reads every refusal, so a declaration
+  covering only the leaf's would leave that per-placement wrapper standing for the fold's own
+  refusals and for guard halts — the wrapper this phase exists to lift. And fail-closed is the
+  actuator's posture: a tree writing a reserved key, or calling with a declared result target, is
+  the untrusted-tree case the refusal exists for, and carrying on past it is the wrong default for a
+  device.
+- **The RUN settles, not the step.** `run` and `runTraced` (`settle`) return a halted outcome under
+  `Halts` as the ENTRY store with NO effect, the diagnostics kept. The run is the unit an actuator
+  dispatches, so it is the unit that is all or nothing. Inside a composition the fold keeps its
+  prefix semantics under both readings — a sequence still carries the members that ran before the
+  halt — which is what lets `sequence_homomorphism`, `each_is_lowering`, `repeat_is_unrolling`,
+  `traced_agrees` and the rest stand unchanged over both readings, with only `fold_total` and
+  `may_halt` reading the declaration. The store is restored as well as the effects dropped because
+  "all or nothing" with the store kept would be all or something, and the entry state is what the
+  handler restores on a halt (D8). The diagnostics are kept because the outcome must still say what
+  happened; the trace of a traced run is kept because it says what ran, and a halted run is never
+  reversed.
+- **A guard halt and a flow halt settle the same way under `Halts`.** The atomicity unit is the run;
+  a run that actuated twice and then met a guard that did not hold has performed the same partial
+  plan as one that met a refusal. The consumer's rule read "no guard halted" beside "refused
+  nothing" for that reason. Under `Continues` a guard halt keeps the prefix exactly as Phase 1967
+  shipped it.
+- **"The refusal names the leaf's position" is read through the acceptance: the outcome names the
+  refused leaf.** A halted run's LAST diagnostic is the refusal that halted it
+  (`halted_ends_with_refusal`, proved for every witness), by node and by the witness's description
+  of the step, after the declines that ran before it; a traced run's trace holds exactly the members
+  that ran, so the halting member's ordinal is the trace's length. No positional index is added to
+  `BoundedOutcome`: it would be a second record widening at the same version, and the description and
+  the trace already locate the step. A domain whose descriptions do not distinguish two leaves names
+  the position in `Describe`.
+- **The model carries the reading and the theorem (D14, written first).** `refusal_reading`,
+  `w_refusals`, `refusal` and `settle` mirror the code member for member. `halting_run_all_or_nothing`
+  is the atomicity theorem: under a witness declaring `Halts` and an arm whose answers refuse
+  nothing (`arm_refuses_nothing`, the same shape as `arm_preserves_reserved`, discharged for the
+  inert arm), a run either did not halt — then it is the fold's own outcome and met no refusal
+  (`halting_unhalted_is_refusal_free`) — or it halted, and then its store is the entry store, its
+  effects are empty and its last diagnostic is the refusal. `fold_total` gains the clause that a
+  halted step is a guard or a step under `Halts`, and writes and emits nothing either way;
+  `may_halt` reads the declaration; `fold_no_require_no_halt` takes `Continues` as a hypothesis, as
+  it took the absence of flow shapes from Phase 1976; `ui_witness` declares `Continues`, which is
+  what `ui_never_halts` now stands on beside its two shape lemmas. The prover checked the module,
+  the extraction was regenerated, and the differential host runs the extraction beside the core at
+  BOTH toy witnesses over the whole corpus.
+
+**How this composes with the server placement's handler atomicity (D8), so the two readings cannot
+disagree for one program.** A handler is a stage list whose compute stages run this fold; the
+handler reads the outcome's `Halted` and, on a halt, discards the store, ops, patches, notifications
+and effects in favour of the entry state. Under `Halts` the fold hands it a halted outcome that is
+ALREADY the entry store with no effect, so the handler's rollback is idempotent over it: both say
+"entry state, nothing performed", and the handler additionally discards the ops and patches of
+earlier stages, which the fold never held. Under `Continues` a refusal is not a halt, the handler
+sees none and commits with the diagnostic, exactly as today. The handler's halt reading IS the fold's
+`Halted` flag, and settlement changes only the store and effects of an outcome the handler discards
+anyway — so there is no program for which the fold reports a performed run and the handler a rolled
+back one, or the reverse. What a halting witness changes at the handler is one thing: a refusal now
+rolls the handler back where under `Continues` it would have committed, which is the rule the
+actuator wanted and now gets from the core. At the placements that run no handlers — the browser
+client, the driver, an actuator's own placement — the settled run is the atomicity unit itself,
+which is where the lift lands. What settlement does NOT reach is D8's perform-phase residual: effects
+are values the host performs after the run, and a performer that fails after a settled run has
+nothing to perform; one that fails midway through a committed run's effects leaves the prefix D8
+names, which is the host's boundary and not the fold's.
+
+**Tests.** `HaltingRefusalTests` runs one program through the two toy witnesses that differ only in
+the declaration: the shard's third-leaf case under both readings; the refused leaf's position read
+off the trace; the fold's own four refusals halting under `Halts` and continuing under `Continues`;
+a guard halt and two flow halts settling under `Halts` and keeping the prefix under `Continues`; a
+fully admitted run identical under both; every refusal diagnosed and none halting under `Continues`
+(the UI tier's reading); and the entry scope refusal settling alike. `ToyBoundedFoldOracleTests`
+derives the model witness from whichever production witness it is handed and adds the halting
+differential over the whole toy corpus, answered call included. Keeping the effects of a settled run
+made four of the eight new cases and the halting differential fail, and made the prover refuse
+`halting_run_all_or_nothing`; both were restored.
+
+**Version.** Rides the `0.14.0` draft (untagged and publicly unpinned, breaking-class already from
+D58 and D59). `STABILITY.md` says what a consumer pays; `docs/migrations/phase-2441.md` is the diff
+per construction site. The actuator domain's adoption — naming the member, then retiring its own
+refusal-and-halt check in favour of the fold's — is its own phase (Phase 2455), not this one.

@@ -276,13 +276,24 @@ type ActionWitness<'Action, 'Expr, 'Store, 'Effect> =
       Lower:        nodeId: string -> 'Action -> 'Store -> LeafOutcome<'Effect>   // Leaf only
       Describe:     'Action -> string                        // today: Validation.describeAction
       Substitute:   placeholder: string -> JVal -> 'Action -> 'Action   // an Each's lowering (Phase 1990, D29)
-      Placeholders: 'Action -> string list }                 // the names this level's own operands read
+      Placeholders: 'Action -> string list                   // the names this level's own operands read
+      Refusals:     RefusalReading }                         // Continues (today's reading) | Halts (Phase 2441, D60)
 ```
 
 The fold keeps its current form. It is one `match` in one file, now over `ActionView`. It owns
 sequencing, the one store write, the reserved-namespace refusal, the D9 refusal of a declared result
 target, and the handler-effect arm (D7). **It never recurses into a `Leaf`.** A leaf is lowered to at
 most one effect, or refused, or declined, and the domain makes that choice through `Lower`.
+
+**A witness DECLARES how its refusals read (Phase 2441, D60).** `Refusals = RefusalReading.Continues`
+is today's reading and the UI tier's: a refusal — the leaf's `Refuse` or one of the fold's own four —
+is a diagnostic the sequence carries on past, and what was emitted before it stands. `Halts` is the
+reading a witness over an actuator declares: every refusal halts exactly as a guard does, and the RUN
+is all or nothing — `BoundedActions.run` settles a halted run to the entry store with no effect,
+keeping the diagnostics, so the outcome holds either every effect of a run every step of which was
+admitted, or none, with the refusal that halted it last. The model's `halting_run_all_or_nothing`
+proves it; `continuing_run_is_fold` proves a witness declaring `Continues` folds byte for byte as
+before the member existed.
 
 **`Require` is the fifth shape, added by Phase 1967 (D19) for the second witness's F1.** Its
 condition resolves against the store through `ExprWitness.Resolve`, exactly as an `Assign`'s `from`

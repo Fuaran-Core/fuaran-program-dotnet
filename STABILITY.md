@@ -20,7 +20,7 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phase 2440)
+## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441)
 
 **Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
 the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded
@@ -104,6 +104,48 @@ reading, the vacuous reading of an absent argument and `Required`'s exception to
 source readers. Also the windowed decision (`WindowCounter`, `WindowDecision`,
 `WindowedLimits.decide`) and its journal, the demanded document and its version (14), and every
 theorem in `proofs/EffectGate.fst`.
+
+### Rides the draft: a witness declares how its refusals read, and a halting witness's run is all or nothing (Phase 2441)
+
+**Class: breaking** — the draft's own class, so it rides rather than advances it. A public record
+gains a member, so a full literal fails with FS0764. `DECISIONS.md` D60 records what was decided;
+`docs/migrations/phase-2441.md` is the diff per construction site.
+
+**What a consumer gains.**
+
+- `RefusalReading` in `Fuaran.Program.Bounded` — `Continues` | `Halts` — and `ActionWitness.Refusals`,
+  the witness's one declaration of how its refusals read.
+- Under `Halts`, every refusal the fold produces — a leaf's `Refuse` and the fold's own four (a
+  reserved-key write, a write whose source did not resolve or errored, a call declaring a result
+  target) — HALTS the fold as a guard does, and `BoundedActions.run` / `runTraced` / `runInert`
+  settle a halted run to the ENTRY store with NO effect, diagnostics kept, the refusal last. A guard
+  halt and a flow halt settle the same way. The outcome of a run under such a witness is one of two
+  things and never a third: every effect of a run every step of which was admitted, or none. A
+  witness over an actuator gets its all-or-nothing plans from the core rather than from a wrapper at
+  its placement.
+- The model proves it: `halting_run_all_or_nothing`, `halted_ends_with_refusal`,
+  `halting_unhalted_is_refusal_free`, `continuing_run_is_fold`, `traced_run_settles_alike` in
+  `proofs/BoundedFold.fst` section 12; the differential host runs the extraction beside the core at
+  both readings.
+
+**What a consumer pays.**
+
+- **`ActionWitness` gains a member.** A full record literal fails with FS0764. Add
+  `Refusals = RefusalReading.Continues` to keep today's reading, byte for byte — that is the reading
+  every witness had before the member existed, and the UI tier's. Declare `Halts` only for a witness
+  whose refusals should stop the run; nothing in this repository does, and the first external
+  adopter is the actuator domain (Phase 2455).
+- **Recompile.** A binary compiled against 0.13.x and loaded beside 0.14.0 fails to construct the
+  record. The slot was already breaking-class.
+
+**What did not move.** Every refusal token and the order refusals are reported in. `LeafOutcome`,
+`BoundedOutcome`, `BoundedDiagnostic`, `HandlerArm` and every `ActionView` shape. The fold's prefix
+semantics inside a composition under both readings (`sequence_homomorphism`, `each_is_lowering`,
+`repeat_is_unrolling`, `traced_agrees` are unchanged in statement); the trace of a traced run. The
+handler's atomicity (D8) and its outcome. The demanded document and its version (14). Two theorem
+statements gained a hypothesis that reads the declaration — `fold_no_halting_shape_no_halt`
+(`may_halt` now takes the witness) and `fold_no_require_no_halt` (`Continues`) — and `fold_total`
+gained a clause; at a witness declaring `Continues` each says exactly what it said.
 
 ## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
 

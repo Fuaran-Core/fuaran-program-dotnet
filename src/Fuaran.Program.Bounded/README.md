@@ -161,7 +161,10 @@ domain needed and the UI tier never produces (**D19**) — `Choose` and `Repeat`
 the bounded iteration D1 and D2 charter, designed for reversal, which the same domain's re-run found
 missing (**D21**; the reversible fragment, its trace and its inverse are `BoundedActions.runTraced` /
 `reversible` / `reverse` / `runReversed`) — `Each` — per-element iteration over a literal collection,
-lowered by the witness's substitution to the sequence of its elements (**D29**) — and `Leaf`. The closed
+lowered by the witness's substitution to the sequence of its elements (**D29**) — and `Leaf`. How a
+witness's refusals READ is the witness's own declaration (`ActionWitness.Refusals`): today's reading
+carries on past a refusal, and a witness over an actuator declares that every refusal halts and a run
+is all or nothing (**D60**; the model's `halting_run_all_or_nothing`). The closed
 per-placement effect vocabulary and its registered host-performer seam is **D3**. The UI-typed first
 instantiation, and the dependency direction that follows from it, are **D4** and **D5**. This README
 cites those decisions rather than restating them; `DECISIONS.md` is authoritative.
