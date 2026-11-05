@@ -355,6 +355,15 @@ module QueryFault =
         | Fuaran.Compute.UnpinnedClock _ -> "UnpinnedClock"
         // A unit conversion across dimensions (Core-Compute 0.40.0).
         | Fuaran.Compute.UnitMismatch _ -> "UnitMismatch"
+        // A pipeline's own function definitions and calls (Core-Compute 0.43.0).
+        | Fuaran.Compute.FunctionError _ -> "FunctionError"
+        | Fuaran.Compute.RecursiveFunction _ -> "RecursiveFunction"
+        | Fuaran.Compute.ExpansionTooLarge _ -> "ExpansionTooLarge"
+        // A curve read's knots break the rule (Core-Compute 0.43.0).
+        | Fuaran.Compute.InvalidKnots _ -> "InvalidKnots"
+        // A fit or a prediction the evaluator refuses (Core-Compute 0.43.0).
+        | Fuaran.Compute.UnsupportedFit _ -> "UnsupportedFit"
+        | Fuaran.Compute.FitError _ -> "FitError"
 
     /// The halt reason a fault becomes. An `Eval` fault reads exactly as the
     /// in-memory fold's halt always has.
@@ -979,6 +988,12 @@ module ServerArgumentPolicy =
         | Fuaran.Compute.Union source
         | Fuaran.Compute.Intersect source
         | Fuaran.Compute.Except source -> refsOfSource source
+        // A prediction reads its model from a second source — the training rows
+        // or a coefficient table (Core-Compute 0.43.0).
+        | Fuaran.Compute.Predict spec ->
+            match spec.Model with
+            | Fuaran.Compute.PredictModel.Training source
+            | Fuaran.Compute.PredictModel.Coefficients source -> refsOfSource source
         | Fuaran.Compute.Filter _
         | Fuaran.Compute.Project _
         | Fuaran.Compute.Derive _
@@ -988,7 +1003,9 @@ module ServerArgumentPolicy =
         | Fuaran.Compute.Unpivot _
         | Fuaran.Compute.Sort _
         | Fuaran.Compute.Distinct
-        | Fuaran.Compute.Limit _ -> []
+        | Fuaran.Compute.Limit _
+        | Fuaran.Compute.Define _
+        | Fuaran.Compute.Fit _ -> []
 
     /// The effect's named arguments, as `argument, value` pairs.
     ///

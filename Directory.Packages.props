@@ -32,7 +32,7 @@
          `Fuaran.UI.*` pin returns, here or in any project. -->
     <PackageVersion Include="Fuaran.Core.Wire" Version="0.40.2" />
     <PackageVersion Include="Fuaran.Core.Column" Version="0.40.2" />
-    <PackageVersion Include="Fuaran.Compute.DataFrame" Version="0.41.0" />
+    <PackageVersion Include="Fuaran.Compute.DataFrame" Version="0.43.0" />
     <PackageVersion Include="Fuaran.Core.Tree" Version="0.40.2" />
     <PackageVersion Include="Fuaran.Core.OpStream" Version="0.40.2" />
     <!-- The unit algebra (Phase 2261): a leaf declares a named quantity typed by

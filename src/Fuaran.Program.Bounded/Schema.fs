@@ -217,6 +217,14 @@ module Schema =
         // A unit conversion (Core-Compute 0.40.0) carries its target unit, never a
         // column, so only the converted operand reads.
         | ColExpr.Convert(x, _) -> readsOfExpr x
+        // A curve read (Core-Compute 0.43.0) carries its knots as data, never a
+        // column, so only the operand reads.
+        | ColExpr.Interpolate(x, _, _, _) -> readsOfExpr x
+        // A call of a pipeline-defined function (Core-Compute 0.43.0): a body
+        // reads no column, so a call reads exactly what its arguments read.
+        | ColExpr.Call(_, args) -> args |> List.collect readsOfExpr
+        // A function parameter is bound by a call's argument, never a column.
+        | ColExpr.Arg _ -> []
 
     /// The verb's discriminator — log-safe, and the name a finding uses so a
     /// reader can find the step in the declared pipeline.
@@ -236,6 +244,9 @@ module Schema =
         | Transform.Union _ -> "Union"
         | Transform.Intersect _ -> "Intersect"
         | Transform.Except _ -> "Except"
+        | Transform.Define _ -> "Define"
+        | Transform.Fit _ -> "Fit"
+        | Transform.Predict _ -> "Predict"
 
     /// The columns a step requires its INPUT to carry — the ones whose absence
     /// the evaluator reports as `UnknownColumn`.
@@ -289,6 +300,18 @@ module Schema =
         | Transform.Union _
         | Transform.Intersect _
         | Transform.Except _ -> []
+        // A definition (Core-Compute 0.43.0) changes no frame and reads no column:
+        // its body reads its parameters, never the input row.
+        | Transform.Define _ -> []
+        // A fit reads its response, its keys, its weights and every column a term
+        // or the offset reads — the evaluator's own `stepCols` for the verb.
+        | Transform.Fit spec ->
+            (spec.Response :: spec.GroupBy)
+            @ Option.toList spec.Weights
+            @ (FitSpec.exprs spec |> List.collect readsOfExpr)
+        // A prediction reads its keys and every column a term or the offset reads
+        // on its INPUT; the model's source is another table, as a join's right is.
+        | Transform.Predict spec -> spec.Fit.GroupBy @ (FitSpec.exprs spec.Fit |> List.collect readsOfExpr)
 
     /// The type a window function's output column carries. Pinned to the
     /// evaluator's own rule rather than restated loosely: the positional and
@@ -350,6 +373,87 @@ module Schema =
         | Transform.Union _
         | Transform.Intersect _
         | Transform.Except _ -> input
+
+        // A definition changes no frame (Core-Compute 0.43.0).
+        | Transform.Define _ -> input
+
+        // A fit's tables are closed (Core-Compute 0.43.0): the keys and a fixed
+        // set of statistics, or the input with one appended column. Pinned to the
+        // evaluator's own static walk: a column stated against the response is
+        // decimal for a decimal response and float otherwise, and a deviance is
+        // decimal only under ordinary least squares.
+        | Transform.Fit spec ->
+            let againstY =
+                typeOf spec.Response input
+                |> Option.map (fun ty ->
+                    if ty = ColumnType.DecimalType then
+                        ColumnType.DecimalType
+                    else
+                        ColumnType.FloatType)
+
+            let isOls = spec.Family = FitFamily.Gaussian && spec.Link = FitLink.Identity
+
+            let devianceType = if isOls then againstY else Some ColumnType.FloatType
+
+            let col name ty = { Name = name; Type = ty }
+            let keys = spec.GroupBy |> List.map (fun key -> col key (typeOf key input))
+
+            match spec.Output with
+            | FitOutput.Coefficients ->
+                SchemaKnowledge.Closed(
+                    keys
+                    @ [ col "term" (Some ColumnType.StringType)
+                        col "estimate" (Some ColumnType.FloatType)
+                        col "std_error" (Some ColumnType.FloatType)
+                        col "t" (Some ColumnType.FloatType)
+                        col "unit" (Some ColumnType.StringType) ]
+                )
+            | FitOutput.Summary ->
+                SchemaKnowledge.Closed(
+                    keys
+                    @ [ col "n" (Some ColumnType.IntType)
+                        col "df" (Some ColumnType.IntType)
+                        col "sigma" (Some ColumnType.FloatType)
+                        col "r2" (Some ColumnType.FloatType)
+                        col "rank" (Some ColumnType.IntType)
+                        col "deviance" devianceType
+                        col "null_deviance" devianceType
+                        col "dispersion" (Some ColumnType.FloatType)
+                        col "iterations" (Some ColumnType.IntType)
+                        col "converged" (Some ColumnType.BoolType) ]
+                    // The negative binomial's summary also states its θ.
+                    @ (match spec.Family with
+                       | FitFamily.NegativeBinomial _ ->
+                           [ col "theta" (Some ColumnType.FloatType)
+                             col "theta_std_error" (Some ColumnType.FloatType)
+                             col "alternations" (Some ColumnType.IntType) ]
+                       | _ -> [])
+                )
+            | FitOutput.Fitted -> input |> upsert (col "fitted" againstY)
+            | FitOutput.Residuals -> input |> upsert (col "residual" againstY)
+
+        // A prediction appends float columns to its input (Core-Compute 0.43.0):
+        // `predicted`, and from training rows the two standard errors and an
+        // interval's bounds when one is asked for.
+        | Transform.Predict spec ->
+            let appended =
+                match spec.Model with
+                | PredictModel.Coefficients _ -> [ "predicted" ]
+                | PredictModel.Training _ ->
+                    [ "predicted"; "se_fit"; "se_pred" ]
+                    @ (if Option.isSome spec.Interval then
+                           [ "lower"; "upper" ]
+                       else
+                           [])
+
+            appended
+            |> List.fold
+                (fun knowledge name ->
+                    knowledge
+                    |> upsert
+                        { Name = name
+                          Type = Some ColumnType.FloatType })
+                input
 
         // Project CLOSES the set however open the input was: the output is
         // exactly the listed columns, in the listed order, whatever else the
