@@ -71,7 +71,7 @@ jobs:
       # Auth is Trusted Publishing (OIDC): a policy on nuget.org (repository
       # owner / repository / this workflow's file name / the package id pattern)
       # exchanges the job's OIDC token for a 1-hour API key — no long-lived key
-      # secret to rotate. NUGET_USER is the nuget.org profile name the policy
+      # secret to rotate. `user` is the nuget.org profile name the policy
       # belongs to. The login sits immediately before the push so the temporary
       # key cannot expire mid-run.
       #
@@ -83,7 +83,7 @@ jobs:
         uses: NuGet/login@v1
         id: nuget-login
         with:
-          user: ${{ secrets.NUGET_USER }}
+          user: ajwillshire # the policy owner (a nuget.org profile name is public, not a secret)
 
       - name: Push to nuget.org
         run: |
