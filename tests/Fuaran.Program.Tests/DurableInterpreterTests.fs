@@ -30,35 +30,13 @@ open Fuaran.Program.Bounded
 open Fuaran.Program.Runtime
 open Fuaran.Program.Server
 open Fuaran.Program.Tests.ToyDomain
+open Fuaran.Program.Tests.ToyDurableReplayTests
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
+//
+// The process killer, the base tree and store, the registry and the journals
+// are `ToyDurableReplayTests`'s, shared rather than copied.
 
-/// The process dying, raised from inside a performer or a journal append so
-/// the run is cut exactly where a real crash would cut it.
-exception private ProcessDied of string
-
-let private crashing (f: unit -> 'T) : bool =
-    try
-        f () |> ignore
-        false
-    with ProcessDied _ ->
-        true
-
-let private leaf id label =
-    { Id = id
-      Label = Const(JStr label)
-      Handlers = []
-      Children = [] }
-
-let private baseTree: ToyNode =
-    { Id = "root"
-      Label = Const(JStr "root")
-      Handlers = []
-      Children = [ leaf "title" "Draft"; leaf "footer" "Plain" ] }
-
-let private emptyStore: ServerStore<ToyNode, ToyStore> =
-    { Tree = baseTree
-      Bindings = Map.empty }
 
 let private labelOf (id: string) (root: ToyNode) : string option =
     let rec go (n: ToyNode) =
@@ -81,28 +59,10 @@ let private relabel (id: string) (label: string) (root: ToyNode) : ToyNode =
 
     go root
 
-let private registryOf (performers: (string * (JVal -> Result<JVal, string>)) list) =
-    performers
-    |> List.fold (fun r (fn, p) -> ServerEffectRegistry.register fn p r) ServerEffectRegistry.denyAll
-    |> ServerEffectRegistry.permissive
-
 let private counting (count: int ref) (answer: string) =
     fun (_: JVal) ->
         count.Value <- count.Value + 1
         Ok(JStr answer)
-
-let private freshJournal () =
-    Journal.declaringDurable (Journal.inMemory ())
-
-/// A journal the process dies in front of: the ATTEMPT record for `step`
-/// kills the process before it lands — the interruption BETWEEN two steps.
-let private dyingBeforeAttempting (step: int) (inner: EffectJournal) : EffectJournal =
-    { inner with
-        Append =
-            fun entry ->
-                match entry.Phase with
-                | JournalPhase.Attempted when entry.Step = step -> raise (ProcessDied "between steps")
-                | _ -> inner.Append entry }
 
 let private run
     (witnessOf: EntryReader -> FullWitness<ToyNode, ToyAction, ToyExpr, ToyStore, ToyOp, ToyEffect>)
@@ -321,7 +281,7 @@ let private entryRead =
 
           test
               "killed between the op and the host call, a FRESH file store serves the dead run's entry read and its op stage (Phase 2589)" {
-              ToyDurableReplayTests.withDirectory (fun directory ->
+              withDirectory (fun directory ->
                   let world = interruptedOver (JournalStore.file directory).Journal
                   let store = JournalStore.file directory
                   let audits = ref 0

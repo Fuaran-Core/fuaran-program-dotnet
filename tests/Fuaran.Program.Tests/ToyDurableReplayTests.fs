@@ -44,12 +44,12 @@ let private counting (counter: Counter) (answer: string) =
 
 /// The process dying. Raised from inside a performer or a journal append, so
 /// the run is cut exactly where a real crash would cut it.
-exception private ProcessDied of string
+exception internal ProcessDied of string
 
 /// Run something that is expected to die, and report whether it did. A crash
 /// the fixture did not observe would make every assertion after it a test of
 /// some other journal shape.
-let private crashing (f: unit -> 'T) : bool =
+let internal crashing (f: unit -> 'T) : bool =
     try
         f () |> ignore
         false
@@ -59,7 +59,7 @@ let private crashing (f: unit -> 'T) : bool =
 /// The tree the handler runs against: the two nodes the op stages relabel,
 /// with literal labels, so each `Relabel` applies rather than addressing a
 /// node that is not there.
-let private baseTree: ToyNode =
+let internal baseTree: ToyNode =
     let leaf id label =
         { Id = id
           Label = Const(JStr label)
@@ -71,11 +71,11 @@ let private baseTree: ToyNode =
       Handlers = []
       Children = [ leaf "title" "Draft"; leaf "footer" "Plain" ] }
 
-let private emptyStore: ServerStore<ToyNode, ToyStore> =
+let internal emptyStore: ServerStore<ToyNode, ToyStore> =
     { Tree = baseTree
       Bindings = Map.empty }
 
-let private registryOf (performers: (string * (JVal -> Result<JVal, string>)) list) =
+let internal registryOf (performers: (string * (JVal -> Result<JVal, string>)) list) =
     performers
     |> List.fold (fun r (fn, p) -> ServerEffectRegistry.register fn p r) ServerEffectRegistry.denyAll
     |> ServerEffectRegistry.permissive
@@ -132,7 +132,7 @@ let private performingThenDyingAt (victim: string) (log: OpLog) : OpPerformance<
 /// A journal the process dies in front of: the ATTEMPT record for `step` kills
 /// the process before it lands — the interruption BETWEEN two steps, the one
 /// before completed and recorded and the next never attempted.
-let private dyingBeforeAttempting (step: int) (inner: EffectJournal) : EffectJournal =
+let internal dyingBeforeAttempting (step: int) (inner: EffectJournal) : EffectJournal =
     { inner with
         Append =
             fun entry ->
@@ -160,7 +160,7 @@ let private runEdits
         handler
         emptyStore
 
-let private freshJournal () =
+let internal freshJournal () =
     Journal.declaringDurable (Journal.inMemory ())
 
 // ─── the model's side ────────────────────────────────────────────────────────
