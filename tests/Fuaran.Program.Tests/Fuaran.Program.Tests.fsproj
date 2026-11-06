@@ -60,6 +60,9 @@
          adapters leave. -->
     <Compile Include="ToyBoundedFoldOracleTests.fs" />
     <Compile Include="ToyBudgetOracleTests.fs" />
+    <!-- fuaran#2590: the witness-coverage derivation tools/witness-coverage.fsx loads, compiled here so the
+         conformance suite pins it and checks STABILITY.md against the manifest. -->
+    <Compile Include="..\..\tools\WitnessCoverage.fs" Link="WitnessCoverage.fs" />
     <Compile Include="ToyWireConformanceTests.fs" />
     <Compile Include="CoreBoundaryTests.fs" />
     <Compile Include="SchemaClockTests.fs" />

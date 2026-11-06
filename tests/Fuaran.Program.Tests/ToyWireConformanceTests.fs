@@ -48,6 +48,7 @@ open Fuaran.Core
 open Fuaran.Program.Bounded
 open Fuaran.Program.Server
 open Fuaran.Program.Tests.ToyDomain
+open Fuaran.Program.Tools
 
 /// The toy witness with the toy's wire codec in its action, op and effect
 /// positions.
@@ -1257,4 +1258,141 @@ let profileTests =
               let malformed = bytes.Replace("\"stages\"", "\"stages\":0,\"stages\"")
               Expect.notEqual malformed bytes "the third mutation changed the bytes"
               Expect.isError (certifyProfileVector canonical malformed) "a base refusal does not discriminate"
+          } ]
+
+// ─── Witness coverage (fuaran#2590, §10.10) ──────────────────────────────────
+//
+// A contract member leaves PROPOSED only when two witness families exercise
+// it. The derivation is `tools/WitnessCoverage.fs`, the one the script that
+// rewrites `STABILITY.md` loads; these tests pin it on fabricated manifests and
+// hold the committed record to the real one, so the record cannot drift from
+// the vectors without the gate going red.
+
+/// A manifest of one handler vector per family named, one scenario per
+/// (obligation, families) pair, and one profile vector at the toy family.
+let private fabricated (handlerFamilies: string list) (obligations: (string * string list) list) : string =
+    let array (items: string list) =
+        items |> List.map (sprintf "\"%s\"") |> String.concat "," |> sprintf "[%s]"
+
+    let vectors =
+        handlerFamilies
+        |> List.mapi (fun i family -> $"{{\"id\":\"v{i}\",\"document\":\"handler\",\"witnesses\":{array [ family ]}}}")
+
+    let scenarios =
+        obligations
+        |> List.mapi (fun i (requires, families) ->
+            $"{{\"id\":\"s{i}\",\"requires\":\"{requires}\",\"witnesses\":{array families}}}")
+
+    let profile =
+        "{\"id\":\"p0\",\"profile\":\"canonical-bytes\",\"witnesses\":[\"toy\",\"ui\"]}"
+
+    let joined (items: string list) = String.concat "," items
+
+    $"{{\"vectors\":[{joined vectors}],\"scenarios\":[{joined scenarios}],\"profileVectors\":[{profile}]}}"
+
+let private proposedIn (coverage: WitnessCoverage.Coverage list) : string list =
+    coverage |> List.filter WitnessCoverage.isProposed |> List.map _.Member
+
+let private marksIn (block: string) : int =
+    block.Split('\n')
+    |> Array.filter (fun line -> line.Contains "**PROPOSED**")
+    |> Array.length
+
+[<Tests>]
+let witnessCoverageTests =
+    testList
+        "witness coverage (fuaran#2590, §10.10)"
+        [ test "one single-witness member yields one PROPOSED mark" {
+              let coverage =
+                  WitnessCoverage.derive (
+                      fabricated [ "toy"; "ui" ] [ "bounded-loop", [ "toy"; "ui" ]; "handler-loop", [ "toy" ] ]
+                  )
+
+              Expect.equal (proposedIn coverage) [ "handler-loop" ] "only the one-family obligation is proposed"
+              Expect.equal (marksIn (WitnessCoverage.render coverage)) 1 "the record marks it, once"
+          }
+
+          test "two families yield no mark" {
+              let coverage =
+                  WitnessCoverage.derive (
+                      fabricated [ "toy"; "ui" ] [ "bounded-loop", [ "toy"; "ui" ]; "handler-loop", [ "toy"; "ui" ] ]
+                  )
+
+              Expect.isEmpty (proposedIn coverage) "every member has two families"
+              Expect.equal (marksIn (WitnessCoverage.render coverage)) 0 "and the record marks none"
+          }
+
+          test "a member's families are the union over the entries exercising it, never one entry's" {
+              // Two handler vectors, one per family: neither vector alone has
+              // two witnesses, the member does.
+              let coverage = WitnessCoverage.derive (fabricated [ "ui"; "toy"; "toy" ] [])
+              let handler = coverage |> List.find (fun c -> c.Member = "handler")
+              Expect.equal handler.Families [ "toy"; "ui" ] "distinct, in ordinal order"
+              Expect.equal handler.Class WitnessCoverage.Document "a vector's document is a document member"
+          }
+
+          test "an entry naming no witnesses is refused, not counted as less coverage" {
+              let manifest = "{\"vectors\":[{\"id\":\"v0\",\"document\":\"handler\"}]}"
+
+              Expect.throws
+                  (fun () -> WitnessCoverage.derive manifest |> ignore)
+                  "a member whose coverage cannot be computed must not read as proposed"
+          }
+
+          test "the vectors naming the toy witness are exactly the vectors this suite runs" {
+              // The declaration is only coverage if the witness's leg runs what
+              // it names: this suite's §10.7 selection is the toy witness's run.
+              let naming =
+                  match ProgramWire.tryMember "vectors" manifest.Value with
+                  | Some(JArr entries) ->
+                      entries
+                      |> List.filter (fun entry ->
+                          match ProgramWire.tryMember "witnesses" entry with
+                          | Some(JArr families) -> List.contains (JStr ToySubject) families
+                          | _ -> failwithf "manifest vector %s names no witnesses (§10.10)" (str "id" entry))
+                      |> List.map (str "id")
+                  | _ -> failwith "the corpus manifest declares no vector array"
+
+              let runs = selectForToy (vocabularyFree ()) (everyVector ()) |> List.map _.Id
+              Expect.isNonEmpty runs "the toy witness runs vectors"
+              Expect.equal (List.sort naming) (List.sort runs) "the toy witness's declared vectors are its run"
+          }
+
+          test "STABILITY.md records exactly what the corpus manifest derives" {
+              let manifest =
+                  File.ReadAllText(Path.Combine(ToyCorpus.fixturesRoot, "manifest.json"))
+
+              let derived = WitnessCoverage.derive manifest |> WitnessCoverage.render
+
+              let stability =
+                  File.ReadAllText(Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "STABILITY.md"))
+
+              Expect.equal
+                  (WitnessCoverage.recorded stability)
+                  (Some derived)
+                  "the witness-coverage block has drifted from the manifest; rewrite it with `dotnet fsi tools/witness-coverage.fsx --write`"
+          }
+
+          test "the record check goes red when the manifest moves" {
+              // The probe above is only evidence if it can fail: drop one
+              // family from every entry exercising a two-family member and the
+              // committed record no longer matches.
+              let manifest =
+                  File.ReadAllText(Path.Combine(ToyCorpus.fixturesRoot, "manifest.json"))
+
+              let mutated =
+                  manifest.Replace("\r\n", "\n").Replace("\"toy\",\n        \"ui\"", "\"toy\"")
+
+              Expect.notEqual mutated manifest "the mutation changed the manifest"
+
+              let stability =
+                  File.ReadAllText(Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "STABILITY.md"))
+
+              let derived = WitnessCoverage.derive mutated |> WitnessCoverage.render
+              Expect.notEqual (WitnessCoverage.recorded stability) (Some derived) "a moved manifest is drift"
+
+              Expect.isGreaterThan
+                  (marksIn derived)
+                  (marksIn (WitnessCoverage.render (WitnessCoverage.derive manifest)))
+                  "and it proposes more"
           } ]

@@ -4804,3 +4804,69 @@ within a process only. A host's re-pointing from its own store to this one is th
 
 **Version.** Additive: rides the `0.14.0` draft (untagged, publicly unpinned) without moving its
 class. `STABILITY.md` records it.
+
+## D62 — A contract member of the program wire leaves draft only with TWO witness families: every corpus entry names the families it certifies under, a member's coverage is the union over the entries exercising it, a member with one family is PROPOSED, and `STABILITY.md` carries the derived record, checked at the gate; the first sweep finds four one-family members, all at the toy (2026-11-06)
+
+**Context.** D30 made the toy a specification subject so Program certifies itself without the UI tier,
+and D33 swept the tree neutral. Neither says how many witnesses a member needs before it is stable.
+The balance between the domains Program serves held because each push was restated in the contract's
+own vocabulary and certified over the toy: a habit, which a review can find and a gate cannot. Two is
+Core's rule of three for its own substrate, relaxed for a specification whose witnesses are few: a member one domain asked for and only one domain runs is that domain's, not the
+contract's. Phase 2590 makes the count a checked property of the manifest.
+
+**Premises checked against the tree first.**
+
+- "Each vector carries the witness family it certifies under" presumed a member the manifest lacked.
+  What it had was `subject` (§10.7), which separates today's two witnesses for every document but the
+  vocabulary-free ones, which a host of either subject runs as they stand. So one vector can certify
+  under SEVERAL families, and the member is an array, `witnesses`, not a token.
+- "Each member's entry in `STABILITY.md`" presumed per-member entries. The record is a per-version log
+  and has none, so the record is a new derived table ahead of the version slots, not an edit to them.
+- The shard does not say what a member is. The specification already names the units a host certifies
+  and claims: the document kinds (§10.1), the obligations a scenario `requires` (§10.2, §10.6, §10.9)
+  and the profiles (§10.8). Those are the members; each is read off the manifest directly.
+- `run.ps1` cannot carry a new check stage from a phase landing (it is outside what such a landing may
+  touch). The gate fails on drift through its test stage instead: the suite compiles the derivation
+  the script loads and compares the committed record with the manifest's, so the record cannot drift
+  from the vectors without the gate going red.
+
+**Decided.**
+
+1. **The corpus declares its witness families** (`witnessFamilies`: `toy`, `ui`) and every vector,
+   profile vector, scenario and durable scenario names those it certifies under (`PROGRAM_WIRE.md`
+   §10.10). The specification's manifest check holds every entry to the declared set and to what the
+   entry already says about itself — its subject, a vocabulary-free document, a `-toy` scenario family —
+   so a mislabelled entry is refused where it is written. No vector's bytes or digest moved.
+2. **A member's witness families are DERIVED**, as the union of the `witnesses` of the entries
+   exercising it, and a member with fewer than two is PROPOSED. The derivation is
+   `tools/WitnessCoverage.fs`; `tools/witness-coverage.fsx` checks or rewrites `STABILITY.md`'s table
+   from it, and `ToyWireConformanceTests.fs` compiles the same file, pins it on fabricated manifests,
+   holds the committed table to the real manifest, and holds the vectors naming `toy` to exactly the
+   vectors this suite runs. An entry naming no witnesses RAISES rather than counting as less coverage.
+3. **PROPOSED is a mark, not a refusal.** A proposed member is specified and certifiable and a host may
+   claim it. A release carrying one records it; it leaves PROPOSED when a second witness family's
+   vectors exercise it, which is a corpus change, never an edit to the table.
+
+**The sweep (2026-11-06).** Eleven members. Seven have both families: the six document kinds and the
+`bounded-loop` obligation. Four have one, the toy, and none is the UI tier's alone:
+
+| Member | Class | Where it came from |
+|---|---|---|
+| `handler-loop` | obligation | D30: the toy's scenario family recording a handler run, which the UI family never carried; the UI tier's server suite asserts handler outcomes in its own code, outside the corpus |
+| `durable-journal` | obligation | D61: a host that needed the durable tier's resume to survive a restart; certified at the toy through the file store |
+| `canonical-bytes` | profile | D56: a constrained host that reads in one forward pass and hashes the bytes it received |
+| `integer-only` | profile | D56: a constrained host without floating point |
+
+Each was restated in the contract's vocabulary and certified over the toy before it landed, which is
+why none names its first host. What the sweep shows is the shape of the risk: every single-family member
+is one the toy carries alone, so the second witness each needs is a domain other than the toy, and the
+UI tier is the nearest.
+
+**What this entry does not reach.** The members are the units a host claims. The arms of the effect
+vocabularies (§5.1, §5.2) are not separate members: their coverage would be read out of the vectors'
+bytes rather than the manifest's declarations, a different derivation for a finer question. The
+release act's reading of the record — "a proposed member in a released minor is a finding" — belongs
+to the release tooling, which reads this table; nothing here changes it.
+
+**Version.** Additive and surface-free: rides the `0.14.0` draft (untagged, publicly unpinned) without
+moving its class. `STABILITY.md` records it.

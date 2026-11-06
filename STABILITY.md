@@ -20,7 +20,37 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589)
+## Contract members and their witnesses
+
+What the program wire's conformance corpus certifies, member by member, and through which witness
+families (`PROGRAM_WIRE.md` §10.10). A member is a document kind, an obligation a scenario requires, or
+a profile; its families are the union of the `witnesses` every vector, profile vector and scenario
+exercising it declares in the corpus manifest. A member with one family is marked **PROPOSED** beside
+its class: specified and certifiable, but the need of one domain rather than a shape two have been
+shown to share. It leaves PROPOSED when a second witness family's vectors exercise it, never by editing
+this table.
+
+The table is DERIVED: `dotnet fsi tools/witness-coverage.fsx --write` rewrites it from the manifest,
+and the gate fails when it differs from what the manifest derives. `DECISIONS.md` D62 records the
+first sweep.
+
+<!-- witness-coverage: derived from the specification manifest by tools/witness-coverage.fsx; do not edit by hand -->
+| Member | Class | Witnesses | Families |
+|---|---|---|---|
+| `client-effect` | document | 2 | `toy`, `ui` |
+| `handler` | document | 2 | `toy`, `ui` |
+| `invocation` | document | 2 | `toy`, `ui` |
+| `logic-tree-ref` | document | 2 | `toy`, `ui` |
+| `outcome` | document | 2 | `toy`, `ui` |
+| `server-effect` | document | 2 | `toy`, `ui` |
+| `bounded-loop` | obligation | 2 | `toy`, `ui` |
+| `durable-journal` | obligation, **PROPOSED** | 1 | `toy` |
+| `handler-loop` | obligation, **PROPOSED** | 1 | `toy` |
+| `canonical-bytes` | profile, **PROPOSED** | 1 | `toy` |
+| `integer-only` | profile, **PROPOSED** | 1 | `toy` |
+<!-- /witness-coverage -->
+
+## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590)
 
 **Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
 the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded
@@ -182,6 +212,26 @@ and `Durable.runWith` behave as before for a caller that passes no store.
 the journal it is given, as before, and never closes a run. Every refusal token.
 The demanded document and its version (14): a run's store is the host's binding, carried by the
 journal's restart claim into the placement declaration, not a member of the program's demands.
+
+### Rides the draft: a contract member leaves draft only with two witnesses (Phase 2590)
+
+**Class: additive.** No package's surface moves; the change is to the record and the corpus.
+`DECISIONS.md` D62 records the rule and the first sweep.
+
+**What a consumer gains.**
+
+- The "Contract members and their witnesses" table above: each member of the program wire with its
+  witness count and families, a single-family member marked PROPOSED, derived from the corpus manifest
+  by `tools/witness-coverage.fsx` and checked by the test suite against the manifest at every gate.
+- The corpus's manifest names the witness families every vector, profile vector and scenario
+  certifies under (`PROGRAM_WIRE.md` §10.10), so a host can read which members its own witness covers
+  without counting fixtures.
+
+**What a consumer pays.** Nothing. A host that reads the manifest and ignores its `witnesses` members
+runs exactly the vectors it ran before; no vector's bytes or digest moved.
+
+**What did not move.** Every package, refusal token, document and version. A PROPOSED member is
+certifiable and may be claimed: the mark is a finding about the contract, not a refusal of the member.
 
 ## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
 
