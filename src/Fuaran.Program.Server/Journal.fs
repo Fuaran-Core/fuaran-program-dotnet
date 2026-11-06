@@ -141,6 +141,24 @@ type JournaledStep =
     /// WHICH step it cannot decide.
     | Indeterminate of capability: string
 
+/// The two member readers both host documents in this file decode with — the
+/// operator-control stream and, since Phase 2589, a stored journal entry.
+module internal JournalWire =
+
+    let requireInt (name: string) (value: Fuaran.Core.JVal) : Result<int, WireRefusal> =
+        match ProgramWire.tryMember name value with
+        | None -> ProgramWire.refuse RefusalClass.MissingMember ("required member '" + name + "' is absent")
+        | Some(Fuaran.Core.JInt i) -> Ok i
+        | Some _ -> ProgramWire.refuse RefusalClass.MissingMember ("member '" + name + "' is not an integer")
+
+    let requireNonEmpty (name: string) (value: Fuaran.Core.JVal) : Result<string, WireRefusal> =
+        ProgramWire.requireString name value
+        |> Result.bind (fun text ->
+            if text = "" then
+                ProgramWire.refuse RefusalClass.EmptyName ("member '" + name + "' is empty")
+            else
+                Ok text)
+
 module Journal =
 
     /// A journal that records nothing and remembers nothing.
@@ -156,6 +174,14 @@ module Journal =
           Read = fun _ -> []
           SurvivesRestart = false }
 
+    /// The in-memory journal over `entries` — `inMemory`'s storage, named so
+    /// the in-memory journal STORE (Phase 2589) can retire a run from the same
+    /// list it appends to.
+    let internal over (entries: ResizeArray<JournalEntry>) : EffectJournal =
+        { Append = entries.Add
+          Read = fun invocation -> entries |> Seq.filter (fun e -> e.Invocation = invocation) |> List.ofSeq
+          SurvivesRestart = false }
+
     /// An in-memory reference journal.
     ///
     /// It satisfies the contract for a replay WITHIN one process — which is
@@ -164,12 +190,7 @@ module Journal =
     /// to survive a restart, and saying so is not modesty: an in-memory journal
     /// that declared otherwise would let a test certify a guarantee no
     /// deployment of it could keep.
-    let inMemory () : EffectJournal =
-        let entries = ResizeArray<JournalEntry>()
-
-        { Append = entries.Add
-          Read = fun invocation -> entries |> Seq.filter (fun e -> e.Invocation = invocation) |> List.ofSeq
-          SurvivesRestart = false }
+    let inMemory () : EffectJournal = over (ResizeArray<JournalEntry>())
 
     /// The same journal, with the host's restart claim attached.
     ///
@@ -250,6 +271,253 @@ module Journal =
             match e.Subject with
             | None -> sprintf "%d %s %s" e.Step e.Capability (JournalPhase.tag e.Phase)
             | Some subject -> sprintf "%d %s %s %s" e.Step e.Capability subject (JournalPhase.tag e.Phase))
+
+    // ─── the stored form (Phase 2589) ────────────────────────────────────────
+    //
+    //  One entry's canonical document, for a store that keeps entries as text
+    //  (the file store below writes one per line): `$type` the phase's arm,
+    //  members Ordinal-ordered, no JSON null, an absent subject omitted. A HOST
+    //  document and not a specified one, on the operator-control stream's terms
+    //  and for its reason: the program wire specifies what a handler declares
+    //  and reports, and a journal is what one host recorded while running it.
+    //  The recorded value rides whole, because a resume serves it.
+
+    /// One entry's canonical document.
+    let encode (entry: JournalEntry) : Fuaran.Core.JVal =
+        let subject =
+            match entry.Subject with
+            | None -> []
+            | Some subject -> [ "subject", Fuaran.Core.JStr subject ]
+
+        let arm, result =
+            match entry.Phase with
+            | JournalPhase.Attempted -> "Attempted", []
+            | JournalPhase.Completed value -> "Completed", [ "value", value ]
+            | JournalPhase.Refused reason -> "Refused", [ "reason", Fuaran.Core.JStr reason ]
+
+        Fuaran.Core.Canonical.typed
+            arm
+            ([ "capability", Fuaran.Core.JStr entry.Capability
+               "invocation", Fuaran.Core.JStr entry.Invocation
+               "step", Fuaran.Core.JInt entry.Step ]
+             @ subject
+             @ result)
+
+    /// The canonical rendering of one entry: one line, no trailing newline.
+    let render (entry: JournalEntry) : string = ProgramWire.render (encode entry)
+
+    /// One entry back from its document. Every member is checked and an
+    /// undeclared one refused, so a store cannot hand a resume a record that
+    /// only resembles one.
+    let decode (value: Fuaran.Core.JVal) : Result<JournalEntry, WireRefusal> =
+        let entry (declared: string list) (phase: Fuaran.Core.JVal -> Result<JournalPhase, WireRefusal>) =
+            ProgramWire.declaredOnly ([ "$type"; "capability"; "invocation"; "step"; "subject" ] @ declared) value
+            |> Result.bind (fun () -> ProgramWire.requireString "invocation" value)
+            |> Result.bind (fun invocation ->
+                JournalWire.requireInt "step" value
+                |> Result.bind (fun step ->
+                    JournalWire.requireNonEmpty "capability" value
+                    |> Result.bind (fun capability ->
+                        (match ProgramWire.tryMember "subject" value with
+                         | None -> Ok None
+                         | Some _ -> ProgramWire.requireString "subject" value |> Result.map Some)
+                        |> Result.bind (fun subject ->
+                            phase value
+                            |> Result.map (fun phase ->
+                                { Invocation = invocation
+                                  Step = step
+                                  Capability = capability
+                                  Subject = subject
+                                  Phase = phase })))))
+
+        match ProgramWire.tag value with
+        | None -> ProgramWire.refuse RefusalClass.MissingMember "required member '$type' is absent"
+        | Some "Attempted" -> entry [] (fun _ -> Ok JournalPhase.Attempted)
+        | Some "Completed" ->
+            entry [ "value" ] (fun v -> ProgramWire.requireMember "value" v |> Result.map JournalPhase.Completed)
+        | Some "Refused" ->
+            entry [ "reason" ] (fun v -> ProgramWire.requireString "reason" v |> Result.map JournalPhase.Refused)
+        | Some other -> ProgramWire.refuse RefusalClass.UnknownEffectArm ("'" + other + "' is not a journal phase")
+
+// ============================================================================
+//  The journal STORE — where a run's journal lives (Phase 2589, D61).
+//
+//  `EffectJournal` above is the port the interpreter writes through, and until
+//  this section every journal Program offered died with its process: `none`
+//  remembers nothing and `inMemory` remembers until exit. The durable tier's
+//  promise — a run killed after an effect resumes and does not perform it
+//  again — needs the record to outlive the process, so a host that wanted the
+//  promise had to write a store of its own beside Program. The store is the
+//  tier's to offer: the property is the same for every program, and the one
+//  host-specific part is WHERE the record lives, which is the store's argument.
+//
+//  ── The port, by run ────────────────────────────────────────────────────────
+//  A store is a journal keyed by RUN — the invocation id the interpreter already
+//  files every entry under — plus the one act a journal never performs, closing
+//  a run. Opening a run's journal is reading it by id (nothing recorded reads as
+//  the empty list, so a fresh run and a resumed one take one path); appending
+//  and reading are the journal's own two functions, so the interpreter takes
+//  the store's journal through `DurableServices.withStore` and nothing it does
+//  changes.
+//
+//  ── Closing is the host's act, and only a completed run closes ──────────────
+//  A run's journal is retired once its run has COMPLETED — the interpreter's
+//  invocation marker (`Journal.InvocationStep`) is recorded — and never before:
+//  until then it is exactly what a resume reads. The interpreter does not close
+//  a run itself. A completed invocation is REPLAYED rather than short-circuited,
+//  so a host that dies between the run returning and its outcome being
+//  delivered re-runs it against the record and performs nothing; and the
+//  trace readers (`Durable.findings`, `Durable.derivations`) read the journal
+//  after the run. Retiring is therefore the host's act, taken once the outcome
+//  is in hand, and a close of a run with no completion is REFUSED rather than
+//  performed. Closing a run that holds no record is not a refusal: it has
+//  nothing to retire, so a second close is answered as the first was.
+//
+//  ── The file store ──────────────────────────────────────────────────────────
+//  One append-only file per run, under a directory the host names; one entry
+//  per line, in `Journal.render`'s canonical form. The file is named by the
+//  SHA-256 of the run id, so any id names a file every file system accepts, and
+//  each line still carries its invocation, so a read takes only its own run's
+//  entries. An append reaches the disk before it returns — the `Attempted`
+//  record the interpreter writes ahead of an effect is worth nothing if a kill
+//  can leave it in a buffer.
+//
+//  A kill can still land INSIDE an append, leaving a final line with no newline.
+//  That line was never acknowledged — the append that wrote it did not return —
+//  so a read ignores it and the next append cuts it off before writing. Any
+//  OTHER line that does not decode is a damaged store, and a read RAISES rather
+//  than skipping it: a journal read past a lost record would re-run the effect
+//  the record was there to stop.
+//
+//  One run is resumed by one process at a time. The store serialises its own
+//  appends within a process; two processes resuming one run id at once is the
+//  concurrency question the program wire specification leaves open, and
+//  nothing here answers it.
+// ============================================================================
+
+/// A journal's storage, by run: the journal the durable interpreter appends to
+/// and reads, and the act that retires a completed run's record.
+type JournalStore =
+    {
+        /// The journal a run under this store writes and a resume reads, keyed
+        /// by the run id every entry carries. Its `SurvivesRestart` is the
+        /// store's own claim.
+        Journal: EffectJournal
+        /// Retire the record of a COMPLETED run. Refused, naming
+        /// `JournalStore.RunIncomplete`, while the run's journal holds no
+        /// completion; answered `Ok` for a run with no record.
+        Close: string -> Result<unit, string>
+    }
+
+module JournalStore =
+
+    /// The refusal a close of a run that has not completed raises.
+    [<Literal>]
+    let RunIncomplete = "journal-store-run-incomplete"
+
+    /// The decision every store's close takes, over the run's entries: `Ok`
+    /// when there is nothing to retire or the run completed, the refusal
+    /// otherwise. `retire` is the store's own removal.
+    let private closing (entries: JournalEntry list) (retire: unit -> unit) : Result<unit, string> =
+        if List.isEmpty entries || Journal.isComplete entries then
+            retire ()
+            Ok()
+        else
+            Error RunIncomplete
+
+    /// The in-memory store: `Journal.inMemory`'s storage with a close. It does
+    /// not survive a restart and does not claim to — it is the store a
+    /// single-process fixture or a host with no durable storage binds.
+    let inMemory () : JournalStore =
+        let entries = ResizeArray<JournalEntry>()
+        let journal = Journal.over entries
+
+        { Journal = journal
+          Close =
+            fun run -> closing (journal.Read run) (fun () -> entries.RemoveAll(fun e -> e.Invocation = run) |> ignore) }
+
+    /// The file a run's journal lives in under `directory`.
+    let fileOf (directory: string) (run: string) : string =
+        let digest =
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes run)
+
+        System.IO.Path.Combine(directory, System.Convert.ToHexString(digest).ToLowerInvariant() + ".journal")
+
+    /// The file store: one append-only file per run under `directory`, created
+    /// on the first append. It survives a restart, and claims to.
+    let file (directory: string) : JournalStore =
+        let gate = obj ()
+        let newline = byte '\n'
+
+        let append (entry: JournalEntry) =
+            lock gate (fun () ->
+                System.IO.Directory.CreateDirectory directory |> ignore
+
+                use stream =
+                    new System.IO.FileStream(
+                        fileOf directory entry.Invocation,
+                        System.IO.FileMode.OpenOrCreate,
+                        System.IO.FileAccess.ReadWrite,
+                        System.IO.FileShare.Read,
+                        4096,
+                        System.IO.FileOptions.WriteThrough
+                    )
+
+                // A final line with no newline is an append a kill interrupted:
+                // never acknowledged, so it is cut off before this one lands.
+                if stream.Length > 0L then
+                    stream.Seek(-1L, System.IO.SeekOrigin.End) |> ignore
+
+                    if stream.ReadByte() <> int newline then
+                        stream.Seek(0L, System.IO.SeekOrigin.Begin) |> ignore
+                        let bytes = Array.zeroCreate<byte> (int stream.Length)
+                        stream.ReadExactly(bytes, 0, bytes.Length)
+                        stream.SetLength(int64 (System.Array.LastIndexOf(bytes, newline) + 1))
+
+                stream.Seek(0L, System.IO.SeekOrigin.End) |> ignore
+                let line = System.Text.Encoding.UTF8.GetBytes(Journal.render entry + "\n")
+                stream.Write(line, 0, line.Length)
+                stream.Flush true)
+
+        let read (run: string) : JournalEntry list =
+            lock gate (fun () ->
+                let path = fileOf directory run
+
+                if not (System.IO.File.Exists path) then
+                    []
+                else
+                    let lines = System.IO.File.ReadAllText(path, System.Text.Encoding.UTF8).Split '\n'
+
+                    // The last element is what follows the final newline: empty
+                    // for a whole file, an interrupted append's tail otherwise.
+                    lines
+                    |> Array.take (lines.Length - 1)
+                    |> Array.mapi (fun i line ->
+                        Fuaran.Core.Json.parse line
+                        |> Result.bind (fun value ->
+                            Journal.decode value |> Result.mapError (fun r -> r.Class + ": " + r.Detail))
+                        |> Result.defaultWith (fun e ->
+                            raise (
+                                System.IO.InvalidDataException(
+                                    sprintf "the journal store at %s is damaged at line %d: %s" path (i + 1) e
+                                )
+                            )))
+                    |> Array.filter (fun entry -> entry.Invocation = run)
+                    |> List.ofArray)
+
+        { Journal =
+            Journal.declaringDurable
+                { Append = append
+                  Read = read
+                  SurvivesRestart = false }
+          Close =
+            fun run ->
+                lock gate (fun () ->
+                    closing (read run) (fun () ->
+                        let path = fileOf directory run
+
+                        if System.IO.File.Exists path then
+                            System.IO.File.Delete path)) }
 
 // ============================================================================
 //  OPERATOR CONTROLS — suspend, throttle, revoke and resume, as RECORDED OPS.
@@ -853,20 +1121,6 @@ module Controls =
     //  the same reason. Round-tripping it here is what makes the acts portable
     //  between this host's own stores in the meantime.
 
-    let private requireInt (name: string) (value: Fuaran.Core.JVal) : Result<int, WireRefusal> =
-        match ProgramWire.tryMember name value with
-        | None -> ProgramWire.refuse RefusalClass.MissingMember ("required member '" + name + "' is absent")
-        | Some(Fuaran.Core.JInt i) -> Ok i
-        | Some _ -> ProgramWire.refuse RefusalClass.MissingMember ("member '" + name + "' is not an integer")
-
-    let private requireNonEmpty (name: string) (value: Fuaran.Core.JVal) : Result<string, WireRefusal> =
-        ProgramWire.requireString name value
-        |> Result.bind (fun text ->
-            if text = "" then
-                ProgramWire.refuse RefusalClass.EmptyName ("member '" + name + "' is empty")
-            else
-                Ok text)
-
     let private encodeActor (actor: ControlActor) : Fuaran.Core.JVal =
         Fuaran.Core.JObj
             [ "id", Fuaran.Core.JStr actor.Id
@@ -874,7 +1128,7 @@ module Controls =
 
     let private decodeActor (value: Fuaran.Core.JVal) : Result<ControlActor, WireRefusal> =
         ProgramWire.declaredOnly [ "id"; "kind" ] value
-        |> Result.bind (fun () -> requireNonEmpty "id" value)
+        |> Result.bind (fun () -> JournalWire.requireNonEmpty "id" value)
         |> Result.bind (fun id ->
             ProgramWire.requireString "kind" value
             |> Result.bind (fun kind ->
@@ -890,9 +1144,9 @@ module Controls =
 
     let private decodeWindow (value: Fuaran.Core.JVal) : Result<ThrottleWindow, WireRefusal> =
         ProgramWire.declaredOnly [ "capability"; "maxPerInvocation" ] value
-        |> Result.bind (fun () -> requireNonEmpty "capability" value)
+        |> Result.bind (fun () -> JournalWire.requireNonEmpty "capability" value)
         |> Result.bind (fun capability ->
-            requireInt "maxPerInvocation" value
+            JournalWire.requireInt "maxPerInvocation" value
             |> Result.bind (fun limit ->
                 if limit < 0 then
                     ProgramWire.refuse RefusalClass.ImpossibleOutcome "a throttle window cannot be negative"
@@ -909,11 +1163,11 @@ module Controls =
 
     let private decodeMidStage (value: Fuaran.Core.JVal) : Result<MidStageWindow, WireRefusal> =
         ProgramWire.declaredOnly [ "capability"; "invocation"; "step" ] value
-        |> Result.bind (fun () -> requireNonEmpty "capability" value)
+        |> Result.bind (fun () -> JournalWire.requireNonEmpty "capability" value)
         |> Result.bind (fun capability ->
-            requireNonEmpty "invocation" value
+            JournalWire.requireNonEmpty "invocation" value
             |> Result.bind (fun invocation ->
-                requireInt "step" value
+                JournalWire.requireInt "step" value
                 |> Result.map (fun step ->
                     { Invocation = invocation
                       Step = step
@@ -946,7 +1200,7 @@ module Controls =
     let decode (value: Fuaran.Core.JVal) : Result<ControlEntry, WireRefusal> =
         let common (declared: string list) (op: Fuaran.Core.JVal -> Result<ControlOp, WireRefusal>) =
             ProgramWire.declaredOnly ([ "$type"; "actor"; "midStage"; "reason"; "sequence" ] @ declared) value
-            |> Result.bind (fun () -> requireInt "sequence" value)
+            |> Result.bind (fun () -> JournalWire.requireInt "sequence" value)
             |> Result.bind (fun sequence ->
                 ProgramWire.requireMember "actor" value
                 |> Result.bind decodeActor
@@ -977,7 +1231,7 @@ module Controls =
                 |> Result.bind decodeWindow
                 |> Result.map ControlOp.Throttle)
         | Some "Revoke" ->
-            common [ "performer" ] (fun v -> requireNonEmpty "performer" v |> Result.map ControlOp.Revoke)
+            common [ "performer" ] (fun v -> JournalWire.requireNonEmpty "performer" v |> Result.map ControlOp.Revoke)
         | Some other ->
             ProgramWire.refuse
                 RefusalClass.UnknownEffectArm

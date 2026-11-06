@@ -643,6 +643,13 @@ module DurableServices =
     let withJournal (journal: EffectJournal) (services: DurableServices) : DurableServices =
         { services with Journal = journal }
 
+    /// Run against a journal STORE (Phase 2589): the store's journal, keyed by
+    /// the invocation id, so a run under `JournalStore.file` resumes after a
+    /// process kill from what the dead run recorded. Closing the completed
+    /// run is the host's act, once it holds the outcome (`JournalStore`).
+    let withStore (store: JournalStore) (services: DurableServices) : DurableServices =
+        withJournal store.Journal services
+
     /// Supply the host's clock (Phase 2260): the reading a windowed limit is
     /// judged against, in the host's own unit. Without one every windowed
     /// clause is refused rather than admitted.

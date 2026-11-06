@@ -221,7 +221,9 @@
          `quantitiesFor`; `Budget.quantityCostThrough` and `CalledStage` price
          a call through the handler it reaches, and the server placement's
          demanded quantities are priced per event with it (DECISIONS.md D58).
-         The demanded document's shape and version do not move. -->
+         The demanded document's shape and version do not move.
+         Phase 2589 rides it, additive: `JournalStore` (in-memory and
+         file-backed) and `DurableServices.withStore` (DECISIONS.md D61). -->
     <Version>0.14.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing

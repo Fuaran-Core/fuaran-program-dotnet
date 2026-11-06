@@ -20,7 +20,7 @@ what a consumer pays to adopt it and why.
 This document starts at `0.6.0`. The slots before it are recorded where they were cut, in the
 comments beside `<Version>` in `Directory.Build.props`, and are not restated here.
 
-## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441)
+## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589)
 
 **Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
 the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded
@@ -146,6 +146,42 @@ handler's atomicity (D8) and its outcome. The demanded document and its version 
 statements gained a hypothesis that reads the declaration — `fold_no_halting_shape_no_halt`
 (`may_halt` now takes the witness) and `fold_no_require_no_halt` (`Continues`) — and `fold_total`
 gained a clause; at a witness declaring `Continues` each says exactly what it said.
+
+### Rides the draft: a journal store that survives a restart (Phase 2589)
+
+**Class: additive.** Nothing existing changes shape: a new record, a new module and a new function on
+an existing module, so it rides the draft without moving its class. `DECISIONS.md` D61 records what
+was decided.
+
+**What a consumer gains.**
+
+- `JournalStore` in `Fuaran.Program.Server`: a journal's storage BY RUN — the `EffectJournal` a run
+  appends to and a resume reads, keyed by the invocation id, and `Close`, which retires a COMPLETED
+  run's record and refuses (`JournalStore.RunIncomplete`) one that has not completed.
+- `JournalStore.file directory`: one append-only file per run under a directory the host names, each
+  append on disk before it returns, a torn final line from a kill ignored and cut off, any other
+  damaged line refused loudly. It claims `SurvivesRestart`, so `Durable.discipline` — and the
+  placement declaration and facets derived from it — reach the restart-surviving reading for a run
+  under it. `JournalStore.inMemory` is the same port in memory, claiming nothing.
+- `DurableServices.withStore`: run against a store. A run killed after an effect, resumed in a fresh
+  process under the same invocation id, is served what the dead process recorded — every host call's
+  answer, every op stage's receipt, the plan's entry read (D39) — performs only what it had not, and
+  is refused under `durable-replay-divergence` (or D39's `durable-entry-read-diverged`) where its plan
+  would differ.
+- `Journal.encode` / `render` / `decode`: one entry's canonical form, the line a text store writes.
+- The conformance corpus's `kill-and-resume-toy` family (`PROGRAM_WIRE.md` §10.9), certified here at
+  the toy witness through the file store.
+
+It retires the shim a host had to write to get the tier's resume: a store of its own beside Program,
+or an in-memory journal bound where a restart-surviving one was meant.
+
+**What a consumer pays.** Nothing. `Journal.inMemory`, `Journal.none`, `DurableServices.withJournal`
+and `Durable.runWith` behave as before for a caller that passes no store.
+
+**What did not move.** `EffectJournal`, `JournalEntry` and `JournalPhase`. The interpreter: it reads and writes
+the journal it is given, as before, and never closes a run. Every refusal token.
+The demanded document and its version (14): a run's store is the host's binding, carried by the
+journal's restart claim into the placement declaration, not a member of the program's demands.
 
 ## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
 

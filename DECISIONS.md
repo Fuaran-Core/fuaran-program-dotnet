@@ -4740,3 +4740,67 @@ made four of the eight new cases and the halting differential fail, and made the
 D58 and D59). `STABILITY.md` says what a consumer pays; `docs/migrations/phase-2441.md` is the diff
 per construction site. The actuator domain's adoption — naming the member, then retiring its own
 refusal-and-halt check in favour of the fold's — is its own phase (Phase 2455), not this one.
+
+## D61 — The durable tier ships a journal STORE: the `EffectJournal` a run writes, keyed by run, plus a `Close` that retires a COMPLETED run and refuses any other; a file store of one append-only file per run is Program's own; the interpreter never closes a run; the corpus certifies kill-and-resume as a separately enumerated family (2026-11-06)
+
+**Context.** The durable interpreter (D12, D23, D39) resumes a run from its journal, but every
+journal Program offered died with the process: `Journal.none` remembers nothing and
+`Journal.inMemory` remembers until exit. So the tier's promise — a run killed after an effect resumes
+and does not perform it again — held only inside one process, and a host that wanted it across a
+restart wrote a store of its own beside Program, or bound an in-memory journal and lived without the
+resume. Durability is the tier's charter and the property is the same for every program; the one
+host-specific part is where the record lives. Phase 2589 makes the store Program's.
+
+**Premises checked against the tree first.**
+
+- The interpreter already takes its journal as an argument (`DurableServices.Journal`) and already
+  does everything the shard asked of a resume: it reads the run's entries once at entry, serves each
+  recorded host-call answer, op-stage receipt and entry read in ordinal order, and refuses on a
+  changed capability or subject (`durable-replay-divergence`) or a changed entry read (D39). So
+  `Replay.fs` — the session-level admission decision — and the interpreter's run loop needed no
+  change; what was missing was storage that outlives the process, and the act of retiring it.
+- `EffectJournal` is a public record. A `Close` member on it would break every full literal (FS0764)
+  and advance the draft's class for a want that only a store has; a new record beside it does not.
+- "A completed run's file is deleted" cannot mean the interpreter deletes it as the run returns. A
+  completed invocation is REPLAYED, not skipped (the `InvocationStep` marker is an audit fact), so a
+  host that dies between the run returning and its outcome being delivered re-runs it against the
+  record and performs nothing — and would perform everything again had the record gone with the
+  return. `Durable.findings` and `Durable.derivations` read the journal after the run, too.
+
+**Decided.**
+
+1. **`JournalStore` = `{ Journal: EffectJournal; Close: string -> Result<unit, string> }`.** Opening
+   a run's journal is reading it by the run id every entry already carries; appending and reading
+   are the journal's own functions, so the interpreter takes a store through
+   `DurableServices.withStore` and nothing in it changes. A new port with an `Open` returning a
+   per-run handle was considered and not taken: the existing seam is already keyed by run, and a
+   second shape would need a second interpreter entry for no behaviour.
+2. **Closing is the host's act, once it holds the outcome, and only a completed run closes.**
+   `Close` refuses `journal-store-run-incomplete` while the run's journal holds no completion marker,
+   and answers `Ok` for a run with no record, so a second close answers as the first. The
+   interpreter never closes a run.
+3. **The file store is Program's**: one append-only file per run under a directory the host names,
+   named by the SHA-256 of the run id, one entry per line in `Journal.render`'s canonical form (a
+   HOST document, on the control stream's terms). Each append is written through to the disk before
+   it returns, because the `Attempted` record ahead of an effect is worth nothing in a buffer. A final
+   line with no newline is an append a kill interrupted and was never acknowledged: a read ignores it
+   and the next append cuts it off. Any other line that does not decode makes a read RAISE: reading
+   past a lost record would re-run the effect it recorded. It claims `SurvivesRestart`, so the facets
+   derive the restart-surviving reading for a run under it. The in-memory store is the same port.
+4. **The corpus certifies it at the toy witness, enumerated apart.** `kill-and-resume-toy`
+   (`PROGRAM_WIRE.md` §10.9) presumes a third obligation, `durable-journal`, so it lives in its own
+   manifest arrays (`durableScenarioFamilies`, `durableScenarios`) under the kind `kill-resume`, as
+   profile vectors live apart, and a host that declared no durable journal never meets it. Two
+   scenarios: a run killed after its first call resumes in a fresh process and performs that call
+   exactly once across both; a run whose program changed between the processes is refused by name.
+   This repository runs each through a FRESH `JournalStore.file` over the dead run's directory, and a
+   GO RED case resumes over a store that kept nothing and must be told apart.
+
+**What this entry does not reach.** The demanded document does not declare a store: which store a
+run binds is the host's deployment, and its effect on what the run guarantees already reaches the
+placement declaration through the journal's restart claim. Two processes resuming one run at once is
+the concurrency question the program wire leaves open (§11.2); the file store serialises appends
+within a process only. A host's re-pointing from its own store to this one is that host's phase.
+
+**Version.** Additive: rides the `0.14.0` draft (untagged, publicly unpinned) without moving its
+class. `STABILITY.md` records it.

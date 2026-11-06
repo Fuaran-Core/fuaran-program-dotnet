@@ -219,10 +219,9 @@ let private retiring (world: World) (performed: int ref) : OpPerformance<ToyNode
 /// op retires it and is journaled, and the process dies at the host call's
 /// attempt. Answers the journal the death left and what the dead run's plan
 /// read.
-let private interrupted () =
+let private interruptedOver (journal: EffectJournal) =
     let world = World()
     world.Set("bundle", "Live")
-    let journal = freshJournal ()
     let audits = ref 0
     let performed = ref 0
 
@@ -241,7 +240,12 @@ let private interrupted () =
     Expect.equal performed.Value 1 "the op performed before the death"
     Expect.equal audits.Value 0 "the host call never reached the world"
     Expect.isFalse (world.Holds "bundle") "the op MOVED what the plan read"
-    world, journal
+    world
+
+/// The interruption over a fresh in-memory journal, answering both.
+let private interrupted () =
+    let journal = freshJournal ()
+    interruptedOver journal, journal
 
 // ─── F-ENTRY ─────────────────────────────────────────────────────────────────
 
@@ -313,6 +317,36 @@ let private entryRead =
                   (labelOf "title" outcome.Outcome.Store.Tree)
                   (Some "Live")
                   "the plan relabelled with what it read"
+          }
+
+          test
+              "killed between the op and the host call, a FRESH file store serves the dead run's entry read and its op stage (Phase 2589)" {
+              ToyDurableReplayTests.withDirectory (fun directory ->
+                  let world = interruptedOver (JournalStore.file directory).Journal
+                  let store = JournalStore.file directory
+                  let audits = ref 0
+                  let performed = ref 0
+
+                  let resumed =
+                      run
+                          (readingWitness world)
+                          (DurableServices.create |> DurableServices.withStore store)
+                          "inv"
+                          (registryOf [ "audit", counting audits "recorded" ])
+                          (retiring world performed)
+                          readThenRetireThenAudit
+
+                  Expect.isTrue resumed.Outcome.Committed "the resumed run committed"
+                  Expect.equal resumed.Replayed [ 0; 1 ] "the entry read and the op stage were served from disk"
+                  Expect.equal performed.Value 0 "the op was not performed a second time"
+                  Expect.equal audits.Value 1 "the host call reached the world exactly once"
+
+                  Expect.equal
+                      (labelOf "title" resumed.Outcome.Store.Tree)
+                      (Some "Live")
+                      "the resumed plan relabelled with what the DEAD process read"
+
+                  Expect.equal (store.Close "inv") (Ok()) "the completed run closes")
           }
 
           test
