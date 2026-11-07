@@ -152,11 +152,27 @@ type DerivedGuarantees =
 /// too. The static derivation, which is handed no witness, reads the arm as
 /// the meet over everything declared (`opPerformerFacet`) — sound, and
 /// coarser than the per-op reading the durable wrapper takes.
+///
+/// `PlanActs` (Phase 2222, D63) declares what repeating a PLAN-PHASE ACT does,
+/// keyed by the act's name — the subject a witness hands the run's
+/// `PlanActor`. Only the durable wrapper reads it, and only for an act the
+/// journal shows attempted with no recorded answer: a completed act is SERVED
+/// on a resume and never repeated, which is the act's replay safety, and an
+/// act no journal holds is a first act. An undeclared act reads as
+/// `NonIdempotent` on `facetOf`'s terms, so a process that died inside one is
+/// refused as indeterminate until the host says repeating it is safe. The
+/// static derivation reads no act: an act is performed inside the witness, out
+/// of sight of the stage list it derives from, so what it claims about a
+/// handler is unchanged. **A non-durable placement performs every act every
+/// time it plans** — the direct interpreter, and a witness built over
+/// `PlanActor.live`, journal nothing, so a re-planned invocation acts again,
+/// exactly as it reads the live world again.
 type PerformerFacets =
     { Declared: Map<string, IdempotencyFacet>
       OpPerformer: IdempotencyFacet option
       OpKinds: Map<string, IdempotencyFacet>
-      QueryEvaluator: IdempotencyFacet option }
+      QueryEvaluator: IdempotencyFacet option
+      PlanActs: Map<string, IdempotencyFacet> }
 
 /// Which interpreter is running the handlers, and under what settings. The
 /// facet derivation is a function of THIS as much as of the handler — the same
@@ -343,7 +359,8 @@ module PerformerFacets =
         { Declared = Map.empty
           OpPerformer = None
           OpKinds = Map.empty
-          QueryEvaluator = None }
+          QueryEvaluator = None
+          PlanActs = Map.empty }
 
     /// The MEET of two facets (Phase 2165): repeating both is as safe as the
     /// less safe of the two. `NonIdempotent` absorbs; `IdempotentWithStore`
@@ -427,6 +444,18 @@ module PerformerFacets =
     /// host has not said, on `facetOf`'s terms.
     let queryEvaluatorFacet (facets: PerformerFacets) : IdempotencyFacet =
         facets.QueryEvaluator |> Option.defaultValue IdempotencyFacet.NonIdempotent
+
+    /// Declare what repeating ONE plan-phase act does (Phase 2222, D63), by the
+    /// act's name.
+    let declarePlanAct (act: string) (facet: IdempotencyFacet) (facets: PerformerFacets) : PerformerFacets =
+        { facets with
+            PlanActs = Map.add act facet facets.PlanActs }
+
+    /// What repeating a plan-phase act does — `NonIdempotent` where the host
+    /// has not said, on `facetOf`'s terms.
+    let planActFacet (act: string) (facets: PerformerFacets) : IdempotencyFacet =
+        Map.tryFind act facets.PlanActs
+        |> Option.defaultValue IdempotencyFacet.NonIdempotent
 
 /// The placement ids a composition's logic-tree slot can name.
 module PlacementId =

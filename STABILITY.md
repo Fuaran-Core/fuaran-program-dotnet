@@ -50,7 +50,7 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
-## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590)
+## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222)
 
 **Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
 the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded
@@ -232,6 +232,43 @@ runs exactly the vectors it ran before; no vector's bytes or digest moved.
 
 **What did not move.** Every package, refusal token, document and version. A PROPOSED member is
 certifiable and may be claimed: the mark is a finding about the contract, not a refusal of the member.
+
+### Rides the draft: a plan-phase act is journaled as an act, not a read (Phase 2222)
+
+**Class: breaking, the draft's own.** `PerformerFacets` gains a field, which breaks a full record
+literal (FS0764), and that is the class the `0.14.0` draft already carries (D58), so it rides the
+draft without moving it. Everything else is new surface. `DECISIONS.md` D63 records what was decided.
+
+**What a consumer gains.**
+
+- `PlanActor` in `Fuaran.Program.Server`: how a plan PERFORMS AN ACT that is not a read (a wait
+  between two peeks, a fold-first merge an entry read then reads), handed the act's name and the act.
+  `PlanActor.live` performs it, and `PlanActor.Capability` is `PlanAct`.
+- `PlanRecorders` (`Read`, `Derive`, `Act`; `PlanRecorders.live`) and `Durable.runPlanning`, which
+  builds the witness over the run's three plan-phase recorders. An act through `Act` is journaled at
+  its ordinal under `PlanAct`, the act's name as subject and its answer as the completed value. A
+  resume is SERVED the answer and does not perform the act again. An entry read after the act, in the
+  same invocation, sees what the act wrote.
+- `DurableCode.PlanActDiverged` / `planActDiverged`: a resume whose plan would act differently at an
+  act's ordinal, or read where the record holds an act, is refused `durable-plan-act-diverged:<act>`
+  before it performs anything.
+- `PerformerFacets.declarePlanAct` / `planActFacet` and `DurableServices.declaringPlanAct`: what
+  repeating ONE act does, by its name. It decides only a window where a process died inside the act,
+  and an undeclared act is refused there as `durable-indeterminate-step`.
+
+It retires the shim a host had to keep to make an act replay-safe: an act routed through the entry
+reader under a made-up subject, which the journal recorded as a `ReadEntry` that read nothing.
+
+**What a consumer pays.**
+
+- **`PerformerFacets` gains `PlanActs`.** A full record literal fails with FS0764; build from
+  `PerformerFacets.none` (`{ none with … }`), which carries the empty map.
+
+**What did not move.** `EntryReader`, `DerivationRecorder`, `Durable.runReading`, `Durable.runDeriving`
+and `Durable.runWith`, in signature and behaviour; the journal port and its entry shape; every
+existing refusal token; the static facet derivation; the program wire, the demanded document and its
+version (14). A non-durable placement performs every act every time it plans, which is what a witness
+built over `PlanActor.live` does.
 
 ## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
 

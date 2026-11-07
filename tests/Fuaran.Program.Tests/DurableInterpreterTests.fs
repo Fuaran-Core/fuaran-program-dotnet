@@ -14,6 +14,13 @@
 ///     would read another subject at that ordinal, or reach a stage where the
 ///     record holds a read, is refused under `durable-entry-read-diverged`
 ///     naming the read, never as the domain's own "nothing matched".
+///   * **a plan-phase act** (Phase 2222, D63): a plan that ACTS without reading
+///     — a wait between two peeks, a fold-first merge an entry read then reads
+///     — through the run's `PlanActor` is journaled at its ordinal under
+///     `PlanAct`, and a resume is served its answer and does not act again; a
+///     resume that would act differently is refused under
+///     `durable-plan-act-diverged` naming the act, and a live placement acts
+///     every time it plans.
 ///   * **the run's prefix at the performer and the contract** (F-RECEIPTS): the
 ///     pre-op state and the receipts of the earlier op stages, in perform
 ///     order — a served stage's recorded receipt among them on a resume.
@@ -446,6 +453,358 @@ let private entryRead =
                   "no ReadEntry step"
 
               Expect.equal outcome.Invoked [ 0; 1 ] "the op stage and the host call, from ordinal zero"
+          } ]
+
+// ─── a plan-phase ACT (Phase 2222, D63) ──────────────────────────────────────
+//
+// The plane probe's two instances of one missing arm: a wait that peeks a
+// queue, SLEEPS and peeks again, and a fold-first merge an entry read then
+// reads. The toy's stand-ins: the marker `@act:<name>` performs the named act
+// through the run's `PlanActor` and relabels with what the act answered (a
+// non-string answer leaves the tree as it was); `@world:<slot>` reads as
+// above.
+
+let private actingMarker = "@act:"
+
+let private actOf (label: string) : string option =
+    if label.StartsWith actingMarker then
+        Some(label.Substring actingMarker.Length)
+    else
+        None
+
+/// The toy witness whose `Apply` reads the world through the plan's reader and
+/// performs acts through the plan's actor — `acts` is the host's own table of
+/// what each act does.
+let private actingWitness (world: World) (plan: PlanRecorders) (acts: Map<string, unit -> Result<JVal, string>>) =
+    { witness with
+        State =
+            { witness.State with
+                Stream =
+                    { witness.State.Stream with
+                        Apply =
+                            fun op tree ->
+                                match op with
+                                | Relabel(id, label) ->
+                                    match slotOf label, actOf label with
+                                    | Some slot, _ ->
+                                        match plan.Read slot (fun () -> world.Read slot) with
+                                        | Error reason -> Error reason
+                                        | Ok(JStr value) -> Ok(relabel id value tree)
+                                        | Ok _ -> Error("no-match: the world holds no " + slot)
+                                    | None, Some name ->
+                                        match Map.tryFind name acts with
+                                        | None -> Error("no-act: " + name)
+                                        | Some act ->
+                                            match plan.Act name act with
+                                            | Error reason -> Error reason
+                                            | Ok(JStr answer) -> Ok(relabel id answer tree)
+                                            | Ok _ -> Ok tree
+                                    | None, None -> Ok(relabel id label tree) } } }
+
+let private runPlanning
+    (witnessOf: PlanRecorders -> FullWitness<ToyNode, ToyAction, ToyExpr, ToyStore, ToyOp, ToyEffect>)
+    (services: DurableServices)
+    (registry: ServerEffectRegistry)
+    (handler: Handler<ToyAction, ToyOp>)
+    =
+    Durable.runPlanning
+        witnessOf
+        services
+        "inv"
+        registry
+        OpPerformance.InMemory
+        Fuaran.Compute.DataFrame.noResolve
+        "node"
+        handler
+        emptyStore
+
+/// One ApplyOps stage of three relabels, then the host call.
+let private threeThenAudit (name: string) (title: string) (footer: string) (again: string) =
+    { Name = name
+      Stages =
+        [ Effect(ServerEffect.ApplyOps [ Relabel("title", title); Relabel("footer", footer); Relabel("title", again) ])
+          Effect(ServerEffect.HostCall("audit", JStr "waited", None)) ] }
+
+/// The gate wait: peek the gate, pause, peek again, then the host call.
+let private peekPausePeek: Handler<ToyAction, ToyOp> =
+    threeThenAudit "wait" (readingMarker + "gate") (actingMarker + "pause") (readingMarker + "gate")
+
+/// The same wait performing ANOTHER act where the recorded run paused.
+let private peekFetchPeek: Handler<ToyAction, ToyOp> =
+    threeThenAudit "wait-fetch" (readingMarker + "gate") (actingMarker + "fetch") (readingMarker + "gate")
+
+/// The same wait READING where the recorded run paused.
+let private peekPeekPeek: Handler<ToyAction, ToyOp> =
+    threeThenAudit "wait-read" (readingMarker + "gate") (readingMarker + "gate") (readingMarker + "gate")
+
+/// Fold-first: merge, then read what the merge left, then the host call.
+let private mergeThenRead: Handler<ToyAction, ToyOp> =
+    { Name = "fold-first"
+      Stages =
+        [ Effect(
+              ServerEffect.ApplyOps
+                  [ Relabel("footer", actingMarker + "merge")
+                    Relabel("title", readingMarker + "gate") ]
+          )
+          Effect(ServerEffect.HostCall("audit", JStr "merged", None)) ] }
+
+/// The acts the toy host performs, each counted: `pause` is the sleep's
+/// stand-in, `fetch` a different act, `merge` the fold-first stand-in that
+/// WRITES what the read after it reads.
+let private actsOf (world: World) (pauses: int ref) (fetches: int ref) (merges: int ref) =
+    Map.ofList
+        [ "pause",
+          fun () ->
+              pauses.Value <- pauses.Value + 1
+              Ok(JStr "paused")
+          "fetch",
+          fun () ->
+              fetches.Value <- fetches.Value + 1
+              Ok(JStr "fetched")
+          "merge",
+          fun () ->
+              merges.Value <- merges.Value + 1
+              world.Set("gate", "Merged")
+              Ok(JObj []) ]
+
+let private bound (world: World) (pauses: int ref) (plan: PlanRecorders) =
+    actingWitness world plan (actsOf world pauses (ref 0) (ref 0))
+
+/// The act routed ROUND the run's actor: it reads through the bound reader and
+/// performs its act live — the falsifier for the first case.
+let private routedRound (world: World) (pauses: int ref) (plan: PlanRecorders) =
+    actingWitness world { plan with Act = PlanActor.live } (actsOf world pauses (ref 0) (ref 0))
+
+let private auditing (audits: int ref) =
+    registryOf [ "audit", counting audits "recorded" ]
+
+/// The gate wait killed AFTER its pause, at the second peek's attempt, with
+/// the plan built by `witnessOf`. Answers the world, the journal and the
+/// pause count the dead run left.
+let private waitKilledAfterPause (witnessOf: World -> int ref -> PlanRecorders -> _) =
+    let world = World()
+    world.Set("gate", "Busy")
+    let journal = freshJournal ()
+    let pauses = ref 0
+
+    let died =
+        crashing (fun () ->
+            runPlanning
+                (witnessOf world pauses)
+                (DurableServices.create
+                 |> DurableServices.withJournal (dyingBeforeAttempting 2 journal))
+                (auditing (ref 0))
+                peekPausePeek)
+
+    Expect.isTrue died "the fixture's process died at the second peek"
+    Expect.equal pauses.Value 1 "the pause was performed before the death"
+    // The gate moves while the process is down: the resumed second peek, which
+    // the dead run never journaled, reads it live.
+    world.Set("gate", "Free")
+    world, journal, pauses
+
+let private resumed (journal: EffectJournal) (audits: int ref) handler witnessOf =
+    runPlanning witnessOf (DurableServices.create |> DurableServices.withJournal journal) (auditing audits) handler
+
+let private planAct =
+    testList
+        "a plan-phase act (Phase 2222)"
+        [ test "killed after the act and resumed, the wait pauses zero more times and plans the same calls" {
+              let world, journal, pauses = waitKilledAfterPause bound
+              let audits = ref 0
+              let outcome = resumed journal audits peekPausePeek (bound world pauses)
+
+              Expect.isTrue outcome.Outcome.Committed "the resumed run committed"
+              Expect.equal pauses.Value 1 "the pause was SERVED, not performed again"
+              Expect.equal outcome.Replayed [ 0; 1 ] "the first peek and the pause were served"
+              Expect.equal outcome.Invoked [ 2; 3 ] "the second peek and the host call ran"
+              Expect.equal audits.Value 1 "the host call reached the world once"
+
+              let uninterrupted =
+                  let fresh = World()
+                  fresh.Set("gate", "Free")
+                  resumed (freshJournal ()) (ref 0) peekPausePeek (bound fresh (ref 0))
+
+              Expect.equal
+                  outcome.Outcome.Performed
+                  uninterrupted.Outcome.Performed
+                  "the resumed plan staged the calls an uninterrupted wait stages"
+
+              Expect.equal
+                  (labelOf "footer" outcome.Outcome.Store.Tree)
+                  (Some "paused")
+                  "the plan saw the act's recorded answer"
+
+              Expect.equal
+                  (labelOf "title" outcome.Outcome.Store.Tree)
+                  (Some "Free")
+                  "the second peek, never journaled, read the gate as it is now"
+
+              Expect.equal
+                  (journal.Read "inv" |> List.filter (fun e -> e.Step = 1))
+                  [ { Invocation = "inv"
+                      Step = 1
+                      Capability = Durable.PlanActCapability
+                      Subject = Some "pause"
+                      Phase = JournalPhase.Attempted }
+                    { Invocation = "inv"
+                      Step = 1
+                      Capability = Durable.PlanActCapability
+                      Subject = Some "pause"
+                      Phase = JournalPhase.Completed(JStr "paused") } ]
+                  "journaled as an ACT under PlanAct, the act's name its subject and its answer the value"
+          }
+
+          test "GO RED: with the act routed round the run's actor, the same resume pauses a second time" {
+              let world, journal, pauses = waitKilledAfterPause routedRound
+              let outcome = resumed journal (ref 0) peekPausePeek (routedRound world pauses)
+
+              // Routed round the actor the act takes no ordinal: the dead run
+              // journaled peek, peek, and the resume performs the act again.
+              Expect.equal pauses.Value 2 "the act ran again: the first case's assertion fails"
+              Expect.isTrue outcome.Outcome.Committed "and nothing refused it, which is the hazard"
+          }
+
+          test
+              "a resume whose plan would perform a DIFFERENT act at that ordinal is refused naming the act, before it is performed" {
+              let world, journal, pauses = waitKilledAfterPause bound
+              let fetches = ref 0
+              let audits = ref 0
+
+              let outcome =
+                  resumed journal audits peekFetchPeek (fun plan ->
+                      actingWitness world plan (actsOf world pauses fetches (ref 0)))
+
+              Expect.isFalse outcome.Outcome.Committed "refused"
+
+              Expect.equal
+                  outcome.Outcome.Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", DurableCode.planActDiverged "fetch") ]
+                  "the refusal names the act the resumed plan would perform, as an act"
+
+              Expect.equal fetches.Value 0 "the other act was not performed"
+              Expect.equal pauses.Value 1 "nor the recorded one again"
+              Expect.equal audits.Value 0 "no stage was reached"
+          }
+
+          test "a resume whose plan would READ where the record holds an act is refused naming the recorded act" {
+              let world, journal, pauses = waitKilledAfterPause bound
+              let outcome = resumed journal (ref 0) peekPeekPeek (bound world pauses)
+
+              Expect.equal
+                  outcome.Outcome.Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", DurableCode.planActDiverged "pause") ]
+                  "an act skipped is an act diverged, never a read"
+          }
+
+          test "a live (non-durable) placement performs the act every time it plans" {
+              let world = World()
+              world.Set("gate", "Busy")
+              let pauses = ref 0
+              let live (_: PlanRecorders) = bound world pauses PlanRecorders.live
+
+              for _ in 1..2 do
+                  let outcome = resumed (freshJournal ()) (ref 0) peekPausePeek live
+                  Expect.isTrue outcome.Outcome.Committed "each run committed"
+
+              Expect.equal pauses.Value 2 "two plans, two pauses: nothing journaled, nothing served"
+
+              let journal = freshJournal ()
+
+              let died =
+                  crashing (fun () ->
+                      runPlanning
+                          live
+                          (DurableServices.create
+                           |> DurableServices.withJournal (dyingBeforeAttempting 0 journal))
+                          (auditing (ref 0))
+                          peekPausePeek)
+
+              Expect.isTrue died "killed at the host call"
+              resumed journal (ref 0) peekPausePeek live |> ignore
+              Expect.equal pauses.Value 4 "and a resumed live plan pauses again"
+          }
+
+          test
+              "an act that WRITES, killed after the act and resumed, is performed zero more times and the read after it sees what it left" {
+              let world = World()
+              let merges = ref 0
+              let journal = freshJournal ()
+              let audits = ref 0
+
+              let witnessOf plan =
+                  actingWitness world plan (actsOf world (ref 0) (ref 0) merges)
+
+              let died =
+                  crashing (fun () ->
+                      runPlanning
+                          witnessOf
+                          (DurableServices.create
+                           |> DurableServices.withJournal (dyingBeforeAttempting 1 journal))
+                          (auditing audits)
+                          mergeThenRead)
+
+              Expect.isTrue died "the process died after the merge, at the read's attempt"
+              Expect.equal merges.Value 1 "the merge was performed"
+
+              let outcome = resumed journal audits mergeThenRead witnessOf
+
+              Expect.isTrue outcome.Outcome.Committed "the resumed run committed"
+              Expect.equal merges.Value 1 "the merge was served, not performed again"
+              Expect.equal outcome.Replayed [ 0 ] "the act was served"
+              Expect.equal outcome.Invoked [ 1; 2 ] "the read and the host call ran"
+
+              Expect.equal
+                  (labelOf "title" outcome.Outcome.Store.Tree)
+                  (Some "Merged")
+                  "the entry read after the act read the value the act left"
+
+              Expect.equal audits.Value 1 "the host call reached the world once"
+          }
+
+          test
+              "a process that died INSIDE an act is refused as indeterminate, unless the host declared that act safe to repeat" {
+              let world = World()
+              world.Set("gate", "Busy")
+              let pauses = ref 0
+              let journal = freshJournal ()
+
+              let dyingPause () =
+                  pauses.Value <- pauses.Value + 1
+
+                  if pauses.Value = 1 then
+                      raise (ProcessDied "inside the pause")
+
+                  Ok(JStr "paused")
+
+              let witnessOf plan =
+                  actingWitness world plan (Map.ofList [ "pause", dyingPause ])
+
+              let died = crashing (fun () -> resumed journal (ref 0) peekPausePeek witnessOf)
+
+              Expect.isTrue died "the process died inside the pause"
+
+              let refused = resumed journal (ref 0) peekPausePeek witnessOf
+
+              Expect.equal
+                  refused.Outcome.Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", DurableCode.IndeterminateStep) ]
+                  "an undeclared act is NonIdempotent: the window is refused"
+
+              Expect.equal pauses.Value 1 "and not performed again"
+
+              let declared =
+                  runPlanning
+                      witnessOf
+                      (DurableServices.create
+                       |> DurableServices.withJournal journal
+                       |> DurableServices.declaringPlanAct "pause" IdempotencyFacet.Idempotent)
+                      (auditing (ref 0))
+                      peekPausePeek
+
+              Expect.isTrue declared.Outcome.Committed "a declared-idempotent act closes its window by acting again"
+              Expect.equal pauses.Value 2 "performed once more"
+              Expect.isEmpty declared.Overrides "with no override to record"
           } ]
 
 // ─── F-RECEIPTS ──────────────────────────────────────────────────────────────
@@ -910,4 +1269,4 @@ let private oracle =
 let tests =
     testList
         "Phase 2165 - the durable tier at the toy witness: the entry read, the prefix, per-kind facets and composed contracts"
-        [ entryRead; prefix; facet; contracts; oracle ]
+        [ entryRead; planAct; prefix; facet; contracts; oracle ]

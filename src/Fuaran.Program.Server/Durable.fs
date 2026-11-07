@@ -100,6 +100,18 @@ open Fuaran.Program.Bounded
 //  recomputes the view from the SERVED input; `Durable.derivations` reads the
 //  run's derivations off the journal alone.
 //
+//  ── A plan-phase ACT is journaled as an act (Phase 2222, D63) ───────────────
+//  A plan may also ACT without reading: wait between two peeks, or merge a
+//  store before the entry read that depends on the merge. Such an act runs in
+//  the plan phase, before any stage, so no rollback undoes it and a re-plan
+//  would perform it again. `runPlanning` hands the witness a `PlanActor` with
+//  its entry reader and derivation recorder: the act is journaled at its
+//  ordinal under `PlanAct`, the subject the act's name, the value what the
+//  act answered, and a resume is SERVED that answer and does not perform the
+//  act. A resume whose plan would act differently at that ordinal is refused
+//  under `durable-plan-act-diverged`, naming the act — never as a read that
+//  diverged, because nothing was read.
+//
 //  The consequence a reader should carry away is the one the facets state: this
 //  interpreter's exactly-once claim is about what IT performs — and, since
 //  Phase 2165, about what its plan READ. What a caller does with a returned
@@ -151,6 +163,17 @@ module DurableCode =
     /// The refusal text for an entry read that diverged, naming the read.
     let entryReadDiverged (subject: string) : string = EntryReadDiverged + ":" + subject
 
+    /// The resumed PLAN reached an ordinal with a plan-phase ACT the recorded
+    /// run did not perform there, or reached another call where the recorded
+    /// run acted (Phase 2222, D63). Refused before the act is performed, with
+    /// the act named after the colon — `durable-plan-act-diverged:<subject>` —
+    /// so the refusal says an act changed, never that the world moved.
+    [<Literal>]
+    let PlanActDiverged = "durable-plan-act-diverged"
+
+    /// The refusal text for a plan-phase act that diverged, naming the act.
+    let planActDiverged (subject: string) : string = PlanActDiverged + ":" + subject
+
 /// How a plan READS THE WORLD at entry (Phase 2165, D39): handed the read's
 /// NAME — the subject the journal records, a host's own vocabulary, log-safe
 /// — and the live read, it answers the value the plan should see. Under the
@@ -175,6 +198,37 @@ module EntryReader =
     /// The capability an entry read is journaled under.
     [<Literal>]
     let Capability = "ReadEntry"
+
+/// How a plan PERFORMS AN ACT that is not a read (Phase 2222, D63): handed
+/// the act's NAME — the subject the journal records, a host's own vocabulary,
+/// log-safe — and the act itself, it answers what the act answered. Outside a
+/// durable run that is the act, performed (`PlanActor.live`);
+/// `Durable.runPlanning` hands the witness one bound to the run, which
+/// journals the act at its ordinal under `PlanAct`, the act's answer as its
+/// completed value, and SERVES that answer on a resume without performing the
+/// act again. The shape `EntryReader` has, kept apart from it so the journal
+/// says what the plan did: a wait between two peeks, or a fold-first merge an
+/// entry read then reads, is an act and never a read.
+///
+/// An act is the host's, as a read is: Program never sees what it does, and
+/// the answer — the empty object where the act has nothing to say — is encoded by the
+/// host for the journal. An act is performed in the PLAN phase, before any
+/// stage, so it is outside the handler's staging and its rollback: a run that
+/// halts afterwards does not undo it, which is why the journal serving it is
+/// the only thing that keeps a resume from performing it twice.
+type PlanActor = string -> (unit -> Result<Fuaran.Core.JVal, string>) -> Result<Fuaran.Core.JVal, string>
+
+module PlanActor =
+
+    /// The actor that performs the act — every non-durable placement, and a
+    /// witness built outside a durable run. It journals nothing, so a
+    /// re-planned invocation performs the act again.
+    let live: PlanActor = fun _ act -> act ()
+
+    /// The capability a plan-phase act is journaled under — never `ReadEntry`:
+    /// an act may read nothing, and the journal says so.
+    [<Literal>]
+    let Capability = "PlanAct"
 
 /// How a TYPED read is journaled through the entry reader (Phase 2175, D41):
 /// the raw read's answer — the content read, or the host's reason there was
@@ -440,6 +494,26 @@ module DerivationRecorder =
     [<Literal>]
     let Capability = "Derive"
 
+/// **What a durable run hands a witness's plan** (Phase 2222, D63): the run's
+/// entry reader (D39), its derivation recorder (D47) and its plan actor —
+/// each journaled at its ordinal under its own capability and served on a
+/// resume. One record rather than one curried argument per recorder, so a
+/// witness that reads, derives AND acts is built by one `Durable.runPlanning`,
+/// and a fourth plan-phase recorder is a field rather than a fifth `run*`.
+type PlanRecorders =
+    { Read: EntryReader
+      Derive: DerivationRecorder
+      Act: PlanActor }
+
+module PlanRecorders =
+
+    /// The recorders outside a durable run: the live read, the derivation as
+    /// made, the act performed — nothing journaled, nothing served.
+    let live: PlanRecorders =
+        { Read = EntryReader.live
+          Derive = DerivationRecorder.live
+          Act = PlanActor.live }
+
 /// A pure view of an input value (Phase 2220, D47): its NAME, the CONTENT key
 /// of an input — equal inputs must have equal keys, and two inputs that differ
 /// must not share one, so a key is a content address, never a reference or a
@@ -683,6 +757,16 @@ module DurableServices =
         { services with
             Performers = PerformerFacets.declareOpKind kind facet services.Performers }
 
+    /// Declare what repeating ONE plan-phase act does (Phase 2222, D63), by
+    /// the act's name — read only when a process died inside that act, so the
+    /// journal shows it attempted with no answer. An act the host may safely
+    /// repeat (a wait, a merge of what is already merged) is declared
+    /// `Idempotent` and its window closes by acting again; an undeclared one
+    /// is refused as indeterminate.
+    let declaringPlanAct (act: string) (facet: IdempotencyFacet) (services: DurableServices) : DurableServices =
+        { services with
+            Performers = PerformerFacets.declarePlanAct act facet services.Performers }
+
     /// **The named opt-in.** Re-invoke a step the journal cannot decide, taking
     /// the duplicate hazard rather than the loss. Naming it is the
     /// configuration, and it is what the override record attaches to.
@@ -736,6 +820,11 @@ module Durable =
     /// `DerivationRecorder.Capability`, restated beside the others.
     [<Literal>]
     let DeriveCapability = DerivationRecorder.Capability
+
+    /// The capability a plan-phase act is journaled under (Phase 2222, D63)
+    /// — `PlanActor.Capability`, restated beside the others.
+    [<Literal>]
+    let PlanActCapability = PlanActor.Capability
 
     /// The capability the host clock's reading is journaled under (Phase
     /// 2260, D52): once per invocation, at the first windowed decision, no
@@ -839,9 +928,11 @@ module Durable =
     /// over the reader it is handed, so the read is journaled at its ordinal
     /// and served on replay; a witness that reads nothing ignores it, which is
     /// what `runWith` passes. It is handed this run's DERIVATION RECORDER
-    /// too (Phase 2220, D47), for the derived views its plan consults.
+    /// too (Phase 2220, D47), for the derived views its plan consults, and
+    /// its PLAN ACTOR (Phase 2222, D63), for the acts its plan performs — the
+    /// three together as the run's `PlanRecorders`.
     let internal runGuarded
-        (witnessOf: EntryReader -> DerivationRecorder -> ProgramWitness<'Node, 'Op, 'Walk, 'Position>)
+        (witnessOf: PlanRecorders -> ProgramWitness<'Node, 'Op, 'Walk, 'Position>)
         (services: DurableServices)
         (invocation: string)
         (registry: ServerEffectRegistry)
@@ -947,14 +1038,21 @@ module Durable =
                 // handler rolls back around it. Where either side is the plan's
                 // ENTRY READ (Phase 2165), the resume would PLAN differently
                 // from the run it resumes, and the refusal names the read.
-                if capability = EntryReadCapability then
+                // Where either side is a plan-phase ACT (Phase 2222), it names
+                // the act first: an act changed is not a world moved, and a
+                // resume that would skip or swap a performed act is the
+                // graver divergence of the two.
+                let recordedSubject () =
+                    Journal.subjectOf recorded step |> Option.flatten |> Option.defaultValue ""
+
+                if capability = PlanActCapability then
+                    Error(DurableCode.planActDiverged (subject |> Option.defaultValue ""))
+                elif previous = Some PlanActCapability then
+                    Error(DurableCode.planActDiverged (recordedSubject ()))
+                elif capability = EntryReadCapability then
                     Error(DurableCode.entryReadDiverged (subject |> Option.defaultValue ""))
                 elif previous = Some EntryReadCapability then
-                    Error(
-                        DurableCode.entryReadDiverged (
-                            Journal.subjectOf recorded step |> Option.flatten |> Option.defaultValue ""
-                        )
-                    )
+                    Error(DurableCode.entryReadDiverged (recordedSubject ()))
                 else
                     Error DurableCode.ReplayDivergence
             else
@@ -1081,7 +1179,33 @@ module Durable =
                     (Fuaran.Core.JObj [])
                 |> Result.bind Derivation.decode
 
-        let witness = witnessOf journalEntry journalDerivation
+        // A plan-phase ACT (Phase 2222, D63) through the same wrapper:
+        // journaled at its ordinal under `PlanAct`, the subject the act's
+        // name, the recorded value what the act answered — so a replay is
+        // SERVED the answer and the act is not performed again, which is the
+        // whole of its replay safety: an act runs in the plan phase, outside
+        // the staging a rollback undoes. Unlike a read, repeating an act is
+        // not safe by its shape, so an indeterminate window over one closes
+        // by the facet the host declared for THAT act (`declaringPlanAct`),
+        // `NonIdempotent` where it said nothing. A recomputation that would
+        // perform another act here, or reach a read or a stage where the
+        // record holds an act, is the divergence the wrapper refuses, naming
+        // the act.
+        let journalAct: PlanActor =
+            fun subject act ->
+                wrapAt
+                    PlanActCapability
+                    (Some subject)
+                    (PerformerFacets.planActFacet subject services.Performers)
+                    (fun () -> None)
+                    (fun _ -> act ())
+                    (Fuaran.Core.JObj [])
+
+        let witness =
+            witnessOf
+                { Read = journalEntry
+                  Derive = journalDerivation
+                  Act = journalAct }
 
         // The WINDOWED limits (Phase 2260, D52) through the same wrapper,
         // twice over. The host CLOCK is read once per invocation, at the
@@ -1275,7 +1399,7 @@ module Durable =
         (store: ServerStore<'Node, 'Store>)
         : DurableOutcome<'Node, 'Store, 'Op, 'Effect> =
         runGuarded
-            (fun _ _ -> witness)
+            (fun _ -> witness)
             services
             invocation
             registry
@@ -1311,7 +1435,7 @@ module Durable =
               when 'Position :> IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>
         =
         runGuarded
-            (fun entry _ -> witnessOf entry)
+            (fun plan -> witnessOf plan.Read)
             services
             invocation
             registry
@@ -1332,6 +1456,45 @@ module Durable =
     /// over `EntryReader.live` and `DerivationRecorder.live`.
     let runDeriving
         (witnessOf: EntryReader -> DerivationRecorder -> ProgramWitness<'Node, 'Op, 'Walk, 'Position>)
+        (services: DurableServices)
+        (invocation: string)
+        (registry: ServerEffectRegistry)
+        (performance: OpPerformance<'Node, 'Op>)
+        (resolve: string -> Result<Fuaran.Core.Table, Fuaran.Compute.EvalError>)
+        (nodeId: string)
+        (handler: Handler<'Action, 'Op>)
+        (store: ServerStore<'Node, 'Store>)
+        : DurableOutcome<'Node, 'Store, 'Op, 'Effect>
+              when 'Position :> IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>
+        =
+        runGuarded
+            (fun plan -> witnessOf plan.Read plan.Derive)
+            services
+            invocation
+            registry
+            performance
+            (fun () -> None)
+            resolve
+            nodeId
+            handler
+            store
+
+    /// **`runWith` for a witness whose plan reads, derives AND ACTS** (Phase
+    /// 2222, D63) — the general form `runReading` and `runDeriving` are views
+    /// of. `witnessOf` is handed this run's `PlanRecorders`: a read through
+    /// `Read` is journaled under `ReadEntry` (D39), a derivation through
+    /// `Derive` under `Derive` (D47), and an act through `Act` under `PlanAct`
+    /// — each at its ordinal, in the one cursor sequence the staged calls
+    /// share, and each SERVED on a re-entry of the same invocation. A served
+    /// act is not performed again: a wait that already waited does not wait
+    /// twice, and a fold-first merge that already merged does not merge twice,
+    /// while an entry read after it reads what the act left. A resume whose
+    /// plan would perform another act at that ordinal is refused under
+    /// `durable-plan-act-diverged`, naming the act, before it is performed.
+    /// Outside a durable run the same witness is built over
+    /// `PlanRecorders.live`, which performs every act every time.
+    let runPlanning
+        (witnessOf: PlanRecorders -> ProgramWitness<'Node, 'Op, 'Walk, 'Position>)
         (services: DurableServices)
         (invocation: string)
         (registry: ServerEffectRegistry)
@@ -1403,7 +1566,7 @@ module Durable =
                     // by the journal exactly as its host calls are.
                     let durable =
                         runGuarded
-                            (fun _ _ -> host.Witness)
+                            (fun _ -> host.Witness)
                             services
                             (sprintf "%s/%d" invocation ordinal)
                             (ServerServices.effects host)
@@ -1635,7 +1798,7 @@ module DurableControls =
 
         { Durable =
             Durable.runGuarded
-                (fun _ _ -> witness)
+                (fun _ -> witness)
                 services
                 invocation
                 controlled

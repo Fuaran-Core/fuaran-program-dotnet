@@ -4870,3 +4870,93 @@ to the release tooling, which reads this table; nothing here changes it.
 
 **Version.** Additive and surface-free: rides the `0.14.0` draft (untagged, publicly unpinned) without
 moving its class. `STABILITY.md` records it.
+
+## D63 — A plan-phase ACT that is not a read is Program's: a `PlanActor` beside the `EntryReader`, journaled under its own capability `PlanAct` with the act's answer as the completed value, served on a resume and never performed again, refused as `durable-plan-act-diverged:<act>` where a resume would act differently; the three plan-phase recorders travel as one `PlanRecorders` through `Durable.runPlanning` (2026-11-07)
+
+**Context.** D39 journals the plan's ENTRY READ: `Durable.runReading` hands the state witness an
+`EntryReader` bound to the run, which journals each read at its ordinal under `ReadEntry` and serves it
+to a resume. D41 types the read, and D47 adds the `Derive` recorder for derived views. A plan can also
+ACT without reading. A gate wait peeks a queue and SLEEPS between peeks; on a resume a recomputed plan
+would sleep again, so a wait that had already slept 110 minutes would sleep them a second time. And a
+mutating verb merges a remote store in FIRST and then reads its entry state, which must see the merged
+store; with no arm for the merge, a host ran it as a separate durable run ahead of the verb's own, so
+no one invocation spanned the merge and the read that depends on it, and a resume could not tell
+whether the merge ran. The first host's workaround routed the sleep through the entry reader under a
+subject `pause` with a synthetic value: Program served it, but the journal said `ReadEntry` for
+something that read nothing, and `durable-entry-read-diverged:pause` read as a moved world when the
+cause was a changed act. That is machinery beside Program, which a domain is not to keep. Phase 2222.
+
+**Premises checked against the tree first.**
+
+- `Durable.runGuarded` journals the plan phase through its one wrapper `wrapAt` along five routes: the
+  staged query (`RunQuery`, D34), a store-bound extent (`ReadExtent`, D36), the entry read
+  (`ReadEntry`, D39), a finding (`Report`, D45) and a derivation (`Derive`, D47). Every one is a read
+  or a record, and every one passes `IdempotencyFacet.Idempotent` as its declared facet. None performs
+  a host act whose repetition costs anything. So the act had no arm and `ReadEntry` was the only route
+  a host could reach: confirmed, and the phase is not reduced to documentation.
+- A plan-phase act runs before every stage (§1 of `docs/server-handler-atomicity.md`: every op is
+  performed after the plan completes), so it is OUTSIDE the staging and its rollback. Serving its
+  record on a resume is therefore not an optimisation; it is the only thing standing between a resume
+  and a second performance.
+- `PerformerFacets` is a public record. Gaining a field breaks full-literal construction (FS0764); the
+  `0.14.0` draft is already of class breaking (D58), so the field rides it without advancing it.
+
+**Decided.**
+
+1. **The arm is a `PlanActor` beside `EntryReader`, not an `EntryReader` taking a read-or-act kind.**
+   `PlanActor = string -> (unit -> Result<JVal, string>) -> Result<JVal, string>`: handed the act's
+   NAME (the journal subject, the host's own log-safe vocabulary) and the act, it answers what the act
+   answered. It is the entry reader's shape on purpose, so a host moving its `pause` off the reader
+   changes one call. A kind argument on `EntryReader` was rejected: it changes the type every reading
+   host already holds, a breaking change to D39's surface that no reader gains from, and a reader whose
+   kind could be "act" no longer says what it does.
+2. **It is journaled under its own capability, `PlanAct`** (`PlanActor.Capability`, restated as
+   `Durable.PlanActCapability`), so a trace and a divergence say "act". **Keeping acts under
+   `ReadEntry` was rejected**: it is the inaccuracy this phase removes. The journal must distinguish
+   what a plan did from what it read, because the journal is the trace a host derives an invocation's
+   outcome from (D45).
+3. **The completed value is the act's own answer**: whatever the host encodes, the empty object where
+   the act has nothing to say. It is never a placeholder Program imposes. A served answer lets a plan
+   branch on what its act reported (a merge's head, a wait's verdict) and see the same thing on a
+   resume; an act with nothing to say pays one empty object.
+4. **The divergence code is `durable-plan-act-diverged`, with the act named after the colon**
+   (`DurableCode.planActDiverged`). It fires where the resumed plan would perform another act at the
+   ordinal, and wherever either side of a divergence is an act: a read, a stage or another recorder
+   where the record holds an act names the RECORDED act. Where an act and an entry read meet, the act
+   is named, because an act skipped or swapped is the graver of the two divergences. The check runs
+   before the act is performed, so a refused resume performs nothing new.
+5. **An act's indeterminate window closes by a facet declared PER ACT.** A read is idempotent by its
+   shape, so its window closes by re-reading; an act is not. `PerformerFacets.PlanActs` (with
+   `declarePlanAct` / `planActFacet`, and `DurableServices.declaringPlanAct`) declares what repeating
+   one act does, keyed by its name. An undeclared act reads as `NonIdempotent`, so a process that died
+   inside it is refused `durable-indeterminate-step` until the host says repeating it is safe, or opts
+   into `acceptingIndeterminateReplay`, which records the override as for any step. A wait, or a merge
+   of what is already merged, declares itself `Idempotent`. Folding acts into the host-call `Declared`
+   map under a prefixed key was rejected: that map's keys are registered performer names, and a prefix
+   convention collides with the first host function named like an act.
+6. **The three plan-phase recorders travel as one `PlanRecorders` record** (`Read`, `Derive`, `Act`;
+   `PlanRecorders.live` outside a durable run), and `Durable.runPlanning` takes a witness built over
+   it. The actor is the third recorder a witness is handed, which is the rule-of-three point for the
+   bundle: one curried argument per recorder would make a witness that reads, derives and acts need a
+   fourth `run*` entry, and the next recorder a fifth. `runReading` and `runDeriving` keep their
+   signatures as views of the same run. Removing them would be a breaking act no consumer asks for, and
+   neither is dead: both have hosts and tests.
+7. **A non-durable placement performs every act every time it plans.** `PlanActor.live` journals
+   nothing, and the direct interpreter never sees the actor at all. `Facets.fs` and
+   `docs/server-handler-atomicity.md` state this beside the entry read, and a test pins it.
+8. **No program-wire change.** A journal is a host store and not the wire (D43 §5). The journal port
+   gains no case, only a capability value, exactly as D39 did. The static facet derivation is
+   unchanged, because an act is performed inside the witness, out of sight of the stage list it
+   derives from. The proof model's `decide`/`replay` (`proofs/Staging.fst`) is generic over the
+   capability and the declared facet, so an act is an instance of the wrapper it already models, not a
+   new transition.
+
+**What it closes for the first host.** Once the plane's verb host adopts the arm it can delete its
+`pause` subject routed through the entry reader, and run its fold-first prefix through the actor
+inside the verb's own durable invocation instead of as a separately journalled run ahead of it.
+
+**Version.** `PerformerFacets` gains a field (FS0764 on a full literal), and the server surface gains
+`PlanActor`, `PlanRecorders`, `Durable.runPlanning`, `Durable.PlanActCapability`,
+`DurableCode.PlanActDiverged` / `planActDiverged`, `PerformerFacets.declarePlanAct` / `planActFacet`
+and `DurableServices.declaringPlanAct`. The `0.14.0` draft is untagged, publicly unpinned and already
+of class breaking (D58), so this rides it without moving its class. `STABILITY.md` records it.

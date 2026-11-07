@@ -160,6 +160,25 @@ seam; it is the seam both other placements already have, used deliberately.
 > declared per effect kind, so a vocabulary that mixes a content-addressed write with a push declares
 > them apart; and several contracts over one performer are composed by Program, first declared first.
 >
+> **And a plan-phase ACT, since [D63](../DECISIONS.md) (Phase 2222).** A plan may act without
+> reading: wait between two peeks of a queue, or merge a store before the entry read that depends on
+> the merge. Such an act runs in the plan phase, before any stage, so it is OUTSIDE the staging this
+> section describes: no rollback undoes it, and a re-plan performs it again. `Durable.runPlanning`
+> hands the witness a `PlanActor` beside its entry reader and derivation recorder (`PlanRecorders`):
+> the act is journaled at its ordinal under `PlanAct`, its name as the subject and its answer as the
+> completed value, and a re-entry of the same invocation is SERVED the answer and does not perform the
+> act. **That is the act's whole replay safety: it is replay-safe because it is journaled and served,
+> and only then.** A non-durable placement — the direct interpreter, or a witness built over
+> `PlanActor.live` — journals nothing and performs every act every time it plans, as it reads the live
+> world every time. An act may write, and an entry read after it in the same invocation sees what it
+> wrote, so a fold-first prefix runs inside the verb's own durable invocation rather than as a
+> separate run whose completion a resume cannot see. A resume whose plan would perform another act at
+> that ordinal, or read where the record holds an act, is refused under `durable-plan-act-diverged`
+> naming the act — never as a read that diverged. A process that dies INSIDE an act leaves it
+> indeterminate, and the window closes by the facet the host declared for that act
+> (`declaringPlanAct`), refused where it declared none: repeating an act is not safe by its shape, as
+> repeating a read is.
+>
 > **And a plan's read is TYPED, since [D41](../DECISIONS.md) (Phase 2175).** A read the plan makes
 > through the entry reader can now answer `Read.Unavailable` — the store could not be read, or its own
 > codec refused what it answered — as a case the plan must match, never as a default standing in for a
