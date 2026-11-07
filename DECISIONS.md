@@ -4960,3 +4960,54 @@ inside the verb's own durable invocation instead of as a separately journalled r
 `DurableCode.PlanActDiverged` / `planActDiverged`, `PerformerFacets.declarePlanAct` / `planActFacet`
 and `DurableServices.declaringPlanAct`. The `0.14.0` draft is untagged, publicly unpinned and already
 of class breaking (D58), so this rides it without moving its class. `STABILITY.md` records it.
+
+## D64 — The proof models do not yet ship as a release asset: the proof kit's asset builder in `fuaran-core` serves one producer, its own kit, so this repository does not fork it; the asset waits on the builder taking a second producer, and the downstream copies stay declared until then (2026-11-07)
+
+**Context.** The UI adapter's two proof claims left this repository with the adapter (fuaran#2012), and
+`fuaran-dotnet` re-checks them over byte COPIES of `BoundedFold.fst`, `Budget.fst`, this repository's
+runtime floor `oracle/Prims.fs` and five extractions, kept honest by a copy sweep. `fuaran-core` retired
+that shape for its own proof kit in fuaran-core#536 (its D206): the kit ships as ONE versioned release
+asset, built reproducibly from a declared file list, its sha256 committed and checked by a test, attached
+by a tag-only publish job that refuses a sha mismatch, and pinned by sha256 in the adopter, which opens
+the models read-only from it. Phase 2383 asked for the same shape here — a `proofs-program-<version>`
+asset — using the kit's builder and verifying caller rather than a second mechanism, and for the work to
+stop and be raised in `fuaran-core` if the kit could not serve a second producer as shipped.
+
+**Decided: it cannot, as shipped, and this repository does not fork it.** Read at `fuaran-core`'s
+`origin/main` and at its released `v0.40.x` kit, `proofs/kit/build-kit-asset.ps1` hard-codes three
+things that belong to the producer, not to the mechanism:
+
+1. the archive's NAME, `proofs-kit-<version>.tar` — a second producer cannot emit `proofs-program-<version>.tar`;
+2. the DECLARATION, `<proofs>/kit/asset.json` of kind `proofsKitAsset` — a second producer would have to
+   file its own asset under the kit's name;
+3. the COMMITTED sha, `copies.json`'s `proofsKit.sha256` at the repository root — the only place `-Check`
+   reads and `-Update` writes.
+
+Running it here would mean a `proofs/kit/asset.json` that declares this repository's models as "the
+proofs kit", a `copies.json` whose only content is a `proofsKit` key this repository does not hold, and a
+rename after every build: a fork of the mechanism in everything but the file, and one that breaks
+silently the first time the builder's assumptions move. The verifying CALLER side needs nothing new: the
+kit's engine already opens read-only models from any directory (`-ModelDirs`) and holds committed `.fs`
+files byte-identical to an asset's (`-FloorDir`), so the gap is the builder alone.
+
+**What the builder needs, stated so it can be filed without re-deriving it.** The asset's name prefix,
+its declaration path and its committed-sha location become the declaration's, not the script's: e.g.
+`-Manifest <file>` (default `<proofs>/kit/asset.json`), the manifest's own `asset` prefix (default
+`proofs-kit`), and `-ShaFile <file>` / a JSON path (default `copies.json` `proofsKit.sha256`), with the
+kit's own call unchanged byte-for-byte. A producer that does not adopt the kit also needs the builder
+itself, which today travels only inside the kit asset; pinning the kit for its builder is a choice that
+change should make explicitly.
+
+**What this repository will then do (the shape, recorded now so it is not re-designed).**
+`proofs/asset.json` declares `models/BoundedFold.fst`, `models/Budget.fst`, `oracle/Prims.fs` and the
+five extractions `oracle/{BoundedFold,Budget,Staging,EffectGate,Undo}.fs`; the gate builds the asset
+twice and fails when the two differ or when either differs from the committed sha; the `v*` publish
+workflow builds it, refuses a sha that is not the committed one, never replaces different bytes already
+attached, and re-fetches the public url to check once more. An adopter that COMPILES the extractions
+(`fuaran-dotnet`'s oracle project, which two test projects reference) still commits them beside its
+oracle project, as D206 has an adopter commit the kit's floor — an oracle project may compile nothing
+outside its directory — and its leg holds every committed file to the asset's bytes with `-FloorDir`; the
+models are not committed downstream at all. So the downstream change removes the two model copies and
+every copy record, and keeps the extractions as leg-held files rather than deleting them.
+
+**Not changed.** No source, test, workflow or package surface moves; the `0.14.0` draft is untouched.
