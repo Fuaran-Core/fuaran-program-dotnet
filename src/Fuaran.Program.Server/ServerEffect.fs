@@ -1293,28 +1293,70 @@ module ContentDigest =
         else
             Error("not a sha256 content digest: " + text)
 
+/// What one write did to its target (Phase 2223, D65, amending D43): the KIND
+/// of the write, so the union and the check read it correctly. Closed: a write
+/// either left whole content, added bytes after what was there, or removed the
+/// target.
+[<RequireQualifiedAccess>]
+type WriteKind =
+    /// The write left this content at the target, whole — the D43 receipt.
+    | Replaced of content: ContentDigest
+    /// The write ADDED these bytes after what the target held; what it held
+    /// before, and so its final content, is not claimed.
+    | Appended of addition: ContentDigest
+    /// The write removed the target; nothing is there after it.
+    | Deleted
+
+module WriteKind =
+
+    /// One kind, as refusal text: a replace as its bare digest (the D43
+    /// rendering, so a replace-only refusal reads as it did), an append as
+    /// `appended <digest>`, a delete as `deleted`.
+    let describe (kind: WriteKind) : string =
+        match kind with
+        | WriteKind.Replaced content -> content.Text
+        | WriteKind.Appended addition -> "appended " + addition.Text
+        | WriteKind.Deleted -> "deleted"
+
 /// One write a performer performed: the TARGET it wrote — the host's own name
-/// for the place, a path or a key — and the digest of the content it left there
-/// (Phase 2197, D43).
+/// for the place — and what the write did there (Phase 2197, D43; the kind
+/// since Phase 2223, D65). A commit stage states what it would stage in the
+/// same shape, so a staged write and a receipted one compare directly.
 type WriteReceipt =
     {
         /// Where the write landed, in the host's vocabulary. Compared ordinally.
         Target: string
-        /// What it wrote there.
-        Digest: ContentDigest
+        /// What it did there.
+        Kind: WriteKind
     }
 
 module WriteReceipt =
 
-    /// A receipt for these bytes written at `target`.
+    /// A receipt for these bytes written at `target`, replacing what was there.
     let ofBytes (target: string) (bytes: byte[]) : WriteReceipt =
         { Target = target
-          Digest = ContentDigest.ofBytes bytes }
+          Kind = WriteKind.Replaced(ContentDigest.ofBytes bytes) }
 
-    /// A receipt for this text written at `target`, as its UTF-8 bytes.
+    /// A receipt for this text written at `target`, as its UTF-8 bytes,
+    /// replacing what was there.
     let ofText (target: string) (text: string) : WriteReceipt =
         { Target = target
-          Digest = ContentDigest.ofText text }
+          Kind = WriteKind.Replaced(ContentDigest.ofText text) }
+
+    /// A receipt for these bytes appended at `target`, after what it held.
+    let appendedBytes (target: string) (bytes: byte[]) : WriteReceipt =
+        { Target = target
+          Kind = WriteKind.Appended(ContentDigest.ofBytes bytes) }
+
+    /// A receipt for this text appended at `target`, as its UTF-8 bytes.
+    let appendedText (target: string) (text: string) : WriteReceipt =
+        { Target = target
+          Kind = WriteKind.Appended(ContentDigest.ofText text) }
+
+    /// A receipt for the removal of `target`.
+    let deleted (target: string) : WriteReceipt =
+        { Target = target
+          Kind = WriteKind.Deleted }
 
 /// What an op performer RETURNS (Phase 2197, D43): the writes it performed, in
 /// the order it performed them, and the DETAIL — anything else it has to say,
@@ -1348,19 +1390,27 @@ module OpReceipt =
         { Writes = writes
           Detail = Fuaran.Core.JObj [] }
 
+    let private encodeWrite (write: WriteReceipt) : Fuaran.Core.JVal =
+        let target = "target", Fuaran.Core.JStr write.Target
+
+        match write.Kind with
+        | WriteKind.Replaced content -> Fuaran.Core.JObj [ target; "digest", Fuaran.Core.JStr content.Text ]
+        | WriteKind.Appended addition ->
+            Fuaran.Core.JObj
+                [ target
+                  "kind", Fuaran.Core.JStr "append"
+                  "digest", Fuaran.Core.JStr addition.Text ]
+        | WriteKind.Deleted -> Fuaran.Core.JObj [ target; "kind", Fuaran.Core.JStr "delete" ]
+
     /// The receipt as the durable journal records it, as a stage's completed
-    /// value: `{"writes":[{"target":…,"digest":…},…],"detail":…}`, the writes in
-    /// perform order.
+    /// value: `{"writes":[…],"detail":…}`, the writes in perform order (D43). A
+    /// replace is `{"target":…,"digest":…}` — the 0.9.0 form, unchanged, so a
+    /// journal written before kinds existed reads as replaces; an append is
+    /// `{"target":…,"kind":"append","digest":…}` and a delete
+    /// `{"target":…,"kind":"delete"}` (D65).
     let encode (receipt: OpReceipt) : Fuaran.Core.JVal =
         Fuaran.Core.JObj
-            [ "writes",
-              Fuaran.Core.JArr(
-                  receipt.Writes
-                  |> List.map (fun write ->
-                      Fuaran.Core.JObj
-                          [ "target", Fuaran.Core.JStr write.Target
-                            "digest", Fuaran.Core.JStr write.Digest.Text ])
-              )
+            [ "writes", Fuaran.Core.JArr(receipt.Writes |> List.map encodeWrite)
               "detail", receipt.Detail ]
 
     /// The refusal code a served value that is not an encoded receipt meets —
@@ -1371,21 +1421,36 @@ module OpReceipt =
     [<Literal>]
     let MalformedCode = "op-receipt-malformed"
 
-    /// A receipt from its journaled form. Exactly the two members, the writes
-    /// each exactly `target` and `digest`, the digest a well-formed rendering.
+    /// A receipt from its journaled form. Exactly the two members; each write
+    /// exactly one of the three forms `encode` writes, the digest a
+    /// well-formed rendering. Any other write — an unknown kind, a spelled-out
+    /// `"replace"`, a delete carrying a digest — is malformed, never read as
+    /// some other write or as none.
     let decode (value: Fuaran.Core.JVal) : Result<OpReceipt, string> =
         let malformed (why: string) = Error(MalformedCode + ": " + why)
 
+        let withDigest (target: string) (kind: ContentDigest -> WriteKind) (text: string) =
+            match ContentDigest.parse text with
+            | Ok digest -> Ok { Target = target; Kind = kind digest }
+            | Error why -> malformed why
+
         let write (value: Fuaran.Core.JVal) =
             match value with
-            | Fuaran.Core.JObj members when List.length members = 2 ->
-                match List.tryFind (fst >> (=) "target") members, List.tryFind (fst >> (=) "digest") members with
-                | Some(_, Fuaran.Core.JStr target), Some(_, Fuaran.Core.JStr digest) ->
-                    match ContentDigest.parse digest with
-                    | Ok digest -> Ok { Target = target; Digest = digest }
-                    | Error why -> malformed why
-                | _ -> malformed "a write is not exactly a string target and a string digest"
-            | _ -> malformed "a write is not exactly a target and a digest"
+            | Fuaran.Core.JObj members ->
+                let find name =
+                    List.tryFind (fst >> (=) name) members |> Option.map snd
+
+                match List.length members, find "target", find "kind", find "digest" with
+                | 2, Some(Fuaran.Core.JStr target), None, Some(Fuaran.Core.JStr digest) ->
+                    withDigest target WriteKind.Replaced digest
+                | 3, Some(Fuaran.Core.JStr target), Some(Fuaran.Core.JStr "append"), Some(Fuaran.Core.JStr digest) ->
+                    withDigest target WriteKind.Appended digest
+                | 2, Some(Fuaran.Core.JStr target), Some(Fuaran.Core.JStr "delete"), None ->
+                    Ok
+                        { Target = target
+                          Kind = WriteKind.Deleted }
+                | _ -> malformed "a write is not exactly a replace, an append or a delete"
+            | _ -> malformed "a write is not an object"
 
         match value with
         | Fuaran.Core.JObj members when List.length members = 2 ->
@@ -1403,21 +1468,27 @@ module OpReceipt =
             | _ -> malformed "not exactly a writes list and a detail"
         | _ -> malformed "not exactly a writes list and a detail"
 
-/// Why a write a commit stage would stage is FOREIGN to the invocation (Phase
-/// 2197, D43). Two causes, kept apart because their remedies differ.
+/// Why what a commit stage would stage at a target is FOREIGN to the invocation
+/// (Phase 2197, D43; Phase 2223, D65). Two causes, kept apart because their
+/// remedies differ.
 [<RequireQualifiedAccess>]
 type ForeignCause =
     /// No receipt of the invocation names the target at all.
     | Unreceipted
-    /// A receipt names the target, and the content the invocation last wrote
-    /// there is not the content being staged.
-    | DigestDiffers of receipted: ContentDigest
+    /// Receipts name the target, and what the invocation left there
+    /// (`Receipts.final`) is not what is being staged: other content, another
+    /// kind (receipted deleted, staged present), or other additions.
+    | Differs of receipted: WriteKind list
 
-/// A write no receipt accounts for — the refusal a commit stage returns.
+/// What a commit stage would stage at one target that no receipt accounts for —
+/// the refusal a commit stage returns.
 type ForeignWrite =
-    { Target: string
-      Digest: ContentDigest
-      Cause: ForeignCause }
+    {
+        Target: string
+        /// What the stage would stage there, in the order staged.
+        Staged: WriteKind list
+        Cause: ForeignCause
+    }
 
 module ForeignWrite =
 
@@ -1425,16 +1496,19 @@ module ForeignWrite =
     [<Literal>]
     let Code = "foreign-write"
 
+    let private describeAll (kinds: WriteKind list) =
+        kinds |> List.map WriteKind.describe |> String.concat " + "
+
     /// One foreign write, as text: the target and the cause, never the content.
     let describe (foreign: ForeignWrite) : string =
         match foreign.Cause with
         | ForeignCause.Unreceipted -> foreign.Target + " (unreceipted)"
-        | ForeignCause.DigestDiffers receipted ->
+        | ForeignCause.Differs receipted ->
             foreign.Target
             + " (staged "
-            + foreign.Digest.Text
+            + describeAll foreign.Staged
             + ", receipted "
-            + receipted.Text
+            + describeAll receipted
             + ")"
 
     /// The refusal a commit stage answers for these foreign writes:
@@ -1449,40 +1523,73 @@ module Receipts =
     /// Every write, in perform order.
     let writes (receipts: OpReceipt list) : WriteReceipt list = receipts |> List.collect _.Writes
 
-    /// The content each changed target holds after the invocation: the LAST
-    /// receipted write to it wins, in perform order.
-    let final (receipts: OpReceipt list) : Map<string, ContentDigest> =
+    /// What the invocation left at each target it wrote (D65): the LAST replace
+    /// or delete of it, if any, then every append after that, in perform order.
+    /// A replace or a delete supersedes everything before it; appends
+    /// accumulate. So a target replaced twice holds `[Replaced last]`; replaced
+    /// then deleted, `[Deleted]`; deleted then re-created, `[Replaced new]`, or
+    /// `[Deleted; Appended …]` when it was re-created by appending; appended
+    /// twice, `[Appended first; Appended second]`.
+    let final (receipts: OpReceipt list) : Map<string, WriteKind list> =
         writes receipts
-        |> List.fold (fun acc write -> Map.add write.Target write.Digest acc) Map.empty
+        |> List.fold
+            (fun acc write ->
+                let left =
+                    match write.Kind with
+                    | WriteKind.Appended _ -> (Map.tryFind write.Target acc |> Option.defaultValue []) @ [ write.Kind ]
+                    | WriteKind.Replaced _
+                    | WriteKind.Deleted -> [ write.Kind ]
 
-    /// The targets the invocation changed.
+                Map.add write.Target left acc)
+            Map.empty
+
+    /// The targets the invocation changed — replaced, appended to or deleted.
     let changed (receipts: OpReceipt list) : Set<string> =
         writes receipts |> List.map _.Target |> Set.ofList
 
-    /// Whether the receipts account for this write: it names a changed target
-    /// and the content the invocation last wrote there.
-    let account (receipts: OpReceipt list) (write: WriteReceipt) : Result<unit, ForeignWrite> =
-        match Map.tryFind write.Target (final receipts) with
+    let private accountTarget
+        (final: Map<string, WriteKind list>)
+        (target: string)
+        (staged: WriteKind list)
+        : Result<unit, ForeignWrite> =
+        match Map.tryFind target final with
         | None ->
             Error
-                { Target = write.Target
-                  Digest = write.Digest
+                { Target = target
+                  Staged = staged
                   Cause = ForeignCause.Unreceipted }
-        | Some receipted when receipted = write.Digest -> Ok()
+        | Some receipted when receipted = staged -> Ok()
         | Some receipted ->
             Error
-                { Target = write.Target
-                  Digest = write.Digest
-                  Cause = ForeignCause.DigestDiffers receipted }
+                { Target = target
+                  Staged = staged
+                  Cause = ForeignCause.Differs receipted }
 
-    /// A commit stage's check over everything it would stage: every foreign
-    /// write, in the order staged, or nothing. A commit stage that refuses on
-    /// `Error` answers `ForeignWrite.refusal` as its performer's refusal.
+    /// Whether the receipts account for this one staged write: what the
+    /// invocation left at its target (`final`) is exactly it.
+    let account (receipts: OpReceipt list) (write: WriteReceipt) : Result<unit, ForeignWrite> =
+        accountTarget (final receipts) write.Target [ write.Kind ]
+
+    /// A commit stage's check over everything it would stage (D65). The staged
+    /// writes are read PER TARGET, in the order staged, and a target's staged
+    /// writes must be exactly what the invocation left there (`final`): its
+    /// whole content when it was replaced, its absence when it was deleted,
+    /// and each addition, in order, when it was appended to. Every foreign
+    /// target, in the order first staged, or nothing. A commit stage that
+    /// refuses on `Error` answers `ForeignWrite.refusal` as its performer's
+    /// refusal.
     let accountAll (receipts: OpReceipt list) (staged: WriteReceipt list) : Result<unit, ForeignWrite list> =
+        let final = final receipts
+
         match
             staged
-            |> List.choose (fun write ->
-                match account receipts write with
+            |> List.map _.Target
+            |> List.distinct
+            |> List.choose (fun target ->
+                let kinds =
+                    staged |> List.filter (fun write -> write.Target = target) |> List.map _.Kind
+
+                match accountTarget final target kinds with
                 | Ok() -> None
                 | Error foreign -> Some foreign)
         with

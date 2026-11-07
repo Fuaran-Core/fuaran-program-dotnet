@@ -205,6 +205,16 @@ seam; it is the seam both other placements already have, used deliberately.
 > the record of what was written: a host no longer keeps a receipt book beside the effect to know it. A
 > journaled value that is not an encoded receipt — a journal written before receipts were typed — is
 > refused on resume as `op-receipt-malformed`, never read as a receipt that wrote nothing.
+>
+> **A write receipt names its KIND, since [D65](../DECISIONS.md) (Phase 2223).** A write is a replace (the
+> digest covers the content it left), an append (the digest covers the bytes it added; the target's final
+> content is not claimed) or a delete (no digest; the target is absent after). What an invocation left at
+> a target is its last replace or delete and every append after it (`Receipts.final`), and a commit stage
+> states what it would stage in the same three kinds: an appended file as its additions over the content
+> it held before the invocation, each digested as the performer digested it, in order; a removed file as
+> a delete. So an op-stream append and a file removal are accounted like any other write, on a fresh run
+> and on a resume, and a target receipted as deleted but staged present is foreign. A replace is still
+> journaled in the 0.9.0 form, so an older journal's receipts read as replaces.
 
 **What remains open.**
 

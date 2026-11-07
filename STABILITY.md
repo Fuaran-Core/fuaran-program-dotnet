@@ -50,7 +50,7 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
-## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222)
+## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223)
 
 **Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
 the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded
@@ -269,6 +269,48 @@ and `Durable.runWith`, in signature and behaviour; the journal port and its entr
 existing refusal token; the static facet derivation; the program wire, the demanded document and its
 version (14). A non-durable placement performs every act every time it plans, which is what a witness
 built over `PlanActor.live` does.
+
+### Rides the draft: a write receipt names an append and a delete (Phase 2223)
+
+**Class: breaking, the draft's own.** `WriteReceipt`'s shape moves, so it rides the `0.14.0` draft
+(D58's class) without moving it. `DECISIONS.md` D65 records what was decided.
+
+**What a consumer gains.**
+
+- `WriteKind` in `Fuaran.Program.Server` — `Replaced of content` | `Appended of addition` | `Deleted`
+  — and `WriteKind.describe`. A write receipt is `{ Target; Kind }`.
+- `WriteReceipt.appendedBytes`, `appendedText` and `deleted`, beside `ofBytes` / `ofText` (still a
+  replace).
+- `Receipts.final` answers what the invocation LEFT at each target: its last replace or delete and
+  every append after it. `Receipts.accountAll` checks a commit stage's staged writes per target
+  against it, so an appended file staged as its additions and a removed file staged as a delete are
+  accounted on a fresh run and on a resume, and a foreign one of each is refused.
+- The durable journal records an append as `{"target":…,"kind":"append","digest":…}` and a delete as
+  `{"target":…,"kind":"delete"}`.
+
+It retires the shim a writer of appends or deletes had to keep: receipts carried in the untyped
+`Detail`, which `changed` and `account` never read.
+
+**What a consumer pays.**
+
+- **`WriteReceipt.Digest` is gone.** Read `Kind` (`WriteKind.Replaced content` is the old digest). A
+  full record literal `{ Target = …; Digest = … }` fails; build with `WriteReceipt.ofText` /
+  `ofBytes`, or write `Kind = WriteKind.Replaced …`.
+- **`Receipts.final` returns `Map<string, WriteKind list>`**, not `Map<string, ContentDigest>`. A
+  replace-only invocation's entry is `[WriteKind.Replaced last]`.
+- **`ForeignWrite` carries `Staged: WriteKind list`** where it carried `Digest`, and
+  **`ForeignCause.DigestDiffers of ContentDigest` is `ForeignCause.Differs of WriteKind list`**. A
+  match on the cause, or a literal of either, is edited. `accountAll` reports one `ForeignWrite` per
+  foreign TARGET in the order first staged; a stage that stages each target once, as every D43
+  consumer did, sees the same list.
+- **Recompile.** Nothing to migrate in a journal: a replace is written in the 0.9.0 form and a 0.9.0
+  receipt decodes as replaces.
+
+**What did not move.** `OpReceipt`, `OpReceipt.none` / `ofDetail` / `ofWrites`, `MalformedCode`,
+`Receipts.writes` / `changed` / `account`'s signatures, `HandlerOutcome.changed` / `account`,
+`ForeignWrite.refusal`'s code and its text for a replace-only refusal, byte for byte. The durable
+interpreter, the journal port and every refusal token. The program wire, the demanded document and
+its version (14): a receipt reaches no wire (D43).
 
 ## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
 

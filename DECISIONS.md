@@ -4960,3 +4960,108 @@ inside the verb's own durable invocation instead of as a separately journalled r
 `DurableCode.PlanActDiverged` / `planActDiverged`, `PerformerFacets.declarePlanAct` / `planActFacet`
 and `DurableServices.declaringPlanAct`. The `0.14.0` draft is untagged, publicly unpinned and already
 of class breaking (D58), so this rides it without moving its class. `STABILITY.md` records it.
+
+## D65 — A write receipt names its KIND: `WriteKind` is `Replaced` (the content left), `Appended` (the bytes added) or `Deleted` (no digest); what an invocation left at a target is its last replace or delete and every append after it; a commit stage states what it stages in the same three kinds and is accounted per target; a replace is journaled in the 0.9.0 form; amends D43 (2026-11-07)
+
+**Context.** D43 (Phase 2197) typed a performer's receipt as `OpReceipt = { Writes; Detail }`, with
+`WriteReceipt = { Target; Digest }` and the digest covering the content the write LEFT. The first
+consumer outside the UI tier, a coordination plane's placement probe on 0.9.0, could not fit two of its
+writes into that shape, kept its receipts in the untyped `Detail`, and so Program's `changed` and
+`account` saw none of its writes: the commit-side check D43 built was vacuous for the consumer it was
+built for (Phase 2223).
+
+**Premises checked against the tree first.** Both writes are UNEXPRESSIBLE, not merely unused.
+
+- *A delete.* `WriteReceipt.Digest` is a required `ContentDigest`, whose representation is private
+  and which is only ever computed from content or parsed from a rendering. A removal leaves no
+  content, so there was no honest value to put there. Receipting a delete as the digest of the empty
+  string would make a removed file and an emptied one the same claim.
+- *An append.* A receipt could carry the digest of the appended record, but the field's meaning is
+  "the content left at the target", so `Receipts.final` would map the lane to the record's digest
+  and `account` against the staged lane file would read `DigestDiffers`, as the shard said. Carrying
+  the digest of the whole lane after the append is expressible but defeats the purpose: the writer
+  holds the record, not the lane.
+- The probe's own receipt vocabulary (`Appended(lane, digest)`, `Deleted path`, beside its replaces)
+  is the three-kind shape this entry adopts.
+
+**1. The shape: a closed DU beside the target.** `WriteReceipt = { Target: string; Kind: WriteKind }`
+with `WriteKind = Replaced of content: ContentDigest | Appended of addition: ContentDigest | Deleted`.
+`WriteReceipt.ofBytes` / `ofText` keep their meaning (a replace); `appendedBytes`, `appendedText`
+and `deleted` are new. A commit stage states what it would stage as `WriteReceipt`s too, so a staged
+write and a receipted one compare directly.
+
+Rejected:
+
+- *A kind member beside an optional digest* (`{ Target; Kind; Digest: ContentDigest option }`). It
+  admits two states that mean nothing (a delete with a digest, a replace without one), which every
+  reader would then have to refuse; the DU makes them unrepresentable.
+- *A `WriteReceipt` that is itself a DU, each case carrying its target.* Every reader wants the
+  target regardless of kind (`changed`, grouping in `accountAll`), and three copies of one field is
+  the shape that drifts.
+- *Receipting an append as the digest of the target's whole content.* Sound, but it asks the writer
+  for bytes it does not hold — the probe's finding — and so leaves the append in `Detail` in practice.
+
+**2. What an invocation left: `Receipts.final : OpReceipt list -> Map<string, WriteKind list>`.**
+Per target, in perform order, a replace or a delete SUPERSEDES everything before it and an append
+ACCUMULATES after it. So:
+
+- replaced then deleted: `[Deleted]`;
+- deleted then re-created: `[Replaced new]`, or `[Deleted; Appended a]` when it was re-created by
+  appending (from nothing, the addition);
+- appended twice: `[Appended first; Appended second]`;
+- replaced then appended: `[Replaced c; Appended a]` — the content, then the addition, because no
+  single digest names the concatenation and Program holds no bytes to compute one;
+- appended then replaced: `[Replaced c]`.
+
+`changed` is unchanged in meaning: every target replaced, appended to or deleted.
+
+**3. The check is per target.** `accountAll receipts staged` reads the staged writes PER TARGET, in
+the order staged, and a target is accounted when its staged writes are EXACTLY `final`'s for it.
+A commit stage therefore stages:
+
+- a replaced file as its whole content (`Replaced`), as under D43;
+- a removed file as a delete (`Deleted`);
+- an appended file as its ADDITIONS over the content the target held before the invocation, one
+  staged `Appended` per receipted addition, in order, each digested exactly as the performer
+  digested it. For a line-oriented store (an op-stream lane) that is the staged tail split into its
+  records. A stage that cannot split its additions as its performer receipted them should have its
+  performer receipt the whole content as a replace instead; Program does not guess at a split.
+
+`account receipts write` is the one-write case: the target's `final` is exactly that write. A target
+appended to is never accounted by a staged replace of its whole content, since the invocation never
+claimed that content.
+
+Staging one of two additions, an extra addition, a target receipted deleted but staged present, or a
+target receipted present but staged deleted are all foreign.
+
+**4. `ForeignCause` keeps two causes, generalised, and gains no case.** `Unreceipted` stays;
+`DigestDiffers of receipted: ContentDigest` becomes `Differs of receipted: WriteKind list`, and
+`ForeignWrite` carries `Staged: WriteKind list` where it carried `Digest`. A separate "receipted as
+deleted, staged as present" case was considered and rejected: its remedy is the same as a content
+mismatch (what is staged is not what the invocation left), and the refusal text already names both
+kinds. The causes D43 kept apart are still apart, for the reason D43 gave. The refusal text renders
+a replace as its bare digest, an append as `appended <digest>` and a delete as `deleted`, joined with
+` + ` when a target has more than one, so a replace-only refusal reads byte for byte as it did under
+D43.
+
+**5. The journal.** A replace is journaled as `{"target":…,"digest":…}`, the 0.9.0 form unchanged; an
+append as `{"target":…,"kind":"append","digest":…}`; a delete as `{"target":…,"kind":"delete"}`. A
+0.9.0 journal's receipt therefore decodes as replaces with no migration, and a replace-only journal
+written now is byte-identical to one written by 0.9.0. Any other write shape — an unknown kind, a
+spelled-out `"kind":"replace"` (one form per kind), a delete carrying a digest, an append without one,
+a target alone — is `op-receipt-malformed`, never read as some other write or as none (D43 §5). The
+durable wrapper decodes through `OpReceipt.decode` as before, so `Durable.fs` does not move: a
+resumed run is served the dead run's appends and deletes with their kinds.
+
+**No program-wire change.** The receipt reaches no wire (D43); the journal is a host store. The proof
+models take the receipt as an abstract value and are untouched.
+
+**What it closes for the first consumer.** Once the plane probe raises its Program pin it can return
+its appends and deletes as typed writes and delete the receipts it carries in `Detail`; its commit
+stage then accounts the lane appends and the file removals through `accountAll`, which is the
+precondition for any plane verb that commits only its own writes on Program.
+
+**Version.** `WriteReceipt` loses `Digest` and gains `Kind`, `Receipts.final`'s result type moves,
+and `ForeignWrite` / `ForeignCause` change shape: breaking. The `0.14.0` draft is untagged, publicly
+unpinned and already of class breaking (D58), so this rides it without moving its class.
+`STABILITY.md` records it.
