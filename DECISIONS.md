@@ -5065,3 +5065,37 @@ precondition for any plane verb that commits only its own writes on Program.
 and `ForeignWrite` / `ForeignCause` change shape: breaking. The `0.14.0` draft is untagged, publicly
 unpinned and already of class breaking (D58), so this rides it without moving its class.
 `STABILITY.md` records it.
+
+## D66 — The handler and outcome decoders hold every member §2 marks non-empty to it: a present-and-empty `into`, notification `channel`, `performed` entry and denial / `Failed` / `PerformFailed` `capability` are refused on `missing-member`; the vectors sit at the toy subject, as D51's did (2026-11-07)
+
+**2026-11-07. Phase 2620** (spillover of the phase that made the specification's text and schemas
+agree on non-empty members). §2 now states the rule once and tables every member it covers. The
+schemas already said so and no vector exercised these members, so the corpus did not move and this
+host stayed green while it accepted an empty `into` on a `HostCall`, an empty notification `channel`
+on an outcome, and an empty capability string in every outcome position that carries one.
+
+**Premises checked against the tree first.** (1) *These five positions were read with
+`requireString`.* They were: `decodeEffect`'s `HostCall` arm matched any `JStr` for `into`, and
+`decodeDenial`, `decodeDiagnostic` (`Failed`, `PerformFailed`), `decodeNotification` and the
+`performed` traversal all read a bare string. (2) *The vectors can reach the specification's main in
+this phase.* At the toy subject they can, on D50's route, as D51's did: the downstream host certifying
+the referenced subject reads server-effect and outcome documents through this repository's
+`Fuaran.Program.Server` PACKAGE, pinned at the last release, which accepts these values, so a
+referenced vector would turn that host red until it raises the pin. The referenced counterparts wait
+for that raise; §10.7 records them as "none, yet". (3) *Nothing in this repository writes these
+members empty.* No encoder path constructs an empty capability: every capability string is an arm's
+discriminator or `host:` before a non-empty `fn`.
+
+**Decided: the same check, at each reader.** `ProgramWire.requireNonEmpty` already states the rule
+(D51), with the detail `member '<name>' is empty`; the denial, the two diagnostics and the
+notification read through it. `into` is optional, so its arm refuses `JStr ""` before the
+reserved-namespace check rather than calling the required-member helper. A `performed` entry is an
+array item with no member name, so its refusal says `a performed entry is empty`. Neither detail
+echoes a wire-carried string (§4.4).
+
+**Decided: the encoder does not refuse,** as D51 decided: an empty member in a typed value is the
+host's construction, not a document it received.
+
+**Not decided here:** the Rust core of the generic program certifies the same toy subject and is not
+on this machine; it takes the six new toy vectors when it next advances its pin of the
+specification. `STABILITY.md` records the narrowed decode on the `0.14.0` draft.

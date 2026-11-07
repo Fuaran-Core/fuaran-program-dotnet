@@ -50,7 +50,7 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
-## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223)
+## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223, 2620)
 
 **Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
 the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded
@@ -311,6 +311,33 @@ It retires the shim a writer of appends or deletes had to keep: receipts carried
 `ForeignWrite.refusal`'s code and its text for a replace-only refusal, byte for byte. The durable
 interpreter, the journal port and every refusal token. The program wire, the demanded document and
 its version (14): a receipt reaches no wire (D43).
+
+### Rides the draft: the handler and outcome decoders refuse an empty `into`, an empty notification channel and an empty capability string (Phase 2620)
+
+**Class: narrowed decode** — breaking for a caller that stored such a document, and the draft is
+already of class breaking (D58), so this rides it without moving its class. No public type, member or
+signature moves. `DECISIONS.md` D66 records what was decided.
+
+**What a consumer pays: documents that decoded before are refused, on `missing-member`.**
+`PROGRAM_WIRE.md` §2's table marks these non-empty, and the decoders read them with no such check:
+
+- `HandlerWire.decodeEffect` (and so `decodeHandler` / `decodeHandlerJson`): a `HostCall` whose `into`
+  is present and `""`, detail `member 'into' is empty`. Omitting `into` is still the one spelling of a
+  call that lands nowhere.
+- `HandlerWire.decodeReport` / `decodeReportJson`: a notification whose `channel` is `""` (`member
+  'channel' is empty`); a `performed` entry that is `""` (`a performed entry is empty`); a denial, a
+  `Failed` or a `PerformFailed` diagnostic whose `capability` is `""` (`member 'capability' is empty`).
+
+A caller that stored such a document can no longer read it back. No conformant encoder writes one.
+
+**What did not move:** every encoder, as D51 decided for the effect members: a typed value with one of
+these members empty still encodes, and the document it encodes to is the one now refused. A
+`Failed` / `PerformFailed` `reason` stays content and may be empty.
+
+**Certified by** the specification's new toy-subject vectors `toy-server-effect/reject-empty-into` and
+`toy-outcome/reject-empty-channel`, `reject-empty-performed`, `reject-empty-denial-capability`,
+`reject-empty-failed-capability` and `reject-empty-perform-failed-capability`, which the corpus suite
+runs, and by `NonEmptyMemberTests` at this suite's own witness.
 
 ## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
 
