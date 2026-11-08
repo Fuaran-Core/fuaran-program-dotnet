@@ -168,6 +168,10 @@ module HandlerWire =
                 // still before anything external runs.
                 match ProgramWire.tryMember "into" value, foldOf witness with
                 | None, _ -> Ok(ServerEffect.HostCall(fn, args, None))
+                // Omission is the one spelling of a call that lands nowhere;
+                // the empty string is refused rather than read as a third
+                // (Phase 2620, §2's non-empty rule).
+                | Some(JStr ""), _ -> ProgramWire.refuse RefusalClass.MissingMember "member 'into' is empty"
                 | Some(JStr slot), Some fold when fold.Store.IsReserved slot ->
                     ProgramWire.refuse
                         RefusalClass.HostReservedLandingSlot
@@ -465,7 +469,7 @@ module HandlerWire =
 
     let private decodeDenial (value: JVal) : Result<ServerEffectDenial, WireRefusal> =
         ProgramWire.declaredOnly [ "$type"; "capability" ] value
-        |> Result.bind (fun () -> ProgramWire.requireString "capability" value)
+        |> Result.bind (fun () -> ProgramWire.requireNonEmpty "capability" value)
         |> Result.bind (fun capability ->
             match ProgramWire.tag value with
             | Some "Unregistered" -> Ok(ServerEffectDenial.Unregistered capability)
@@ -499,13 +503,13 @@ module HandlerWire =
             |> Result.map ServerDiagnostic.Denied
         | Some "Failed" ->
             ProgramWire.declaredOnly [ "$type"; "capability"; "reason" ] value
-            |> Result.bind (fun () -> ProgramWire.requireString "capability" value)
+            |> Result.bind (fun () -> ProgramWire.requireNonEmpty "capability" value)
             |> Result.bind (fun capability ->
                 ProgramWire.requireString "reason" value
                 |> Result.map (fun reason -> ServerDiagnostic.Failed(capability, reason)))
         | Some "PerformFailed" ->
             ProgramWire.declaredOnly [ "$type"; "capability"; "reason" ] value
-            |> Result.bind (fun () -> ProgramWire.requireString "capability" value)
+            |> Result.bind (fun () -> ProgramWire.requireNonEmpty "capability" value)
             |> Result.bind (fun capability ->
                 ProgramWire.requireString "reason" value
                 |> Result.map (fun reason -> ServerDiagnostic.PerformFailed(capability, reason)))
@@ -528,7 +532,7 @@ module HandlerWire =
 
     let private decodeNotification (value: JVal) : Result<string * JVal, WireRefusal> =
         ProgramWire.declaredOnly [ "channel"; "payload" ] value
-        |> Result.bind (fun () -> ProgramWire.requireString "channel" value)
+        |> Result.bind (fun () -> ProgramWire.requireNonEmpty "channel" value)
         |> Result.bind (fun channel ->
             ProgramWire.requireMember "payload" value
             |> Result.map (fun payload -> channel, payload))
@@ -577,6 +581,8 @@ module HandlerWire =
                         |> Result.bind (
                             ProgramWire.traverse (fun item ->
                                 match item with
+                                | JStr "" ->
+                                    ProgramWire.refuse RefusalClass.MissingMember "a performed entry is empty"
                                 | JStr capability -> Ok capability
                                 | _ ->
                                     ProgramWire.refuse

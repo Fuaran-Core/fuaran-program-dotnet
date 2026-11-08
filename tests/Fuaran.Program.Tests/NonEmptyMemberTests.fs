@@ -5,7 +5,9 @@ module Fuaran.Program.Tests.NonEmptyMemberTests
 // PROGRAM_WIRE.md §5.1: `fn`, `name`, `channel`, `code` and `severity` MUST be
 // non-empty. Until 0.12.0 the decoder held `fn` and the finding's two tokens to
 // that and let a `RunQuery` with an empty `name` and a `Notify` with an empty
-// `channel` decode. For each of the five members this pins:
+// `channel` decode. Until 0.14.0 it let a `HostCall` with a present-and-empty
+// `into` decode too (Phase 2620, D66): omission is the one spelling of a call
+// that lands nowhere. For each of the six members this pins:
 //
 //  1. the document with the member present and empty is refused, on
 //     `missing-member`, and the refusal names the member and never the token;
@@ -31,6 +33,9 @@ let private handlerOf (effect: string) =
 /// emptied.
 let private members =
     [ "fn", """{"$type":"HostCall","args":{},"fn":"fetch-ledger"}""", """{"$type":"HostCall","args":{},"fn":""}"""
+      "into",
+      """{"$type":"HostCall","args":{},"fn":"fetch-ledger","into":"ledger"}""",
+      """{"$type":"HostCall","args":{},"fn":"fetch-ledger","into":""}"""
       "name",
       """{"$type":"RunQuery","name":"orders-slot","pipeline":[{"$type":"limit","n":5,"offset":0}],"source":{"ref":"orders","schema":[]}}""",
       """{"$type":"RunQuery","name":"","pipeline":[{"$type":"limit","n":5,"offset":0}],"source":{"ref":"orders","schema":[]}}"""
@@ -48,6 +53,7 @@ let private members =
 let private emptied (memberName: string) (effect: ServerEffect<FileOp>) : ServerEffect<FileOp> =
     match memberName, effect with
     | "fn", ServerEffect.HostCall(_, args, into) -> ServerEffect.HostCall("", args, into)
+    | "into", ServerEffect.HostCall(fn, args, Some _) -> ServerEffect.HostCall(fn, args, Some "")
     | "name", ServerEffect.RunQuery(_, source, pipeline) -> ServerEffect.RunQuery("", source, pipeline)
     | "channel", ServerEffect.Notify(_, payload) -> ServerEffect.Notify("", payload)
     | "code", ServerEffect.Report finding -> ServerEffect.Report { finding with Code = "" }
@@ -101,4 +107,68 @@ let tests =
                           (refusalOf encoded).Class
                           RefusalClass.MissingMember
                           "and the decoder refuses what it wrote"
+              } ]
+
+// ─── the outcome members §2 marks non-empty (Phase 2620, D66) ────────────────
+//
+// §2's table, outcome row: each notification's `channel`, and every capability
+// string — each entry of `performed`, a denial's `capability`, and the
+// `capability` of a `Failed` or `PerformFailed` diagnostic. Until 0.14.0 the
+// outcome decoder read all five with `requireString` and let the empty string
+// through. The corpus pins each at the toy subject; this pins the same five at
+// this suite's own witness, with the refusal's detail, and the filled twin
+// round-tripping so the refusal is the member's and not the document's.
+
+let private reportOf (diagnostics: string) (notifications: string) (performed: string) (committed: bool) =
+    """{"$type":"HandlerReport","committed":"""
+    + (if committed then "true" else "false")
+    + ""","diagnostics":["""
+    + diagnostics
+    + """],"notifications":["""
+    + notifications
+    + """],"patches":[],"performed":["""
+    + performed
+    + "]}"
+
+/// Each position, the outcome with it filled, the outcome with it emptied, and
+/// the detail the refusal carries.
+let private outcomePositions =
+    [ "a notification's channel",
+      reportOf "" """{"channel":"audit","payload":{}}""" "\"Notify\"" true,
+      reportOf "" """{"channel":"","payload":{}}""" "\"Notify\"" true,
+      "member 'channel' is empty"
+      "a performed entry",
+      reportOf "" "" "\"RunQuery\",\"host:audit\"" true,
+      reportOf "" "" "\"RunQuery\",\"\"" true,
+      "a performed entry is empty"
+      "a denial's capability",
+      reportOf """{"$type":"Denied","denial":{"$type":"Unregistered","capability":"host:audit"}}""" "" "" false,
+      reportOf """{"$type":"Denied","denial":{"$type":"Unregistered","capability":""}}""" "" "" false,
+      "member 'capability' is empty"
+      "a Failed diagnostic's capability",
+      reportOf """{"$type":"Failed","capability":"host:audit","reason":""}""" "" "" false,
+      reportOf """{"$type":"Failed","capability":"","reason":""}""" "" "" false,
+      "member 'capability' is empty"
+      "a PerformFailed diagnostic's capability",
+      reportOf """{"$type":"PerformFailed","capability":"host:audit","reason":"declined"}""" "" "\"host:ledger\"" false,
+      reportOf """{"$type":"PerformFailed","capability":"","reason":"declined"}""" "" "\"host:ledger\"" false,
+      "member 'capability' is empty" ]
+
+[<Tests>]
+let outcomeTests =
+    testList
+        "the outcome members the specification marks non-empty (Phase 2620, D66)"
+        [ for position, filled, empty, detail in outcomePositions do
+              test $"{position}, present and empty, is refused on missing-member" {
+                  match HandlerWire.decodeReport witness empty with
+                  | Ok _ -> failtestf "decoded: %s" empty
+                  | Error refusal ->
+                      Expect.equal refusal.Class RefusalClass.MissingMember "the class §2's rule names"
+                      Expect.equal refusal.Detail detail "the position named, nothing wire-carried echoed"
+              }
+
+              test $"{position}, non-empty, round-trips byte for byte" {
+                  match HandlerWire.decodeReport witness filled with
+                  | Error refusal -> failtestf "the filled outcome was refused: %A" refusal
+                  | Ok report -> Expect.equal (HandlerWire.encodeReport witness report) (Ok filled) "byte for byte"
               } ]

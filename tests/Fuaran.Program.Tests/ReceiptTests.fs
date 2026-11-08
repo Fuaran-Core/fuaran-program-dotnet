@@ -9,6 +9,10 @@
 ///     alone (`HandlerOutcome.changed`), and a commit stage accounts what it
 ///     would stage against them, refusing a write no receipt names, or one
 ///     whose content is not what the invocation wrote, as `foreign-write`;
+///   * **the kinds** (Phase 2223, D65): a write is a replace, an append or a
+///     delete, so an op-stream append and a file removal are receipted,
+///     changed and accounted like any other write, on a fresh run and on a
+///     resume, and a 0.9.0 journal's receipts still read as replaces;
 ///   * **the journal**: the durable tier journals each receipt, encoded, as
 ///     its stage's completed value, and a resumed run is SERVED the dead run's
 ///     receipts — the same writes, the same digests — without re-performing;
@@ -171,9 +175,9 @@ let private union =
               Expect.equal outcome.Receipts expectedReceipts "exactly the two receipts, in perform order"
 
               Expect.equal
-                  (Receipts.writes outcome.Receipts |> List.map (fun w -> w.Target, w.Digest.Text))
-                  [ "title", (ContentDigest.ofText "One").Text
-                    "footer", (ContentDigest.ofText "Two").Text ]
+                  (Receipts.writes outcome.Receipts |> List.map (fun w -> w.Target, w.Kind))
+                  [ "title", WriteKind.Replaced(ContentDigest.ofText "One")
+                    "footer", WriteKind.Replaced(ContentDigest.ofText "Two") ]
                   "each names its target and the digest of what it wrote"
 
               Expect.equal
@@ -208,11 +212,11 @@ let private union =
                         WriteReceipt.ofText "footer" "Tampered" ])
                   (Error
                       [ { Target = "stray"
-                          Digest = ContentDigest.ofText "x"
+                          Staged = [ WriteKind.Replaced(ContentDigest.ofText "x") ]
                           Cause = ForeignCause.Unreceipted }
                         { Target = "footer"
-                          Digest = ContentDigest.ofText "Tampered"
-                          Cause = ForeignCause.DigestDiffers(ContentDigest.ofText "Two") } ])
+                          Staged = [ WriteKind.Replaced(ContentDigest.ofText "Tampered") ]
+                          Cause = ForeignCause.Differs [ WriteKind.Replaced(ContentDigest.ofText "Two") ] } ])
                   "every foreign write, in the order staged"
 
               Expect.equal
@@ -220,7 +224,7 @@ let private union =
                       [ OpReceipt.ofWrites [ WriteReceipt.ofText "t" "1" ]
                         OpReceipt.ofWrites [ WriteReceipt.ofText "t" "2" ] ]
                    |> Map.toList)
-                  [ "t", ContentDigest.ofText "2" ]
+                  [ "t", [ WriteKind.Replaced(ContentDigest.ofText "2") ] ]
                   "a target written twice holds the LAST content"
           }
 
@@ -271,6 +275,253 @@ let private union =
                   foreign.Receipts
                   expectedReceipts
                   "the writes that performed before the refusal are still reported"
+          } ]
+
+// ─── the kinds of write ──────────────────────────────────────────────────────
+
+/// Two appends to one target, a delete of another, then a host call — the
+/// stage the durable kinds test dies in front of (Phase 2223, D65).
+let private appendsAndDelete: Handler<ToyAction, ToyOp> =
+    { Name = "appends-and-delete"
+      Stages =
+        [ Effect(ServerEffect.ApplyOps [ Relabel("title", "+one"); Relabel("title", "+two"); Relabel("footer", "-") ])
+          Effect(ServerEffect.HostCall("audit", JStr "after", None)) ] }
+
+/// The performer: a label `+x` APPENDS `x` at its node's id, `-` DELETES it,
+/// anything else replaces it — each returning the receipt of what it did.
+let private writingKinds (performed: int ref) : OpPerformance<ToyNode, ToyOp> =
+    OpPerformance.performedBy (fun _ op ->
+        performed.Value <- performed.Value + 1
+
+        match op with
+        | Relabel(id, "-") -> Ok(OpReceipt.ofWrites [ WriteReceipt.deleted id ])
+        | Relabel(id, label) when label.StartsWith "+" ->
+            Ok(OpReceipt.ofWrites [ WriteReceipt.appendedText id (label.Substring 1) ])
+        | Relabel(id, label) -> Ok(OpReceipt.ofWrites [ WriteReceipt.ofText id label ]))
+
+let private kindReceipts =
+    [ OpReceipt.ofWrites [ WriteReceipt.appendedText "title" "one" ]
+      OpReceipt.ofWrites [ WriteReceipt.appendedText "title" "two" ]
+      OpReceipt.ofWrites [ WriteReceipt.deleted "footer" ] ]
+
+let private kinds =
+    testList
+        "a receipt names a replace, an append or a delete"
+        [ test "two appends to one target and a delete of another are the receipts, and the changed set names both" {
+              let outcome =
+                  Handler.runWith
+                      witness
+                      (registry (ref 0))
+                      (writingKinds (ref 0))
+                      Fuaran.Compute.DataFrame.noResolve
+                      "node"
+                      appendsAndDelete
+                      store
+
+              Expect.isTrue outcome.Committed "committed"
+              Expect.equal outcome.Receipts kindReceipts "each write, typed by kind, in perform order"
+
+              Expect.equal
+                  (HandlerOutcome.changed outcome)
+                  (Set.ofList [ "title"; "footer" ])
+                  "the appended target and the deleted one, exactly"
+
+              Expect.equal
+                  (Receipts.final outcome.Receipts |> Map.toList)
+                  [ "footer", [ WriteKind.Deleted ]
+                    "title",
+                    [ WriteKind.Appended(ContentDigest.ofText "one")
+                      WriteKind.Appended(ContentDigest.ofText "two") ] ]
+                  "the delete leaves absence; the appends accumulate, in order"
+          }
+
+          test "what the invocation left is the last replace or delete and every append after it" {
+              let final (writes: WriteReceipt list) =
+                  Receipts.final [ OpReceipt.ofWrites writes ] |> Map.find "t"
+
+              Expect.equal
+                  (final [ WriteReceipt.ofText "t" "1"; WriteReceipt.deleted "t" ])
+                  [ WriteKind.Deleted ]
+                  "replaced then deleted: absent"
+
+              Expect.equal
+                  (final [ WriteReceipt.deleted "t"; WriteReceipt.ofText "t" "2" ])
+                  [ WriteKind.Replaced(ContentDigest.ofText "2") ]
+                  "deleted then re-created: the new content"
+
+              Expect.equal
+                  (final [ WriteReceipt.deleted "t"; WriteReceipt.appendedText "t" "a" ])
+                  [ WriteKind.Deleted; WriteKind.Appended(ContentDigest.ofText "a") ]
+                  "deleted then re-created by appending: from nothing, the addition"
+
+              Expect.equal
+                  (final [ WriteReceipt.ofText "t" "1"; WriteReceipt.appendedText "t" "a" ])
+                  [ WriteKind.Replaced(ContentDigest.ofText "1")
+                    WriteKind.Appended(ContentDigest.ofText "a") ]
+                  "replaced then appended: the content, then the addition"
+
+              Expect.equal
+                  (final [ WriteReceipt.appendedText "t" "a"; WriteReceipt.ofText "t" "1" ])
+                  [ WriteKind.Replaced(ContentDigest.ofText "1") ]
+                  "appended then replaced: the replace supersedes the addition"
+          }
+
+          test "a commit stage's staged appends and delete are accounted, and a foreign one of each is refused" {
+              Expect.equal
+                  (Receipts.accountAll
+                      kindReceipts
+                      [ WriteReceipt.deleted "footer"
+                        WriteReceipt.appendedText "title" "one"
+                        WriteReceipt.appendedText "title" "two" ])
+                  (Ok())
+                  "the staged additions, in order, and the staged removal"
+
+              Expect.equal
+                  (Receipts.accountAll
+                      kindReceipts
+                      [ WriteReceipt.appendedText "title" "one"
+                        WriteReceipt.appendedText "title" "two"
+                        WriteReceipt.appendedText "log" "x"
+                        WriteReceipt.deleted "header" ])
+                  (Error
+                      [ { Target = "log"
+                          Staged = [ WriteKind.Appended(ContentDigest.ofText "x") ]
+                          Cause = ForeignCause.Unreceipted }
+                        { Target = "header"
+                          Staged = [ WriteKind.Deleted ]
+                          Cause = ForeignCause.Unreceipted } ])
+                  "an append and a delete no receipt names"
+
+              let appended =
+                  [ WriteKind.Appended(ContentDigest.ofText "one")
+                    WriteKind.Appended(ContentDigest.ofText "two") ]
+
+              Expect.equal
+                  (Receipts.accountAll
+                      kindReceipts
+                      [ WriteReceipt.appendedText "title" "one"
+                        WriteReceipt.appendedText "title" "smuggled"
+                        WriteReceipt.ofText "footer" "still here" ])
+                  (Error
+                      [ { Target = "title"
+                          Staged =
+                            [ WriteKind.Appended(ContentDigest.ofText "one")
+                              WriteKind.Appended(ContentDigest.ofText "smuggled") ]
+                          Cause = ForeignCause.Differs appended }
+                        { Target = "footer"
+                          Staged = [ WriteKind.Replaced(ContentDigest.ofText "still here") ]
+                          Cause = ForeignCause.Differs [ WriteKind.Deleted ] } ])
+                  "another addition, and a target receipted deleted but staged present"
+
+              Expect.isError
+                  (Receipts.accountAll kindReceipts [ WriteReceipt.appendedText "title" "one" ])
+                  "staging one of two additions is not what the invocation left"
+
+              Expect.isError
+                  (Receipts.account kindReceipts (WriteReceipt.ofText "title" "onetwo"))
+                  "an appended target staged as whole content is not accounted: its final content was never claimed"
+
+              Expect.equal
+                  (ForeignWrite.refusal
+                      [ { Target = "footer"
+                          Staged = [ WriteKind.Replaced(ContentDigest.ofText "x") ]
+                          Cause = ForeignCause.Differs [ WriteKind.Deleted ] } ])
+                  ("foreign-write: footer (staged "
+                   + (ContentDigest.ofText "x").Text
+                   + ", receipted deleted)")
+                  "the refusal names both kinds, never the content"
+          }
+
+          test
+              "each kind round-trips through its journaled form, a 0.9.0 write reads as a replace, and any other shape is refused" {
+              let receipt =
+                  { Writes =
+                      [ WriteReceipt.ofText "a" "1"
+                        WriteReceipt.appendedText "b" "2"
+                        WriteReceipt.deleted "c" ]
+                    Detail = JObj [] }
+
+              Expect.equal (OpReceipt.decode (OpReceipt.encode receipt)) (Ok receipt) "round-trips, writes in order"
+
+              let digest = (ContentDigest.ofText "1").Text
+
+              Expect.equal
+                  (OpReceipt.encode (OpReceipt.ofWrites [ WriteReceipt.ofText "a" "1" ]))
+                  (JObj
+                      [ "writes", JArr [ JObj [ "target", JStr "a"; "digest", JStr digest ] ]
+                        "detail", JObj [] ])
+                  "a replace is still written in the 0.9.0 form"
+
+              let journaled090 =
+                  JObj
+                      [ "writes", JArr [ JObj [ "target", JStr "a"; "digest", JStr digest ] ]
+                        "detail", JObj [ "sha", JStr "abc" ] ]
+
+              Expect.equal
+                  (OpReceipt.decode journaled090)
+                  (Ok
+                      { Writes = [ WriteReceipt.ofText "a" "1" ]
+                        Detail = JObj [ "sha", JStr "abc" ] })
+                  "a 0.9.0 journal's receipt, which names no kind, decodes as a replace"
+
+              let refused (write: JVal) =
+                  match OpReceipt.decode (JObj [ "writes", JArr [ write ]; "detail", JObj [] ]) with
+                  | Error reason -> reason.StartsWith OpReceipt.MalformedCode
+                  | Ok _ -> false
+
+              Expect.isTrue
+                  (refused (JObj [ "target", JStr "a"; "kind", JStr "truncate"; "digest", JStr digest ]))
+                  "an unknown kind"
+
+              Expect.isTrue
+                  (refused (JObj [ "target", JStr "a"; "kind", JStr "replace"; "digest", JStr digest ]))
+                  "a spelled-out replace is not the replace's form"
+
+              Expect.isTrue
+                  (refused (JObj [ "target", JStr "a"; "kind", JStr "delete"; "digest", JStr digest ]))
+                  "a delete carrying a digest"
+
+              Expect.isTrue (refused (JObj [ "target", JStr "a"; "kind", JStr "append" ])) "an append with no digest"
+              Expect.isTrue (refused (JObj [ "target", JStr "a" ])) "a target alone is not read as a delete"
+          }
+
+          test "a resumed run is served the dead run's appends and delete, and accounts them as a fresh run does" {
+              let journal = freshJournal ()
+              let performed = ref 0
+              let audits = ref 0
+
+              let run (journal: EffectJournal) =
+                  Durable.runWith
+                      witness
+                      (DurableServices.create |> DurableServices.withJournal journal)
+                      "inv"
+                      (registry audits)
+                      (writingKinds performed)
+                      Fuaran.Compute.DataFrame.noResolve
+                      "node"
+                      appendsAndDelete
+                      store
+
+              let died = crashing (fun () -> run (dyingBeforeAttempting 3 journal))
+
+              Expect.isTrue died "died in front of the host call, after the three writes"
+              Expect.equal performed.Value 3 "the appends and the delete performed"
+
+              let resumed = run journal
+
+              Expect.isTrue resumed.Outcome.Committed "committed"
+              Expect.equal resumed.Replayed [ 0; 1; 2 ] "every op stage was served"
+              Expect.equal performed.Value 3 "no write was performed again"
+              Expect.equal resumed.Outcome.Receipts kindReceipts "the served receipts carry their kinds"
+
+              Expect.equal
+                  (HandlerOutcome.account
+                      resumed.Outcome
+                      [ WriteReceipt.appendedText "title" "one"
+                        WriteReceipt.appendedText "title" "two"
+                        WriteReceipt.deleted "footer" ])
+                  (Ok())
+                  "the resumed outcome accounts the staged additions and removal"
           } ]
 
 // ─── the journal ─────────────────────────────────────────────────────────────
@@ -341,4 +592,4 @@ let private journal =
 
 [<Tests>]
 let receiptTests =
-    testList "Phase 2197 - a performed write's receipt is its return value" [ digest; union; journal ]
+    testList "Phase 2197 - a performed write's receipt is its return value" [ digest; union; kinds; journal ]
