@@ -50,7 +50,7 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
-## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223, 2620)
+## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223, 2620, 2383)
 
 **Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
 the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded
@@ -338,6 +338,21 @@ these members empty still encodes, and the document it encodes to is the one now
 `toy-outcome/reject-empty-channel`, `reject-empty-performed`, `reject-empty-denial-capability`,
 `reject-empty-failed-capability` and `reject-empty-perform-failed-capability`, which the corpus suite
 runs, and by `NonEmptyMemberTests` at this suite's own witness.
+
+### Rides the draft: the proof models ship as a release asset (Phase 2383)
+
+**Class: additive, and not a package surface.** No package, type, member or wire document moves.
+`DECISIONS.md` D67 records what was decided.
+
+**What a consumer gains.** The `v0.14.0` release, and every `v*` release after it, carries
+`proofs-program-0.14.0.tar` (`proofs-program-<version>.tar`): the five proof models, the runtime
+floor and the five extractions, built reproducibly from `proofs/asset.json`, whose committed `sha256`
+is the archive's. A repository whose proof leg re-checks a model here pins the asset's url and that
+sha256 instead of copying files, opens the models read-only and holds its committed extractions to
+the asset's bytes. Before the tag publishes it, `pwsh ./proofs/check.ps1 -AssetOnly -AssetOutDir <dir>`
+builds the same bytes locally (`proofs/README.md`, "The release asset").
+
+**What a consumer pays:** nothing at the packages.
 
 ## 0.13.1 — a typed read hashes its content only when a second read could use the memo (fuaran#2461)
 

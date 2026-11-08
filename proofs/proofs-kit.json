@@ -1,0 +1,8 @@
+{
+  "kind": "proofsKitPin",
+  "$comment": "Phase 2383: where this repository's ASSET BUILDER comes from. The proof models here ship to other repositories as one reproducible release asset (asset.json beside this file), and the builder for it is the proof kit's own `kit/build-kit-asset.ps1`, which the kit asset carries (fuaran-core DECISIONS.md D245: a producer that does not adopt the kit obtains the builder by pinning the kit asset). This repository does NOT adopt the kit's proof leg — check.ps1 runs its own — so the kit is pinned here for the builder alone. check.ps1 downloads the asset from `url` (or takes the local file -KitAsset / FUARAN_PROOFS_KIT_ASSET names: the offline path), refuses any bytes whose sha256 is not this one, and runs the builder from the unpacked asset. The builder's output is a function of the declared files alone, so which kit release supplies it does not move this repository's asset sha. Moving to a newer kit is changing these four values together.",
+  "kit": "0.41.0",
+  "asset": "proofs-kit-0.41.0.tar",
+  "url": "https://github.com/Fuaran-Core/fuaran-core/releases/download/v0.41.0/proofs-kit-0.41.0.tar",
+  "sha256": "7cc11505a341be9487403a54008f6d40ddb0acbf4a500d6def68683d73286b85"
+}

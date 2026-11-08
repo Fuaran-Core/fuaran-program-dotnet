@@ -123,3 +123,82 @@ jobs:
               --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} \
               --skip-duplicate
           done
+
+  # Phase 2383 (DECISIONS.md D67) — a publish also attaches THE PROOF MODELS' RELEASE ASSET,
+  # `proofs-program-<Version>.tar`: the models, the runtime floor and the extractions another
+  # repository's proof leg re-checks, pinned there by sha256 instead of copied. The job builds it
+  # with `proofs/check.ps1 -AssetOnly` (the proof kit's builder, from the kit asset pinned in
+  # proofs/proofs-kit.json and verified before it is unpacked; reproducible, so its sha256 is a
+  # function of the declared files alone), which REFUSES to go on when that sha is not the one
+  # proofs/asset.json commits. It attaches the asset to the `v<Version>` GitHub release, creating
+  # the release when the tag has none; an asset already attached is downloaded and compared instead
+  # of replaced (the same bytes pass, different bytes fail the job). It then downloads the asset from
+  # its public url and checks the sha once more, so what a consumer's pin fetches is what was
+  # verified. TAG-ONLY: a dispatch on a branch skips it, and a tag that does not name <Version> is
+  # refused before anything is built. The one job granted `contents: write`.
+  proofs-asset:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Refuse a tag that does not name <Version>
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Select-Xml -Path Directory.Build.props -XPath '//PropertyGroup/Version' | Select-Object -First 1).Node.InnerText.Trim()
+          if ($env:TAG -ne "v$version") { throw "the tag $($env:TAG) does not name Directory.Build.props's <Version> $version; no asset is built for it" }
+
+      - name: Build the asset and hold it to proofs/asset.json's sha256
+        shell: pwsh
+        run: pwsh ./proofs/check.ps1 -AssetOnly -AssetOutDir "${{ runner.temp }}/proofs-asset"
+
+      - name: Attach it to the release for the tag, never replacing different bytes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:TAG.TrimStart('v')
+          $asset = "proofs-program-$version.tar"
+          $built = Join-Path "${{ runner.temp }}/proofs-asset" $asset
+          $sha = (Get-Content proofs/asset.json -Raw | ConvertFrom-Json).sha256
+          if ((Get-FileHash $built -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) { throw "$built is not the committed sha256 $sha" }
+          gh release view $env:TAG --json tagName *> $null
+          if ($LASTEXITCODE -ne 0) {
+              gh release create $env:TAG --verify-tag --title $env:TAG --notes "Fuaran.Program $version. The proof models for this release are $asset, sha256 $sha (proofs/README.md, The release asset)."
+              if ($LASTEXITCODE -ne 0) { throw "could not create the release for $($env:TAG)" }
+          }
+          $attached = @(gh release view $env:TAG --json assets --jq '.assets[].name')
+          if ($attached -contains $asset) {
+              $existing = Join-Path "${{ runner.temp }}" "attached-$asset"
+              gh release download $env:TAG --pattern $asset --output $existing --clobber
+              $existingSha = (Get-FileHash $existing -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($existingSha -ne $sha) { throw "$asset is already attached to $($env:TAG) with sha256 $existingSha, not the committed $sha. Nothing was replaced." }
+              Write-Host "$asset is already attached with the committed sha256 $sha"
+          }
+          else {
+              gh release upload $env:TAG $built
+              if ($LASTEXITCODE -ne 0) { throw "could not attach $asset to $($env:TAG)" }
+          }
+
+      - name: Fetch the asset from its public url and check the sha once more
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:TAG.TrimStart('v')
+          $url = "https://github.com/${{ github.repository }}/releases/download/$($env:TAG)/proofs-program-$version.tar"
+          $sha = (Get-Content proofs/asset.json -Raw | ConvertFrom-Json).sha256
+          $fetched = Join-Path "${{ runner.temp }}" "fetched-proofs-program-$version.tar"
+          Invoke-WebRequest -Uri $url -OutFile $fetched -MaximumRedirection 5
+          $fetchedSha = (Get-FileHash $fetched -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($fetchedSha -ne $sha) { throw "$url serves sha256 $fetchedSha, not the committed $sha" }
+          Write-Host "$url serves the committed sha256 $sha"

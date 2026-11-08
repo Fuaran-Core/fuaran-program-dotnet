@@ -1,0 +1,19 @@
+{
+  "kind": "proofsAsset",
+  "assetPrefix": "proofs-program",
+  "$comment": "THE PROOF MODELS' RELEASE ASSET, declared (Phase 2383, DECISIONS.md D67). Another repository whose proof leg re-checks a model here, and whose differential hosts compile its extraction, takes them as ONE versioned archive, `proofs-program-<version>.tar`, pinned by sha256 — never as copied files. The publish workflow builds it on a `v*` tag and attaches it to that release; `check.ps1 -AssetOnly` builds it from this declaration with the proof kit's builder (pinned in proofs-kit.json) and holds the result to `sha256` below, which the Proofs.Asset family in the test suite runs on every gate. This file is the archive's contents: the builder reads `files` and nothing else, sorted ordinally by `as`, so what the asset carries is decided here and nowhere else. Each entry is a file under proofs/ (`path`) and where it sits in the archive (`as`). The archive is an uncompressed ustar tar, every entry at the Unix epoch, mode 0644, owner 0:0, no owner names, text LF — so its sha256 is a function of these files' bytes alone, and a release that moves none of them carries the sha of the last. Roles: `model` files are checked READ-ONLY from the asset by a consumer's proof leg (`-ModelDirs`): it opens them, never copies them; `floor` is the hand-written runtime every extraction compiles against, and `extraction` is a committed F* extraction, both of which a consumer COMMITS in its own oracle directory (an oracle project compiles nothing outside it) and its leg holds to this asset's bytes (`-FloorDir`). `sha256` is the committed sha of the archive this list builds: a commit that moves a declared file moves it too (`check.ps1 -AssetOnly -UpdateAsset`). This declaration is not itself in the archive, which is why it can hold that sha.",
+  "files": [
+    { "path": "BoundedFold.fst", "as": "models/BoundedFold.fst", "role": "model", "note": "The bounded fold over the action view (Phase 1715)." },
+    { "path": "Budget.fst", "as": "models/Budget.fst", "role": "model", "note": "The interaction budget (Phase 1716)." },
+    { "path": "Staging.fst", "as": "models/Staging.fst", "role": "model", "note": "The handler loop's and the durable interpreter's staging (Phase 1717). EffectGate and Undo open it." },
+    { "path": "EffectGate.fst", "as": "models/EffectGate.fst", "role": "model", "note": "The effect gate (Phase 1759). Opens Staging." },
+    { "path": "Undo.fst", "as": "models/Undo.fst", "role": "model", "note": "Undo (Phase 1977). Opens Staging." },
+    { "path": "oracle/Prims.fs", "as": "oracle/Prims.fs", "role": "floor", "note": "This repository's runtime floor, not the kit's: a different file for a different model family." },
+    { "path": "oracle/BoundedFold.fs", "as": "oracle/BoundedFold.fs", "role": "extraction", "note": "The extraction of BoundedFold, byte-identical to a fresh one (check.ps1 step 4)." },
+    { "path": "oracle/Budget.fs", "as": "oracle/Budget.fs", "role": "extraction", "note": "The extraction of Budget." },
+    { "path": "oracle/Staging.fs", "as": "oracle/Staging.fs", "role": "extraction", "note": "The extraction of Staging." },
+    { "path": "oracle/EffectGate.fs", "as": "oracle/EffectGate.fs", "role": "extraction", "note": "The extraction of EffectGate." },
+    { "path": "oracle/Undo.fs", "as": "oracle/Undo.fs", "role": "extraction", "note": "The extraction of Undo." }
+  ],
+  "sha256": "31c4e58af8d5af79c7539dc6be16aca92fbee7d9bca0efb42d8064a3925a4b1b"
+}

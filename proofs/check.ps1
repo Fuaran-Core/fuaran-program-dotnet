@@ -11,9 +11,10 @@
 
         pwsh ./proofs/check.ps1
 
-    Six steps, in this order, each refusing rather than warning. Steps
+    Seven steps, in this order, each refusing rather than warning. Steps
     2-4 and 6 run once PER MODULE in `$modules` below; step 5 builds the
-    one oracle project every extraction compiles into.
+    one oracle project every extraction compiles into; step 7 builds the
+    release asset the models ship to other repositories in.
 
       1. Resolve the pinned F* release named in `fstar-pin.json` — an
          existing $env:FSTAR_HOME first, then a previous download under
@@ -39,12 +40,22 @@
          fuaran#2012 it is the ONLY host: the UI adapters left the
          repository, and the second hosts at the UI witness went with them
          (the two claims about the adapter's own code are hosted beside it
-         now, over byte copies of BoundedFold.fst and Budget.fst and their
-         extractions — see proofs.json `repo`). Skippable with
+         now, over BoundedFold.fst, Budget.fst and their extractions as
+         that repository pins them, in the release asset of step 7 — see
+         proofs.json `repo`). Skippable with
          `-SkipHost`, because it needs the solution built and the proof
          half does not — and the toy-family hosts need the conformance
          corpus (`FUARAN_PROGRAM_SPEC` or the sibling clone), exactly as
          `run.ps1` does.
+      7. BUILD the release asset, `proofs-program-<version>.tar`
+         (Phase 2383, DECISIONS.md D67), from `asset.json`'s declared
+         list with the proof kit's builder — the kit asset pinned in
+         `proofs-kit.json`, verified by sha256 before it is unpacked —
+         and hold its sha256 to the one `asset.json` commits. The
+         asset is how a repository whose leg re-checks these models
+         takes them: pinned by sha256, opened read-only, never copied.
+         `-AssetOnly` runs this step alone, with no prover; it is what
+         the `Proofs.Asset` test family and the publish workflow run.
 
     Two things about reproducibility are worth knowing before reading
     the flags.
@@ -86,15 +97,48 @@
     $env:FSTAR_HOME. The version is REPORTED and, when it differs from
     the pin, called out loudly — a green run against an unpinned prover
     is a different claim from a green run against the pinned one.
+
+.PARAMETER AssetOnly
+    Run step 7 alone — build the release asset and hold its sha256 to
+    `asset.json` — and exit: 0 when it matches, 1 when a declared file
+    moved without the committed sha moving with it, 2 when the kit or
+    the declaration cannot be used. Needs no prover.
+
+.PARAMETER UpdateAsset
+    In step 7, rewrite `asset.json`'s `sha256` to the built one instead
+    of checking it. The commit that moves a declared file moves it.
+
+.PARAMETER AssetOutDir
+    Where step 7 writes the archive. Default `proofs/obj/asset/`
+    (gitignored). A consumer's offline path builds here and hands the
+    file to its own leg, which verifies the sha all the same.
+
+.PARAMETER KitAsset
+    The pinned kit asset as a local file instead of the pin's `url` (or
+    `$env:FUARAN_PROOFS_KIT_ASSET`): the OFFLINE path. Its sha256 is
+    verified against `proofs-kit.json` all the same, so an override can
+    only ever be the pinned kit, delivered another way.
 #>
 [CmdletBinding()]
 param(
     [int] $Runs = 1,
     [switch] $SkipHost,
-    [string] $FStarHome
+    [string] $FStarHome,
+    [switch] $AssetOnly,
+    [switch] $UpdateAsset,
+    [string] $AssetOutDir,
+    [string] $KitAsset
 )
 
 $ErrorActionPreference = "Stop"
+
+# Paths a caller passes are the CALLER's, so they resolve before the
+# location moves.
+$callerDir = (Get-Location -PSProvider FileSystem).ProviderPath
+if (-not $KitAsset) { $KitAsset = $env:FUARAN_PROOFS_KIT_ASSET }
+if ($KitAsset) { $KitAsset = [System.IO.Path]::GetFullPath($KitAsset, $callerDir) }
+if ($AssetOutDir) { $AssetOutDir = [System.IO.Path]::GetFullPath($AssetOutDir, $callerDir) }
+
 Set-Location $PSScriptRoot
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -184,9 +228,93 @@ function Fail {
     exit 1
 }
 
+# --- 7. The release asset (Phase 2383) --------------------------------
+#
+# Defined before step 1 so `-AssetOnly` can run it with no prover. The
+# builder is the proof kit's, never a second one: the kit asset carries
+# `kit/build-kit-asset.ps1` (fuaran-core D245), so the kit is pinned in
+# proofs-kit.json, verified by sha256 BEFORE anything is unpacked, and
+# the builder runs from the unpacked asset over asset.json. Its exit
+# code is this step's: 1 is a sha that moved, 2 a declaration (or here,
+# a kit) that cannot be used.
+
+function Stop-Asset {
+    param([string] $Text, [int] $Code)
+    Write-Host ""
+    Write-Host "PROOF LEG FAILED (release asset): $Text" -ForegroundColor Red
+    exit $Code
+}
+
+function Invoke-ReleaseAsset {
+    $kitPinFile = Join-Path $PSScriptRoot "proofs-kit.json"
+    $kitPin = Get-Content $kitPinFile -Raw | ConvertFrom-Json
+
+    if ($kitPin.kind -ne "proofsKitPin" -or -not $kitPin.asset -or -not $kitPin.url -or $kitPin.sha256 -notmatch '^[0-9a-f]{64}$') {
+        Stop-Asset "$kitPinFile is not a kit pin (kind proofsKitPin, kit, asset, url, a 64-hex sha256)." 2
+    }
+
+    $kitRoot = Join-Path $PSScriptRoot "obj/kit"
+    New-Item -ItemType Directory -Force -Path $kitRoot | Out-Null
+    $archive = Join-Path $kitRoot $kitPin.asset
+
+    if ($KitAsset) {
+        if (-not (Test-Path $KitAsset -PathType Leaf)) { Stop-Asset "the local kit asset '$KitAsset' does not exist." 2 }
+        $kitSource = $KitAsset
+        # The cache itself is a legitimate local file to name; it is verified below like any other.
+        if ($KitAsset -ne $archive) { Copy-Item $KitAsset $archive -Force }
+    }
+    else {
+        $kitSource = $kitPin.url
+        $held = (Test-Path $archive) -and (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -eq $kitPin.sha256
+
+        if (-not $held) {
+            try { Invoke-WebRequest -Uri $kitPin.url -OutFile $archive -MaximumRedirection 5 }
+            catch { Stop-Asset "could not download the pinned kit asset from $($kitPin.url): $($_.Exception.Message). Offline, pass -KitAsset <file>." 2 }
+        }
+    }
+
+    $kitSha = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    if ($kitSha -ne $kitPin.sha256) {
+        Remove-Item $archive -Force -ErrorAction SilentlyContinue
+        Stop-Asset "REFUSED the kit asset from ${kitSource}: its sha256 is $kitSha, the pin ($kitPinFile) is $($kitPin.sha256). Nothing was unpacked." 2
+    }
+
+    # Unpacked fresh per invocation, so the builder that runs is exactly
+    # the verified bytes.
+    $kit = Join-Path $kitRoot "run-$PID"
+    Remove-Item $kit -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $kit | Out-Null
+    [System.Formats.Tar.TarFile]::ExtractToDirectory($archive, $kit, $false)
+    Write-Host "    kit $($kitPin.kit) ($($kitPin.asset), sha256 $kitSha) from $kitSource"
+
+    $builder = Join-Path $kit "kit/build-kit-asset.ps1"
+    if (-not (Test-Path $builder)) { Stop-Asset "the pinned kit asset carries no kit/build-kit-asset.ps1." 2 }
+
+    $manifest = Join-Path $PSScriptRoot "asset.json"
+    $outDir = if ($AssetOutDir) { $AssetOutDir } else { Join-Path $PSScriptRoot "obj/asset" }
+    $mode = if ($UpdateAsset) { @{ Update = $true } } else { @{ Check = $true } }
+
+    # `&` and not `.`: the builder ends in `exit`, which a dot-source would
+    # make this script's exit, leaving the unpacked kit behind.
+    & $builder -Manifest $manifest -ShaFile $manifest -ShaPath "sha256" -OutDir $outDir @mode
+    $code = $LASTEXITCODE
+    Remove-Item $kit -Recurse -Force -ErrorAction SilentlyContinue
+
+    if ($code -ne 0) { Stop-Asset "the asset builder exited $code (1: a declared file moved without asset.json's sha256 moving with it; 2: a declaration it cannot build from)." $code }
+}
+
+if ($AssetOnly) {
+    Write-Step "7/7  The release asset (-AssetOnly: no prover)"
+    Invoke-ReleaseAsset
+    Write-Host ""
+    Write-Host "RELEASE ASSET GREEN — built from asset.json, $(if ($UpdateAsset) { 'its sha256 recorded there' } else { 'identical to the sha256 it commits' })." -ForegroundColor Green
+    exit 0
+}
+
 # --- 1. Resolve the pinned prover ------------------------------------
 
-Write-Step "1/6  Resolving the pinned prover ($($pin.version), Z3 $($pin.z3version))"
+Write-Step "1/7  Resolving the pinned prover ($($pin.version), Z3 $($pin.z3version))"
 
 # Windows only for now, and that is declared rather than assumed: the
 # pin's linux-x64 entry carries an EMPTY sha256 because nothing has run
@@ -279,7 +407,7 @@ $quakeFlags = @($pin.flags.quake)
 $moduleNames = ($modules | ForEach-Object { $_.Name }) -join ", "
 
 for ($run = 1; $run -le $Runs; $run++) {
-    Write-Step "2/6  Checking $moduleNames (run $run of $Runs, COLD cache$(if ($Runs -gt 1) { ', --quake 3' }))"
+    Write-Step "2/7  Checking $moduleNames (run $run of $Runs, COLD cache$(if ($Runs -gt 1) { ', --quake 3' }))"
 
     # Cold every run, deliberately. A warm `.checked` file is F* telling
     # you it already believed this, which is exactly the thing a repeat
@@ -298,7 +426,7 @@ for ($run = 1; $run -le $Runs; $run++) {
     }
 }
 
-Write-Step "3/6  Extracting $moduleNames to F#"
+Write-Step "3/7  Extracting $moduleNames to F#"
 
 Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
@@ -314,7 +442,7 @@ foreach ($module in $modules) {
     if ($LASTEXITCODE -ne 0) { Fail "extraction of $($module.Source) failed (exit $LASTEXITCODE)." }
 }
 
-Write-Step "4/6  Byte-diffing each extraction against its committed oracle"
+Write-Step "4/7  Byte-diffing each extraction against its committed oracle"
 
 foreach ($module in $modules) {
     $fresh = Join-Path $extractDir "$($module.Name).fs"
@@ -347,7 +475,7 @@ foreach ($module in $modules) {
 
 # --- 5. Build the oracle ---------------------------------------------
 
-Write-Step "5/6  Building the oracle project"
+Write-Step "5/7  Building the oracle project"
 
 & dotnet build (Join-Path $PSScriptRoot "oracle/Fuaran.Program.Proofs.Oracle.fsproj") --nologo -v q
 if ($LASTEXITCODE -ne 0) { Fail "a committed extraction does not compile (exit $LASTEXITCODE)." }
@@ -355,10 +483,10 @@ if ($LASTEXITCODE -ne 0) { Fail "a committed extraction does not compile (exit $
 # --- 6. The differential hosts ---------------------------------------
 
 if ($SkipHost) {
-    Write-Step "6/6  Differential hosts SKIPPED (-SkipHost)"
+    Write-Step "6/7  Differential hosts SKIPPED (-SkipHost)"
 }
 else {
-    Write-Step "6/6  Running the differential hosts"
+    Write-Step "6/7  Running the differential hosts"
 
     # One build per DISTINCT host project, before any host runs — so a
     # host project that does not build fails the leg before a module's
@@ -405,6 +533,11 @@ else {
     }
 }
 
+# --- 7. The release asset --------------------------------------------
+
+Write-Step "7/7  Building the release asset and holding it to asset.json"
+Invoke-ReleaseAsset
+
 Write-Host ""
-Write-Host "PROOF LEG GREEN — $($pin.version), $Runs cold check(s) of $($modules.Count) module(s), every extraction identical to its committed oracle." -ForegroundColor Green
+Write-Host "PROOF LEG GREEN — $($pin.version), $Runs cold check(s) of $($modules.Count) module(s), every extraction identical to its committed oracle, the release asset identical to its committed sha256." -ForegroundColor Green
 exit 0

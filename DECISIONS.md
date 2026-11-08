@@ -5150,3 +5150,54 @@ host's construction, not a document it received.
 **Not decided here:** the Rust core of the generic program certifies the same toy subject and is not
 on this machine; it takes the six new toy vectors when it next advances its pin of the
 specification. `STABILITY.md` records the narrowed decode on the `0.14.0` draft.
+
+## D67 — The proof models ship as ONE release asset, `proofs-program-<version>.tar`, built by the proof kit's own builder from `proofs/asset.json`, which commits its sha256; the builder is obtained by pinning the kit asset by url and sha256; the gate holds the sha, a `v*` tag attaches the asset and refuses a mismatch; D64's deferral is closed (2026-11-08)
+
+**Context.** D64 stopped Phase 2383 at the producer leg: `fuaran-core`'s asset builder served one
+producer, its own kit. `fuaran-core#606` made it serve a second one and released it in the kit asset of
+`v0.41.0`: `build-kit-asset.ps1` now takes `-Manifest` (a declaration of kind `proofsAsset` naming its
+own `assetPrefix`, so the archive is `<assetPrefix>-<version>.tar`), `-ShaFile` and `-ShaPath`, and with
+none of them builds the kit exactly as before. Its D245 settled the question D64 left open: a producer
+that does not adopt the kit obtains the builder by pinning the kit asset, which carries it as
+`kit/build-kit-asset.ps1`. This entry is the resumed design; D64 stays as the record of why it waited.
+
+**Decided.**
+
+1. **The declaration.** `proofs/asset.json`, kind `proofsAsset`, `assetPrefix` `proofs-program`, declares
+   eleven files: the five models under `models/`, the runtime floor `oracle/Prims.fs`, and the five
+   extractions under `oracle/`. All five models rather than D64's two, because every extraction the
+   asset carries is then checkable against the model it was extracted from by whoever opens it, and
+   `EffectGate` and `Undo` open `Staging`; a consumer opens only what its roster names.
+2. **The committed sha lives in the declaration**, as `asset.json`'s `sha256`. This repository has no
+   `copies.json` (it declares no copies), and the declaration is not itself in the archive, so it can
+   hold the archive's hash without a cycle; one file then says both what the asset carries and which
+   bytes that is. The builder reads and rewrites it through `-ShaFile proofs/asset.json -ShaPath sha256`,
+   in place, every other byte untouched.
+3. **The builder is pinned, not vendored.** `proofs/proofs-kit.json` pins the kit asset by its release
+   url and sha256 (`proofsKitPin`, kit `0.41.0`), never by a commit of `fuaran-core`: the url and the
+   sha are the pin. This repository runs its own proof leg, so the kit is pinned for the builder alone.
+   `proofs/check.ps1` fetches it into `proofs/obj/kit/` (or takes `-KitAsset` / `FUARAN_PROOFS_KIT_ASSET`,
+   the offline path), REFUSES any bytes whose sha256 is not the pin's before anything is unpacked (exit
+   2), unpacks it fresh per run and calls the builder from there. The builder's output is a function of
+   the declared files alone, so which kit release supplies it does not move this repository's sha. No
+   `Fuaran.Core` package pin moves for it.
+4. **One entry point, three callers.** `check.ps1 -AssetOnly` builds the asset and holds it to the
+   committed sha with no prover (exit 1 when a declared file moved without the sha, naming the remedy
+   `-UpdateAsset`); the full leg runs the same step last, as step 7, after the extractions are held to
+   the models. The `Proofs.Asset` family in `Fuaran.Program.Tests` runs it on every gate (two builds,
+   the same bytes, the committed sha; a planted edit to a model is refused; an impostor kit is refused
+   before anything is unpacked). The publish workflow's tag-only `proofs-asset` job runs it on a `v*`
+   tag naming `<Version>`, attaches the archive to that release (an asset already attached is compared,
+   never replaced), and re-fetches the public url to check the sha once more.
+5. **A consumer may build the asset before the tag exists.** Because the bytes are reproducible,
+   `check.ps1 -AssetOnly -AssetOutDir <dir>` here builds exactly what the `v<Version>` release will
+   carry, so a consumer can pin the release url and the committed sha ahead of the tag and verify its
+   leg offline from the local file, as `fuaran-core#536` did for the kit; its online path resolves once
+   the release publishes.
+
+**What a consumer does with it** is D64's shape, unchanged: open the models read-only (`-ModelDirs`),
+commit the floor and the extractions it compiles beside its oracle project and hold them to the asset
+(`-FloorDir`), declare no copy of either.
+
+**Not changed.** No package surface. The asset rides the untagged `0.14.0` draft as an additive release
+artefact (`STABILITY.md`); a release that moves no declared file carries the sha of the last.

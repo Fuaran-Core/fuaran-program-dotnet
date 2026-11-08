@@ -88,6 +88,8 @@
     <!-- Phase 2261 (D54): a declared quantity priced before the program runs. -->
     <Compile Include="QuantityBudgetTests.fs" />
     <Compile Include="EffectQuantityTests.fs" />
+    <!-- Phase 2383: the proof models' release asset, held to its committed sha256. -->
+    <Compile Include="ProofsAssetTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>

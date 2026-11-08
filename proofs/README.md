@@ -48,6 +48,46 @@ what is not is stated just as precisely, because an unstated exclusion reads, to
 it later, as a claim that failed. `proofs.json` at the repository root is the same ladders as
 data, for a reader that is a program.
 
+The models leave this repository one way: as a pinned, reproducible [release
+asset](#the-release-asset-phase-2383), never as copies.
+
+## The release asset (Phase 2383)
+
+A repository whose proof leg re-checks a model here, and whose differential hosts compile one of
+its extractions, takes them as ONE versioned release asset, `proofs-program-<version>.tar`, pinned
+by sha256 — never as copied files that drift (`DECISIONS.md` D67). The asset carries the five
+models under `models/`, which a consumer's leg checks read-only (`-ModelDirs`), and the runtime
+floor and the five extractions under `oracle/`, which a consumer commits in its own oracle
+directory (an oracle project compiles nothing outside it) and its leg holds byte-identical to the
+asset (`-FloorDir`).
+
+- **What it carries** is `asset.json` beside this file: every declared file, where it sits in the
+  archive and its role. Nothing else decides it; the builder never walks a directory.
+- **How it is built** is the proof kit's builder, not a second one. This repository does not adopt
+  the kit's proof leg (its own `check.ps1` is above), so it pins the kit asset in `proofs-kit.json`
+  for the builder alone (`kit/build-kit-asset.ps1`, which the kit asset carries; the kit's own
+  `DECISIONS.md` D245). `check.ps1` fetches the kit asset into `obj/kit/` — or takes the local file
+  `-KitAsset` / `FUARAN_PROOFS_KIT_ASSET` names, the offline path — refuses it unless its sha256 is
+  the pin's, unpacks it, and runs the builder over `asset.json`. The archive is uncompressed ustar
+  with fixed order, epoch timestamps, mode 0644, owner 0:0 and LF text, so its sha256 is a function
+  of the declared files' bytes alone: the version names the file and is not inside it, and a
+  release that moves no declared file carries the sha of the last.
+- **Where the sha lives** is `asset.json`'s `sha256`, which the declaration can hold because it is
+  not itself in the archive. `check.ps1 -AssetOnly` (no prover) builds the asset and holds it to
+  that sha; it is step 7 of the full leg too, after the extractions are held to the models. The
+  commit that moves a declared file moves the sha with it: `pwsh ./proofs/check.ps1 -AssetOnly
+  -UpdateAsset`.
+- **What holds it** is the `Proofs.Asset` family in `tests/Fuaran.Program.Tests`, on every gate: two
+  builds of the tree are the same bytes and the committed sha, a planted edit to a model moves the
+  sha and is refused, and a kit asset with the wrong bytes is refused before anything is unpacked.
+- **How it ships** is the publish workflow, on a `v*` tag only: the `proofs-asset` job builds it,
+  refuses a sha that is not the committed one, attaches it to the `v<Version>` release (comparing
+  rather than replacing an asset already attached), and fetches it back from its public url to check
+  the sha once more. A consumer pins
+  `https://github.com/Fuaran-Core/fuaran-program-dotnet/releases/download/v<Version>/proofs-program-<Version>.tar`
+  and that sha256; before the tag exists, it builds the same bytes here with `-AssetOutDir <dir>` and
+  hands the file to its own leg, which verifies the sha all the same.
+
 ## The three axes — which theorem names which member (Phase 1974)
 
 Phase 1974 cuts `ProgramWitness` into three records (`DECISIONS.md` D20): a required **state** axis
@@ -477,7 +517,9 @@ differential is what says the discharged instance is the shipped one.
 > `tests/Fuaran.Program.Tests`, at the toy witness (fuaran#2017 put them there). The UI-witness hosts
 > this section describes — the two claims ABOUT the UI adapter, `model-agrees-with-shipped-code` and
 > `budget-model-agrees-with-shipped-code` — moved with the adapter to the UI tier's repository, which
-> runs them over byte copies of `BoundedFold.fst`, `Budget.fst` and their extractions; their rows in
+> runs them over `BoundedFold.fst`, `Budget.fst` and their extractions as this repository's
+> [release asset](#the-release-asset-phase-2383) carries them (pinned by sha256 since Phase 2383,
+> byte copies before it); their rows in
 > `proofs.json` carry `repo` and that repository's paths. The text below is the record of how the
 > ladder was built, with the paths it had then.
 
