@@ -50,7 +50,12 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
-## 0.14.0 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223, 2620, 2383)
+## 0.14.1 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223, 2620, 2383)
+
+**0.14.0 was never released.** It was a draft slot that was packed to a local feed more than once while its
+public surface was still moving (`Fuaran.Program.Bounded` and `Fuaran.Program.Server` each packed with two
+different surfaces), and local consumers built against those packs. A released version names one contract, so
+the release names the next patch instead; every entry below ships in `0.14.1`. Nothing published carries 0.14.0.
 
 **Class: breaking.** `v0.13.1` is tagged, so this cannot ride it: a public record gains a field, so
 the work lands for the `0.14.0` slot. The substrate does not move, and neither does the demanded

@@ -227,7 +227,7 @@
          Phase 2223 rides it, breaking (the draft's class): a write receipt
          names its kind, `WriteKind` replace / append / delete, in place of
          `WriteReceipt.Digest` (DECISIONS.md D65). -->
-    <Version>0.14.0</Version>
+    <Version>0.14.1</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
          else. Undeclared would read as `local-feed`, under which a pin only this
