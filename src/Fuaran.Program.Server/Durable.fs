@@ -57,7 +57,11 @@ open Fuaran.Program.Bounded
 //  as its SUBJECT (`JournalEntry.Subject`): the capability says which arm ran
 //  at an ordinal, the subject says which op, and the divergence check reads
 //  both. The state handed beside the op is never the subject — it is the
-//  planned state, recomputed on replay, not the thing performed.
+//  planned state, recomputed on replay, not the thing performed. Its
+//  `Completed` value is the performer's receipt, encoded (D43), and since
+//  Phase 2224 (D68) its `Refused` record carries the PARTIAL receipt of a
+//  stage that failed part-way, so a resume is served what the dead run wrote
+//  whether the stage completed or not.
 //
 //  ── The plan's ENTRY READ is journaled too (Phase 2165, D39) ────────────────
 //  "Recomputed, deterministically, from the entry state" has a premise of its
@@ -970,14 +974,17 @@ module Durable =
         /// Attempt, invoke, record. The order is the whole contract: the
         /// `Attempted` record is written BEFORE the performer, so a process that
         /// dies inside the performer leaves the step readable as indeterminate
-        /// rather than as never-attempted.
+        /// rather than as never-attempted. A refusal is recorded with the
+        /// PARTIAL the performer reported beside its reason (Phase 2224, D68)
+        /// — after the performer returned, like a completion, so a death
+        /// inside the performer records no partial and stays indeterminate.
         let invoke
             (step: int)
             (capability: string)
             (subject: string option)
-            (performer: Fuaran.Core.JVal -> Result<Fuaran.Core.JVal, string>)
+            (performer: Fuaran.Core.JVal -> Result<Fuaran.Core.JVal, string * Fuaran.Core.JVal option>)
             (args: Fuaran.Core.JVal)
-            : Result<Fuaran.Core.JVal, string> =
+            : Result<Fuaran.Core.JVal, string * Fuaran.Core.JVal option> =
             append step capability subject JournalPhase.Attempted
             // Nothing below this line runs if the performer does not return.
             // That is not an omission — it is the crash this interpreter exists
@@ -991,7 +998,7 @@ module Durable =
                 subject
                 (match result with
                  | Ok value -> JournalPhase.Completed value
-                 | Error reason -> JournalPhase.Refused reason)
+                 | Error(reason, partial) -> JournalPhase.Refused(reason, partial))
 
             result
 
@@ -999,15 +1006,19 @@ module Durable =
         /// call's (`capability` = `host:<fn>`, no subject) and an op stage's
         /// (`ApplyOps`, the op's content address). `declared` is what the host
         /// said about repeating THIS performer. The model's `decide` + `replay`
-        /// (`proofs/Staging.fst`).
-        let wrapAt
+        /// (`proofs/Staging.fst`). A refusal carries the PARTIAL the performer
+        /// reported, encoded, beside its reason (Phase 2224, D68) — journaled
+        /// with the `Refused` record and served back from it on a resume;
+        /// every performer but an op stage's refuses with `None` there, and
+        /// `wrapAt` below is this wrapper over those.
+        let wrapAtWith
             (capability: string)
             (subject: string option)
             (declared: IdempotencyFacet)
             (refusal: unit -> string option)
-            (performer: Fuaran.Core.JVal -> Result<Fuaran.Core.JVal, string>)
+            (performer: Fuaran.Core.JVal -> Result<Fuaran.Core.JVal, string * Fuaran.Core.JVal option>)
             (args: Fuaran.Core.JVal)
-            : Result<Fuaran.Core.JVal, string> =
+            : Result<Fuaran.Core.JVal, string * Fuaran.Core.JVal option> =
             let step = cursor
             cursor <- step + 1
 
@@ -1018,7 +1029,7 @@ module Durable =
             // did not happen.
             let attempt (beforeInvoking: unit -> unit) =
                 match refusal () with
-                | Some reason -> Error reason
+                | Some reason -> Error(reason, None)
                 | None ->
                     beforeInvoking ()
                     invoke step capability subject performer args
@@ -1045,24 +1056,27 @@ module Durable =
                 let recordedSubject () =
                     Journal.subjectOf recorded step |> Option.flatten |> Option.defaultValue ""
 
-                if capability = PlanActCapability then
-                    Error(DurableCode.planActDiverged (subject |> Option.defaultValue ""))
-                elif previous = Some PlanActCapability then
-                    Error(DurableCode.planActDiverged (recordedSubject ()))
-                elif capability = EntryReadCapability then
-                    Error(DurableCode.entryReadDiverged (subject |> Option.defaultValue ""))
-                elif previous = Some EntryReadCapability then
-                    Error(DurableCode.entryReadDiverged (recordedSubject ()))
-                else
-                    Error DurableCode.ReplayDivergence
+                let diverged =
+                    if capability = PlanActCapability then
+                        DurableCode.planActDiverged (subject |> Option.defaultValue "")
+                    elif previous = Some PlanActCapability then
+                        DurableCode.planActDiverged (recordedSubject ())
+                    elif capability = EntryReadCapability then
+                        DurableCode.entryReadDiverged (subject |> Option.defaultValue "")
+                    elif previous = Some EntryReadCapability then
+                        DurableCode.entryReadDiverged (recordedSubject ())
+                    else
+                        DurableCode.ReplayDivergence
+
+                Error(diverged, None)
             else
                 match Journal.stepOf recorded step with
                 | JournaledStep.Value value ->
                     replayed.Add step
                     Ok value
-                | JournaledStep.Refusal reason ->
+                | JournaledStep.Refusal(reason, partial) ->
                     replayed.Add step
-                    Error reason
+                    Error(reason, partial)
                 | JournaledStep.Unrun -> attempt ignore
                 | JournaledStep.Indeterminate _ ->
                     if declared = IdempotencyFacet.Idempotent then
@@ -1078,7 +1092,26 @@ module Durable =
                                   Idempotency = declared })
                     else
                         indeterminate.Add step
-                        Error DurableCode.IndeterminateStep
+                        Error(DurableCode.IndeterminateStep, None)
+
+        /// `wrapAtWith` over a performer whose refusal is a reason alone — every
+        /// performer the perform phase reaches but the op stage's.
+        let wrapAt
+            (capability: string)
+            (subject: string option)
+            (declared: IdempotencyFacet)
+            (refusal: unit -> string option)
+            (performer: Fuaran.Core.JVal -> Result<Fuaran.Core.JVal, string>)
+            (args: Fuaran.Core.JVal)
+            : Result<Fuaran.Core.JVal, string> =
+            wrapAtWith
+                capability
+                subject
+                declared
+                refusal
+                (fun args -> performer args |> Result.mapError (fun reason -> reason, None))
+                args
+            |> Result.mapError fst
 
         let wrap (fn: string) (performer: Fuaran.Core.JVal -> Result<Fuaran.Core.JVal, string>) =
             wrapAt ("host:" + fn) None (PerformerFacets.facetOf fn services.Performers) (fun () -> None) performer
@@ -1328,19 +1361,48 @@ module Durable =
         // re-performing. A served value that is not an encoded receipt (a
         // journal written before receipts were typed) is refused as
         // `op-receipt-malformed`, never read as a receipt with no writes.
+        // A stage that FAILS PART-WAY (Phase 2224, D68) is journaled as
+        // `Refused` with its partial receipt encoded beside the reason — where
+        // it performed anything; a failure that performed nothing records no
+        // partial — and a resume is served the refusal WITH the partial, so
+        // the resumed outcome's `Receipts` name the dead run's partial writes
+        // exactly as a fresh run's would. A served partial that is not an
+        // encoded receipt is refused as `op-receipt-malformed` in the reason's
+        // place: the stage was refused either way, and the defect in the
+        // journal is what an operator has to act on. The partial is written
+        // AFTER the performer returned, so a death inside the stage leaves
+        // `Attempted` alone and stays indeterminate (D23): a partial known
+        // only to the dead process is not a partial the journal can serve.
         let performing =
             match performance with
             | OpPerformance.InMemory -> OpPerformance.InMemory
             | OpPerformance.Performed perform ->
                 OpPerformance.Performed(fun prefix state op ->
-                    wrapAt
-                        OpStageCapability
-                        (Some(opSubject witness.State op))
-                        (PerformerFacets.opFacetOf (opKinds witness.State op) services.Performers)
-                        opRefusal
-                        (fun _ -> perform prefix state op |> Result.map OpReceipt.encode)
-                        (Fuaran.Core.JObj [])
-                    |> Result.bind OpReceipt.decode)
+                    let encodedPartial (failure: OpFailure) =
+                        failure.Reason,
+                        (if failure.Performed = OpReceipt.none then
+                             None
+                         else
+                             Some(OpReceipt.encode failure.Performed))
+
+                    match
+                        wrapAtWith
+                            OpStageCapability
+                            (Some(opSubject witness.State op))
+                            (PerformerFacets.opFacetOf (opKinds witness.State op) services.Performers)
+                            opRefusal
+                            (fun _ ->
+                                perform prefix state op
+                                |> Result.map OpReceipt.encode
+                                |> Result.mapError encodedPartial)
+                            (Fuaran.Core.JObj [])
+                    with
+                    | Ok value -> OpReceipt.decode value |> OpFailure.lift
+                    | Error(reason, None) -> Error(OpFailure.plain reason)
+                    | Error(reason, Some partial) ->
+                        match OpReceipt.decode partial with
+                        | Ok performed -> Error(OpFailure.partial reason performed)
+                        | Error malformed -> Error(OpFailure.plain malformed))
 
         let outcome =
             Handler.runWith witness journalling performing resolve nodeId handler store

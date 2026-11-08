@@ -217,7 +217,7 @@ let private modelJournal (entries: JournalEntry list) : Staging.journal<JVal> =
             match Journal.stepOf entries (int k) with
             | JournaledStep.Unrun -> Staging.JUnrun
             | JournaledStep.Value v -> Staging.JValue v
-            | JournaledStep.Refusal r -> Staging.JRefusal r
+            | JournaledStep.Refusal(r, _) -> Staging.JRefusal r
             | JournaledStep.Indeterminate _ -> Staging.JIndeterminate
       j_recorded =
         fun k ->
@@ -705,7 +705,21 @@ let private storeUnits =
               for e in
                   [ entry 0 "host:audit" None JournalPhase.Attempted
                     entry 0 "host:audit" None (JournalPhase.Completed(JObj [ "rows", JArr [ JInt 1; JStr "two" ] ]))
-                    entry 1 Durable.OpStageCapability (Some "sha256:ab") (JournalPhase.Refused "declined")
+                    entry 1 Durable.OpStageCapability (Some "sha256:ab") (JournalPhase.Refused("declined", None))
+                    entry
+                        2
+                        Durable.OpStageCapability
+                        (Some "sha256:cd")
+                        // An encoded partial receipt (Phase 2224, D68), its members in the
+                        // canonical order the rendering sorts them into.
+                        (JournalPhase.Refused(
+                            "part-way",
+                            Some(
+                                JObj
+                                    [ "detail", JObj []
+                                      "writes", JArr [ JObj [ "digest", JStr "sha256:ab"; "target", JStr "footer" ] ] ]
+                            )
+                        ))
                     entry Journal.InvocationStep Journal.InvocationCapability None (JournalPhase.Completed(JStr "")) ] do
                   let text = Journal.render e
                   Expect.isFalse (text.Contains "\n") "one line"

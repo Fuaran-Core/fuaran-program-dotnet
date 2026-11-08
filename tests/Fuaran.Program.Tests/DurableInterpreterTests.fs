@@ -1178,7 +1178,7 @@ let private modelJournal (entries: JournalEntry list) : Staging.journal<JVal> =
             match Journal.stepOf entries (int k) with
             | JournaledStep.Unrun -> Staging.JUnrun
             | JournaledStep.Value v -> Staging.JValue v
-            | JournaledStep.Refusal r -> Staging.JRefusal r
+            | JournaledStep.Refusal(r, _) -> Staging.JRefusal r
             | JournaledStep.Indeterminate _ -> Staging.JIndeterminate
       j_recorded =
         fun k ->
@@ -1238,7 +1238,7 @@ let private readShapes: (string * JournalEntry list) list =
         entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.Completed(JStr "Recorded")) ]
       "the read refused",
       [ entry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted
-        entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.Refused "the host could not read") ]
+        entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.Refused("the host could not read", None)) ]
       "the read attempted and undecided", [ entry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted ]
       "another read recorded at the ordinal",
       [ entry 0 Durable.EntryReadCapability (Some "other") JournalPhase.Attempted

@@ -590,6 +590,245 @@ let private journal =
               | other -> failtestf "expected a PerformFailed naming the malformed receipt, got %A" other
           } ]
 
+// ─── a part-way failure (Phase 2224, D68) ────────────────────────────────────
+//
+// One op, three files: a relabel writes `<id>`, `<id>.index` and `<id>.log`. The
+// performer for the SECOND op writes the first two and fails — the loss the
+// plane probe found: under a string-only refusal, nothing Program returned said
+// those two files were on disk.
+
+let private threeFiles (id: string) (label: string) =
+    [ WriteReceipt.ofText id label
+      WriteReceipt.ofText (id + ".index") label
+      WriteReceipt.ofText (id + ".log") label ]
+
+let private titleReceipt = OpReceipt.ofWrites (threeFiles "title" "One")
+
+/// What the footer's performer had written when it gave up: two of three.
+let private footerPartial =
+    OpReceipt.ofWrites (threeFiles "footer" "Two" |> List.take 2)
+
+let private DiskFull = "disk full at the log"
+
+/// Writes all three files for the title; two for the footer, then fails WITH the
+/// partial.
+let private failingPartWay (performed: int ref) : OpPerformance<ToyNode, ToyOp> =
+    OpPerformance.performedWithFailure (fun _ _ op ->
+        performed.Value <- performed.Value + 1
+
+        match op with
+        | Relabel("footer", _) -> Error(OpFailure.partial DiskFull footerPartial)
+        | Relabel(id, label) -> Ok(OpReceipt.ofWrites (threeFiles id label)))
+
+/// The same, refusing the footer with a reason alone — the plain registration.
+let private failingPlainly (performed: int ref) : OpPerformance<ToyNode, ToyOp> =
+    OpPerformance.performedBy (fun _ op ->
+        performed.Value <- performed.Value + 1
+
+        match op with
+        | Relabel("footer", _) -> Error "declined"
+        | Relabel(id, label) -> Ok(OpReceipt.ofWrites (threeFiles id label)))
+
+/// Dies INSIDE the footer's performer, after writing — the process never
+/// returns, so no receipt, partial or whole, is ever answered.
+let private dyingPartWay (performed: int ref) : OpPerformance<ToyNode, ToyOp> =
+    OpPerformance.performedWithFailure (fun _ _ op ->
+        performed.Value <- performed.Value + 1
+
+        match op with
+        | Relabel("footer", _) -> raise (ProcessDied "inside the stage")
+        | Relabel(id, label) -> Ok(OpReceipt.ofWrites (threeFiles id label)))
+
+let private directly performance =
+    Handler.runWith witness (registry (ref 0)) performance Fuaran.Compute.DataFrame.noResolve "node" twoWrites store
+
+let private lastDiagnostic (outcome: HandlerOutcome<ToyNode, ToyStore, ToyOp, ToyEffect>) =
+    List.tryLast outcome.Diagnostics
+
+let private refusedOpStages (journal: EffectJournal) =
+    journal.Read "inv"
+    |> List.choose (fun entry ->
+        match entry.Capability, entry.Phase with
+        | "ApplyOps", JournalPhase.Refused(reason, partial) -> Some(entry.Step, reason, partial)
+        | _ -> None)
+
+let private partial =
+    testList
+        "an op stage that fails part-way keeps the receipts of the effects it did perform"
+        [ test
+              "a performer that writes two of three files and fails yields an outcome whose receipts name exactly those two" {
+              let outcome = directly (failingPartWay (ref 0))
+
+              Expect.isFalse outcome.Committed "rolled back"
+
+              Expect.equal
+                  (lastDiagnostic outcome)
+                  (Some(ServerDiagnostic.PerformFailed("ApplyOps", DiskFull)))
+                  "the diagnostic keeps its shape: the capability and the performer's reason"
+
+              Expect.equal
+                  outcome.Receipts
+                  [ titleReceipt; footerPartial ]
+                  "the completed stage's receipt, then the failing stage's partial — every effect performed"
+
+              Expect.equal
+                  outcome.Performed
+                  [ "ApplyOps" ]
+                  "Performed is still the stage-granular prefix: the failing stage is not in it"
+
+              Expect.equal
+                  (HandlerOutcome.changed outcome)
+                  (Set.ofList [ "title"; "title.index"; "title.log"; "footer"; "footer.index" ])
+                  "changed names the two files the failing stage wrote and not the one it did not"
+          }
+
+          test "a plain Error still reports an empty partial, and the outcome's receipts are the stages before it" {
+              let outcome = directly (failingPlainly (ref 0))
+
+              Expect.equal (OpFailure.plain "declined").Performed OpReceipt.none "a plain failure performed nothing"
+              Expect.isFalse outcome.Committed "rolled back"
+
+              Expect.equal
+                  (lastDiagnostic outcome)
+                  (Some(ServerDiagnostic.PerformFailed("ApplyOps", "declined")))
+                  "the reason"
+
+              Expect.equal outcome.Receipts [ titleReceipt ] "nothing is appended for a failure that performed nothing"
+
+              Expect.equal
+                  (HandlerOutcome.changed outcome)
+                  (Set.ofList [ "title"; "title.index"; "title.log" ])
+                  "changed is the completed stage's alone"
+          }
+
+          test
+              "a receipt a contract rejects is not a partial: the refusal names the contract and performs nothing on the record" {
+              let rejectingFooter: OpContract<ToyNode, ToyOp> =
+                  OpContract.at "footer-forbidden" (fun _ op _ ->
+                      match op with
+                      | Relabel(id, _) -> id <> "footer")
+
+              let completing: OpPerformance<ToyNode, ToyOp> =
+                  OpPerformance.performedWithFailure (
+                      OpContract.checkAll [ rejectingFooter ] (fun _ _ op ->
+                          match op with
+                          | Relabel(id, label) -> Ok(OpReceipt.ofWrites (threeFiles id label)))
+                  )
+
+              let outcome = directly completing
+
+              Expect.isFalse outcome.Committed "rolled back"
+
+              Expect.equal
+                  (lastDiagnostic outcome)
+                  (Some(ServerDiagnostic.PerformFailed("ApplyOps", "return-contract:footer-forbidden")))
+                  "the contract's name"
+
+              Expect.equal outcome.Receipts [ titleReceipt ] "the rejected receipt's writes are not in the record"
+          }
+
+          test
+              "a durable run that refused part-way is served the same partial receipts on resume, without re-performing" {
+              let journal = freshJournal ()
+              let performed = ref 0
+              let audits = ref 0
+
+              let first = durably journal audits (failingPartWay performed)
+
+              Expect.isFalse first.Outcome.Committed "refused on the fresh run"
+
+              Expect.equal
+                  first.Outcome.Receipts
+                  [ titleReceipt; footerPartial ]
+                  "the fresh run's receipts are per effect"
+
+              Expect.equal performed.Value 2 "both stages were invoked once"
+
+              Expect.equal
+                  (refusedOpStages journal)
+                  [ 1, DiskFull, Some(OpReceipt.encode footerPartial) ]
+                  "the refusal is journaled at the stage's ordinal with its partial receipt, encoded as a completed one is"
+
+              let resumed = durably journal audits (failingPartWay performed)
+
+              Expect.isFalse resumed.Outcome.Committed "the served refusal refuses the resume too"
+              Expect.equal resumed.Replayed [ 0; 1 ] "both op stages were served"
+              Expect.equal performed.Value 2 "neither stage was performed again"
+              Expect.equal audits.Value 0 "the host call after the failing stage never ran"
+
+              Expect.equal
+                  (lastDiagnostic resumed.Outcome)
+                  (Some(ServerDiagnostic.PerformFailed("ApplyOps", DiskFull)))
+                  "the dead run's reason"
+
+              Expect.equal
+                  resumed.Outcome.Receipts
+                  [ titleReceipt; footerPartial ]
+                  "the served partial IS the resumed run's partial"
+
+              Expect.equal
+                  (HandlerOutcome.changed resumed.Outcome)
+                  (HandlerOutcome.changed first.Outcome)
+                  "the union on a resume is the union of the fresh run"
+          }
+
+          test "a plain refusal is journaled with no partial" {
+              let journal = freshJournal ()
+              durably journal (ref 0) (failingPlainly (ref 0)) |> ignore
+              Expect.equal (refusedOpStages journal) [ 1, "declined", None ] "reason alone"
+          }
+
+          test
+              "a death inside a stage stays indeterminate: no partial is known to the journal, and the resume is refused (D23)" {
+              let journal = freshJournal ()
+              let performed = ref 0
+
+              let died = crashing (fun () -> durably journal (ref 0) (dyingPartWay performed))
+
+              Expect.isTrue died "died inside the footer's performer"
+              Expect.equal (refusedOpStages journal) [] "nothing was refused: the performer never returned"
+
+              let resumed = durably journal (ref 0) (dyingPartWay performed)
+
+              Expect.isFalse resumed.Outcome.Committed "refused"
+              Expect.equal resumed.Indeterminate [ 1 ] "the footer's stage is the indeterminate one"
+              Expect.equal performed.Value 2 "not re-invoked to find out"
+
+              Expect.equal
+                  (lastDiagnostic resumed.Outcome)
+                  (Some(ServerDiagnostic.PerformFailed("ApplyOps", DurableCode.IndeterminateStep)))
+                  "named indeterminate, not served a partial it cannot know"
+
+              Expect.equal resumed.Outcome.Receipts [ titleReceipt ] "the receipts stop at the last stage that returned"
+          }
+
+          test "a served partial that is not an encoded receipt is refused as malformed, never read as no writes" {
+              let journal = freshJournal ()
+              let subject = Durable.opSubject witness.State (Relabel("title", "One"))
+
+              for phase in
+                  [ JournalPhase.Attempted
+                    JournalPhase.Refused("gave up", Some(JStr "a receipt from before receipts were typed")) ] do
+                  journal.Append
+                      { Invocation = "inv"
+                        Step = 0
+                        Capability = "ApplyOps"
+                        Subject = Some subject
+                        Phase = phase }
+
+              let performed = ref 0
+              let resumed = durably journal (ref 0) (failingPartWay performed)
+
+              Expect.isFalse resumed.Outcome.Committed "refused"
+              Expect.equal performed.Value 0 "the served stage was not re-performed"
+              Expect.isEmpty resumed.Outcome.Receipts "nothing was read as a partial"
+
+              match lastDiagnostic resumed.Outcome with
+              | Some(ServerDiagnostic.PerformFailed("ApplyOps", reason)) ->
+                  Expect.stringStarts reason OpReceipt.MalformedCode "the journal's defect is the reason"
+              | other -> failtestf "expected a PerformFailed naming the malformed partial, got %A" other
+          } ]
+
 [<Tests>]
 let receiptTests =
-    testList "Phase 2197 - a performed write's receipt is its return value" [ digest; union; kinds; journal ]
+    testList "Phase 2197 - a performed write's receipt is its return value" [ digest; union; kinds; journal; partial ]

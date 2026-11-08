@@ -66,7 +66,14 @@ type JournalPhase =
     | Completed of value: Fuaran.Core.JVal
     /// The step ran and the performer refused. `reason` is the host performer's
     /// own text — the same value a `PerformFailed` diagnostic already carries.
-    | Refused of reason: string
+    /// `partial` (Phase 2224, D68) is what the performer performed before it
+    /// refused, where it said so: an op stage's partial receipt, encoded as a
+    /// completed one is (`OpReceipt.encode`), so a resume is served the dead
+    /// run's partial writes as it is served its completed ones. `None` for a
+    /// host call, a read, and an op stage whose failure performed nothing.
+    /// Written AFTER, like `Completed`: a step the performer never returned
+    /// from has no partial and stays `Attempted` alone, indeterminate.
+    | Refused of reason: string * partial: Fuaran.Core.JVal option
 
 /// One journal record.
 ///
@@ -134,8 +141,9 @@ type JournaledStep =
     | Unrun
     /// The step ran and returned this value.
     | Value of value: Fuaran.Core.JVal
-    /// The step ran and was refused, for this reason.
-    | Refusal of reason: string
+    /// The step ran and was refused, for this reason — with the partial
+    /// receipt the refusal recorded, where it recorded one (Phase 2224, D68).
+    | Refusal of reason: string * partial: Fuaran.Core.JVal option
     /// `Attempted` with no result. The effect may or may not have happened, and
     /// the capability it was attempted under is carried so a caller can say
     /// WHICH step it cannot decide.
@@ -215,7 +223,7 @@ module Journal =
             |> List.tryPick (fun e ->
                 match e.Phase with
                 | JournalPhase.Completed value -> Some(JournaledStep.Value value)
-                | JournalPhase.Refused reason -> Some(JournaledStep.Refusal reason)
+                | JournalPhase.Refused(reason, partial) -> Some(JournaledStep.Refusal(reason, partial))
                 | JournalPhase.Attempted -> None)
 
         match result, forStep with
@@ -293,7 +301,12 @@ module Journal =
             match entry.Phase with
             | JournalPhase.Attempted -> "Attempted", []
             | JournalPhase.Completed value -> "Completed", [ "value", value ]
-            | JournalPhase.Refused reason -> "Refused", [ "reason", Fuaran.Core.JStr reason ]
+            | JournalPhase.Refused(reason, partial) ->
+                "Refused",
+                [ "reason", Fuaran.Core.JStr reason ]
+                @ (match partial with
+                   | None -> []
+                   | Some performed -> [ "partial", performed ])
 
         Fuaran.Core.Canonical.typed
             arm
@@ -336,7 +349,12 @@ module Journal =
         | Some "Completed" ->
             entry [ "value" ] (fun v -> ProgramWire.requireMember "value" v |> Result.map JournalPhase.Completed)
         | Some "Refused" ->
-            entry [ "reason" ] (fun v -> ProgramWire.requireString "reason" v |> Result.map JournalPhase.Refused)
+            // `partial` is optional (Phase 2224, D68): a record written before
+            // refusals carried one, or by a step that performed nothing, has
+            // none, and reads as a refusal with no partial.
+            entry [ "reason"; "partial" ] (fun v ->
+                ProgramWire.requireString "reason" v
+                |> Result.map (fun reason -> JournalPhase.Refused(reason, ProgramWire.tryMember "partial" v)))
         | Some other -> ProgramWire.refuse RefusalClass.UnknownEffectArm ("'" + other + "' is not a journal phase")
 
 // ============================================================================
@@ -1067,7 +1085,7 @@ module Controls =
         : OpPerformance<'Node, 'Op> =
         match performance, opPerformerRevocation state with
         | OpPerformance.Performed _, Some(actor, reason) ->
-            OpPerformance.Performed(fun _ _ _ -> Error(refuseOpStage record actor reason))
+            OpPerformance.Performed(fun _ _ _ -> Error(OpFailure.plain (refuseOpStage record actor reason)))
         | _ -> performance
 
     /// This host's server-tier coverage **with the controls in force** — what a

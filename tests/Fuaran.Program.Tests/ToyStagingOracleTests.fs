@@ -349,7 +349,11 @@ let private modelRegistry
             // The model's receipt is the DETAIL (Phase 2197, D43): the
             // performers this oracle stages name no typed write.
             Staging.OSome(fun state op ->
-                (fun (_: JVal) -> perform (OpPrefix.atEntry state) state op |> Result.map _.Detail), JObj []) }
+                (fun (_: JVal) ->
+                    perform (OpPrefix.atEntry state) state op
+                    |> Result.map _.Detail
+                    |> Result.mapError _.Reason),
+                JObj []) }
 
 let private productionDiagnostic (diagnostic: Staging.diagnostic<BoundedDiagnostic>) : ServerDiagnostic =
     match diagnostic with
@@ -2783,7 +2787,7 @@ let private decidedOf (entries: JournalEntry list) =
     |> List.choose (fun e ->
         match e.Phase with
         | JournalPhase.Completed value -> Some(e.Step, e.Capability, e.Subject, Ok value)
-        | JournalPhase.Refused reason -> Some(e.Step, e.Capability, e.Subject, Error reason)
+        | JournalPhase.Refused(reason, _) -> Some(e.Step, e.Capability, e.Subject, Error reason)
         | _ -> None)
 
 let private keyedJournal (entries: JournalEntry list) : Staging.journal<JVal> =
@@ -2792,7 +2796,7 @@ let private keyedJournal (entries: JournalEntry list) : Staging.journal<JVal> =
             match Journal.stepOf entries (int k) with
             | JournaledStep.Unrun -> Staging.JUnrun
             | JournaledStep.Value v -> Staging.JValue v
-            | JournaledStep.Refusal r -> Staging.JRefusal r
+            | JournaledStep.Refusal(r, _) -> Staging.JRefusal r
             | JournaledStep.Indeterminate _ -> Staging.JIndeterminate
       j_recorded =
         fun k ->
@@ -3243,11 +3247,12 @@ let effectGateTests =
                               let expected =
                                   OpContract.check
                                       production
-                                      (fun _ s o -> behaviour s o |> Result.map OpReceipt.ofDetail)
+                                      (fun _ s o -> behaviour s o |> Result.map OpReceipt.ofDetail |> OpFailure.lift)
                                       (OpPrefix.atEntry state)
                                       state
                                       op
                                   |> Result.map _.Detail
+                                  |> Result.mapError _.Reason
                                   |> modelRes
 
                               let actual = EffectGate.check_op model modelPerform state op
@@ -3921,7 +3926,7 @@ let private findingShapes: (string * JournalEntry list) list =
         journalEntry 0 "host:audit" None (JournalPhase.Completed(JStr "ran")) ]
       "the record refused",
       [ journalEntry 0 "Report" (under archived) JournalPhase.Attempted
-        journalEntry 0 "Report" (under archived) (JournalPhase.Refused "the host could not record") ]
+        journalEntry 0 "Report" (under archived) (JournalPhase.Refused("the host could not record", None)) ]
       "attempted and undecided", [ journalEntry 0 "Report" (under archived) JournalPhase.Attempted ]
       "a record that is not a finding",
       [ journalEntry 0 "Report" (under archived) JournalPhase.Attempted

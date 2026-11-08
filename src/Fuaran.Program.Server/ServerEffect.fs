@@ -1468,6 +1468,44 @@ module OpReceipt =
             | _ -> malformed "not exactly a writes list and a detail"
         | _ -> malformed "not exactly a writes list and a detail"
 
+/// How an op performer FAILS (Phase 2224, D68): the reason, which is what the
+/// `PerformFailed` diagnostic surfaces verbatim, and the receipt of what it
+/// DID perform before failing — the writes it had made when it gave up, in
+/// perform order. A performer that fails before any effect answers
+/// `OpFailure.plain`, whose partial is `OpReceipt.none`; one that fails
+/// part-way through a multi-write op answers `OpFailure.partial`, and the
+/// handler's perform fold keeps that receipt beside the stages' before it, so
+/// the uncommitted outcome's `Receipts` name every effect performed and not
+/// only every stage completed. The partial is the performer's CLAIM about
+/// what it left, on the terms its completed receipt is (D43): nothing in
+/// Program re-reads the world to check it.
+type OpFailure =
+    {
+        /// The host performer's own text — the `PerformFailed` reason.
+        Reason: string
+        /// What the performer performed before it failed; `OpReceipt.none`
+        /// when nothing.
+        Performed: OpReceipt
+    }
+
+module OpFailure =
+
+    /// A failure that performed nothing — the easy registration, and the one
+    /// every `string`-refusing performer is lifted to.
+    let plain (reason: string) : OpFailure =
+        { Reason = reason
+          Performed = OpReceipt.none }
+
+    /// A failure part-way through an op: `performed` is the receipt of what
+    /// the performer had done when it failed.
+    let partial (reason: string) (performed: OpReceipt) : OpFailure =
+        { Reason = reason
+          Performed = performed }
+
+    /// Lift a performer that refuses with a reason alone to one that refuses
+    /// with a failure that performed nothing.
+    let lift (result: Result<'T, string>) : Result<'T, OpFailure> = Result.mapError plain result
+
 /// Why what a commit stage would stage at a target is FOREIGN to the invocation
 /// (Phase 2197, D43; Phase 2223, D65). Two causes, kept apart because their
 /// remedies differ.
@@ -1660,7 +1698,10 @@ type OpPerformance<'Node, 'Op> =
     /// so `Performed` carries `ApplyOps` once per op PERFORMED, in execution
     /// order, and a part-way failure reports exactly the ops that ran before it
     /// (D8's residual, unchanged in shape) under a `PerformFailed` naming the
-    /// capability and the performer's own reason. Handed the state as of the
+    /// capability and the performer's own reason — and, since Phase 2224
+    /// (D68), the failing op's PARTIAL receipt beside them when the performer
+    /// answered one (`OpFailure.partial`), so the residual's receipts are
+    /// per effect and not per stage. Handed the state as of the
     /// op, then the op, and answers a RECEIPT (Phase 1981), TYPED since Phase
     /// 2197 (D43): the writes it performed, each a target and a digest of the
     /// content written, and a detail for anything else it says it did (the
@@ -1676,7 +1717,7 @@ type OpPerformance<'Node, 'Op> =
     /// reaches it, and the contract decides what it may claim to have done.
     /// Handed the run's PREFIX first (Phase 2165, D39): the pre-op state and
     /// the receipts of the op stages before it.
-    | Performed of (OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, string>)
+    | Performed of (OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, OpFailure>)
 
 /// A host-declared post-condition on an op performer's RECEIPT (Phase 1981) —
 /// `ReturnContract` keyed by the state and the op: a name, which is the host's
@@ -1718,22 +1759,26 @@ module OpContract =
 
     /// The wrapper `OpPerformance.performedChecked` composes, one contract at
     /// a time: a receipt the contract rejects becomes the host's own refusal,
-    /// carrying the contract's name; a raw refusal passes through unchanged.
+    /// carrying the contract's name; a raw refusal passes through unchanged,
+    /// its partial receipt with it (Phase 2224, D68). A REJECTED receipt is
+    /// not a partial: it is a claim the contract would not vouch for, so the
+    /// refusal performs nothing on the record (`OpFailure.plain`) — the op is
+    /// never reported as performed, and neither are its writes.
     /// `EffectGate.check_op` is this, clause for clause, at the planned state
     /// and the op — the prefix is handed through to the contract and is not
     /// in that model (`proofs.json`, `op-contract-prefix-out-of-model`).
     let check
         (contract: OpContract<'Node, 'Op>)
-        (perform: OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, string>)
-        : OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, string> =
+        (perform: OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, OpFailure>)
+        : OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, OpFailure> =
         fun prefix state op ->
             match perform prefix state op with
-            | Error reason -> Error reason
+            | Error failure -> Error failure
             | Ok receipt ->
                 if contract.Holds prefix state op receipt then
                     Ok receipt
                 else
-                    Error(describe contract)
+                    Error(OpFailure.plain (describe contract))
 
     /// Several contracts over one performer, composed by Program (Phase 2165,
     /// D39, F-CONTRACTS): checked in declaration order, and the FIRST that
@@ -1742,8 +1787,8 @@ module OpContract =
     /// hand. An empty list is the performer unchecked.
     let checkAll
         (contracts: OpContract<'Node, 'Op> list)
-        (perform: OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, string>)
-        : OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, string> =
+        (perform: OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, OpFailure>)
+        : OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, OpFailure> =
         List.fold (fun inner contract -> check contract inner) perform contracts
 
 module OpPerformance =
@@ -1776,7 +1821,7 @@ module OpPerformance =
     /// `proofs/EffectGate.fst`). The prefix is not handed —
     /// `performedWithPrefix` is the form that reads it.
     let performedBy (perform: 'Node -> 'Op -> Result<OpReceipt, string>) : OpPerformance<'Node, 'Op> =
-        OpPerformance.Performed(fun _ state op -> perform state op)
+        OpPerformance.Performed(fun _ state op -> perform state op |> OpFailure.lift)
 
     /// Register an op performer that answers only a DETAIL — the 0.8.0
     /// receipt shape (Phase 2197, D43): its receipt names no typed write, so
@@ -1785,13 +1830,28 @@ module OpPerformance =
     /// The form for a performer whose act is not a write a commit stage
     /// stages; a performer that writes says so with `performedBy`.
     let performedWithDetail (perform: 'Node -> 'Op -> Result<Fuaran.Core.JVal, string>) : OpPerformance<'Node, 'Op> =
-        OpPerformance.Performed(fun _ state op -> perform state op |> Result.map OpReceipt.ofDetail)
+        OpPerformance.Performed(fun _ state op -> perform state op |> Result.map OpReceipt.ofDetail |> OpFailure.lift)
 
     /// Register an op performer that reads the run's PREFIX (Phase 2165, D39):
     /// handed the pre-op state and the earlier op stages' receipts, then the
     /// state as of the op and the op. No contract.
     let performedWithPrefix
         (perform: OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, string>)
+        : OpPerformance<'Node, 'Op> =
+        OpPerformance.Performed(fun prefix state op -> perform prefix state op |> OpFailure.lift)
+
+    /// Register an op performer that can fail PART-WAY (Phase 2224, D68):
+    /// handed the prefix, the state as of the op and the op, it answers its
+    /// receipt, or an `OpFailure` naming the reason and the receipt of what it
+    /// performed before failing. The perform fold keeps that partial receipt
+    /// in the uncommitted outcome's `Receipts` and the durable tier journals
+    /// it with the stage's refusal, so a resume is served it. Every other
+    /// registration is this one over a performer whose every failure
+    /// performed nothing; a performer that wants contracts over its receipt
+    /// as well composes them first — `performedWithFailure
+    /// (OpContract.checkAll contracts perform)`.
+    let performedWithFailure
+        (perform: OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, OpFailure>)
         : OpPerformance<'Node, 'Op> =
         OpPerformance.Performed perform
 
@@ -1806,14 +1866,17 @@ module OpPerformance =
         (contracts: OpContract<'Node, 'Op> list)
         (perform: OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, string>)
         : OpPerformance<'Node, 'Op> =
-        OpPerformance.Performed(OpContract.checkAll contracts perform)
+        OpPerformance.Performed(
+            OpContract.checkAll contracts (fun prefix state op -> perform prefix state op |> OpFailure.lift)
+        )
 
     /// Register an op performer with nothing to say: its receipt is
     /// `OpReceipt.none`, no write and the inert empty object — the honest
     /// spelling of "an op lands nothing", since the wire value has no null —
     /// which no contract can be declared over.
     let performedWithoutReceipt (perform: 'Node -> 'Op -> Result<unit, string>) : OpPerformance<'Node, 'Op> =
-        OpPerformance.Performed(fun _ state op -> perform state op |> Result.map (fun () -> OpReceipt.none))
+        OpPerformance.Performed(fun _ state op ->
+            perform state op |> Result.map (fun () -> OpReceipt.none) |> OpFailure.lift)
 
 // ============================================================================
 //  A READ the plan makes of the world is TYPED (Phase 2175, D41): it is either

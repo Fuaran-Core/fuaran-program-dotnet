@@ -268,11 +268,17 @@ type HandlerOutcome<'Node, 'Store, 'Op, 'Effect> =
         /// receipt under the durable interpreter. What the invocation changed
         /// is their union (`HandlerOutcome.changed`), derived from them alone.
         ///
-        /// On an uncommitted outcome it names the receipts of the op stages
-        /// that performed before the failure — the writes `Performed` says
-        /// were not rolled back — and is empty when the plan halted, since
-        /// nothing was performed. Empty for a placement that performs its ops
-        /// in memory.
+        /// On an uncommitted outcome it names EVERY EFFECT PERFORMED (Phase
+        /// 2224, D68): the receipts of the op stages that completed before the
+        /// failure — the writes `Performed` says were not rolled back — and,
+        /// last, the failing op's PARTIAL receipt when its performer answered
+        /// one (`OpFailure.partial`), the writes it had made when it gave up.
+        /// So the failure prefix is per effect where `Performed`'s is per
+        /// stage: `Performed` does not name the failing capability, and its
+        /// partial receipt is the one receipt here that no `Performed` entry
+        /// accounts for. A plain failure (`OpFailure.plain`) adds nothing. It
+        /// is empty when the plan halted, since nothing was performed, and for
+        /// a placement that performs its ops in memory.
         ///
         /// HOST-SIDE ONLY, as `Flow` is: no outcome document carries it.
         Receipts: OpReceipt list
@@ -421,8 +427,14 @@ module Handler =
     /// run's prefix and answers the receipt the performer returned, which the
     /// fold appends for the stages after it.
     type private StagedCall =
-        { Capability: string
-          Perform: OpReceipt list -> Result<Landing * OpReceipt option, string> }
+        {
+            Capability: string
+            /// Handed the receipts so far; answers where its result lands and the
+            /// receipt it earned, or the refusal's reason beside the PARTIAL
+            /// receipt of what it performed before refusing (Phase 2224, D68) —
+            /// `None` for a host call, which answers no receipt either way.
+            Perform: OpReceipt list -> Result<Landing * OpReceipt option, string * OpReceipt option>
+        }
 
     /// The state threaded through the stage fold. Lists accumulate reversed and
     /// are flipped once at the end, so a long handler does not quadratically
@@ -498,7 +510,7 @@ module Handler =
     /// perform phase ran before this one, which only the perform phase knows,
     /// so they reach the closure as its argument rather than being closed over.
     let private stagedOp
-        (perform: OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, string>)
+        (perform: OpPrefix<'Node> -> 'Node -> 'Op -> Result<OpReceipt, OpFailure>)
         (capability: string)
         (before: 'Node)
         (state: 'Node)
@@ -508,7 +520,8 @@ module Handler =
           Perform =
             fun receipts ->
                 perform { Before = before; Receipts = receipts } state op
-                |> Result.map (fun receipt -> Landing.Nowhere, Some receipt) }
+                |> Result.map (fun receipt -> Landing.Nowhere, Some receipt)
+                |> Result.mapError (fun failure -> failure.Reason, Some failure.Performed) }
 
     /// The `ApplyOps` arm's fold over its ops — the model's `plan_ops`
     /// (Phase 1974; `plan_views` since Phase 1976). Each op is VIEWED, then
@@ -817,7 +830,7 @@ module Handler =
                                         fun _ ->
                                             evaluator.Evaluate source pipeline resolve
                                             |> Result.map (fun table -> Landing.QuerySlot(name, table), None)
-                                            |> Result.mapError QueryFault.describe }
+                                            |> Result.mapError (fun fault -> QueryFault.describe fault, None) }
                                     :: acc.Staged
                                 Trail = UndoStep.Reached capability :: acc.Trail }
                         else
@@ -916,7 +929,8 @@ module Handler =
                                                 (match into with
                                                  | Some key -> Landing.StateSlot(key, result)
                                                  | None -> Landing.Nowhere),
-                                                None) }
+                                                None)
+                                            |> Result.mapError (fun reason -> reason, None) }
                                     :: acc.Staged
                                 Trail = UndoStep.Reached capability :: acc.Trail }
 
@@ -1001,6 +1015,15 @@ module Handler =
     /// outside, and it runs only after the plan phase completed — so a handler
     /// that was going to fail on its own terms has already failed, silently and
     /// for free, before any of this.
+    ///
+    /// A failing call is not landed and not reported in `Externally` — the
+    /// model's `perform`, whose residual is the capabilities before it
+    /// (`residual_is_prefix`). What it DID perform before refusing is kept
+    /// (Phase 2224, D68): an op stage that refuses with a partial receipt
+    /// carrying anything appends it to `Receipts`, so the uncommitted
+    /// outcome's receipts are per effect while its `Performed` stays per
+    /// stage. A receipt with nothing in it is not appended: a plain failure
+    /// leaves `Receipts` exactly as the stages before it left them.
     let rec private perform
         (channel: StoreWitness<'Store> option)
         (staged: StagedCall list)
@@ -1012,9 +1035,13 @@ module Handler =
             // The prefix an op stage is handed (Phase 2165, D39): the receipts
             // the op stages before it answered, in perform order.
             match call.Perform(List.rev acc.Receipts) with
-            | Error reason ->
+            | Error(reason, partial) ->
                 { acc with
                     Halted = true
+                    Receipts =
+                        match partial with
+                        | Some performed when performed <> OpReceipt.none -> performed :: acc.Receipts
+                        | _ -> acc.Receipts
                     Diagnostics = ServerDiagnostic.PerformFailed(call.Capability, reason) :: acc.Diagnostics }
             | Ok(landing, receipt) ->
                 let recorded =

@@ -2174,6 +2174,17 @@
       "mitigation": "DurableInterpreterTests (F-RECEIPTS) pins the prefix's content against production: the first op stage sees the entry state and no receipts, the second the first's planned state and receipt, a contract stating what an op owed is checked and names the refusal, and on a resume the served stage's recorded receipt is in the next performer's prefix"
     },
     {
+      "id": "op-receipts-out-of-model",
+      "level": "assumed",
+      "phase": "Phase 2224",
+      "claim": "A performer's RECEIPT — the writes an op stage performed (D43), and since D68 the PARTIAL receipt a stage that failed part-way performed before failing — is outside the Staging model: its accumulator carries capabilities (`ac_externally`, `ac_performed`) and no receipt, and `residual_is_prefix` is a statement about those capabilities. The per-effect residual (`HandlerOutcome.Receipts` on an uncommitted outcome) is therefore not a proved claim, and the stage-granular prefix the theorem states is unchanged by D68 because `Handler.perform`'s halt, `Externally` and `Performed` do not move.",
+      "class": "model-bridge",
+      "evidence": {
+        "assumption": "the receipts beside the capabilities add information and remove none: the capabilities the theorem names are production's `Performed`, which D68 leaves exactly as modelled, and a failing stage's capability is in neither"
+      },
+      "mitigation": "ReceiptTests (Phase 2224) pins both halves against production at the toy witness: a stage that writes two of three files and fails leaves `Performed` at the stages before it (the model's prefix) and `Receipts` at every effect performed including the two (the receipt the model does not carry), on a fresh run and on a resume; ToyStagingOracleTests runs the extracted model beside production over generated staged lists with performer refusals and would disagree if the failing capability were ever reported as performed"
+    },
+    {
       "id": "op-facet-per-kind-and-composed-contracts",
       "level": "tested",
       "phase": "Phase 2165",

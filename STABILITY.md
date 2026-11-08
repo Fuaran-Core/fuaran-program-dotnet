@@ -50,6 +50,48 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
+## 0.15.0 — DRAFT — an op stage that fails part-way keeps the receipts of the effects it did perform (Phase 2224)
+
+**Class: breaking.** `v0.14.1` is tagged, so this cannot ride it: `OpPerformance.Performed`'s function
+type moves, and so do two records a host that pattern-matches the journal reads. `DECISIONS.md` D68
+records the design, amending D43 (the receipt) and D8 (the residual). The program wire specification
+does not move: the receipt crosses no wire, and the `PerformFailed` document keeps `(capability, reason)`.
+
+### What a consumer gains
+
+- `OpFailure = { Reason; Performed: OpReceipt }` in `Fuaran.Program.Server`, with `OpFailure.plain`,
+  `OpFailure.partial` and `OpFailure.lift`: how an op performer fails — the reason the `PerformFailed`
+  diagnostic surfaces, beside the receipt of what it performed before failing.
+- `OpPerformance.performedWithFailure`: the registration for a performer that can fail part-way.
+  Contracts compose in front of it — `performedWithFailure (OpContract.checkAll contracts perform)`.
+- `HandlerOutcome.Receipts` on an UNCOMMITTED outcome names every effect performed: the completed
+  stages' receipts and, last, the failing stage's partial. `HandlerOutcome.changed` therefore names the
+  files a part-way failure left, and a host cleaning up reads them off Program rather than the disk.
+  `Performed` is unchanged — still the stages before the failing one.
+- Under the durable interpreter the refusal is journaled WITH the partial (`JournalPhase.Refused`'s
+  new `partial` member, absent when there is none), and a resumed run is served it: the resume's
+  `Receipts` are the dead run's, partial included, with nothing re-performed. A journal written before
+  this version reads unchanged (`partial` absent ⇒ none).
+
+### What a consumer pays
+
+- **Every direct construction of `OpPerformance.Performed` re-types its refusal.** The function is
+  `OpPrefix -> 'Node -> 'Op -> Result<OpReceipt, OpFailure>` where it answered `Result<OpReceipt, string>`.
+  A performer registered through `performedBy`, `performedWithDetail`, `performedWithPrefix`,
+  `performedChecked` or `performedWithoutReceipt` is UNCHANGED — those keep their `string`-refusing
+  signatures and lift. A host that constructs the case by hand, or reads `perform` out of it, maps with
+  `OpFailure.lift` / `Result.mapError _.Reason`.
+- **`OpContract.check` and `OpContract.checkAll` run over `Result<OpReceipt, OpFailure>`.** A caller
+  that composed them over a `string`-refusing performer lifts the performer first (`OpFailure.lift`).
+- **`JournalPhase.Refused` is `Refused of reason * partial: JVal option`** and `JournaledStep.Refusal`
+  likewise: a host that constructs or pattern-matches either adds the member (`Refused(reason, None)`
+  / `Refusal(reason, _)`). The stored form gains an optional `"partial"` member on a `Refused` record;
+  a reader that refuses undeclared members declares it.
+- **A plain failure's outcome is byte-identical to 0.14.1's.** A consumer whose performers never answer
+  a partial sees `Receipts` exactly as before; only a performer that reports one moves the outcome.
+- **A served partial that is not an encoded receipt is refused** (`op-receipt-malformed` in the
+  reason's place) — the same refusal a malformed completed receipt has met since 0.9.0.
+
 ## 0.14.1 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223, 2620, 2383)
 
 **0.14.0 was never released.** It was a draft slot that was packed to a local feed more than once while its

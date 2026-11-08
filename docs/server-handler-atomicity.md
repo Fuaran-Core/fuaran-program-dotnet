@@ -215,6 +215,19 @@ seam; it is the seam both other placements already have, used deliberately.
 > a delete. So an op-stream append and a file removal are accounted like any other write, on a fresh run
 > and on a resume, and a target receipted as deleted but staged present is foreign. A replace is still
 > journaled in the 0.9.0 form, so an older journal's receipts read as replaces.
+>
+> **The residual is PER EFFECT, since [D68](../DECISIONS.md) (Phase 2224).** D8's "the ops that ran
+> before it" is stage-granular, and a multi-write op stage that fails part-way used to leave the receipts
+> of the writes it had made nowhere: a performer could only answer `Error reason`. A performer now fails
+> with `OpFailure` — the reason beside the receipt of what it performed before failing — and the perform
+> fold keeps a failing stage's partial receipt in the uncommitted outcome's `Receipts`, after the
+> completed stages'. `Performed` does not move (the failing capability is still not reported as
+> performed, and `residual_is_prefix` is still the theorem it was, over capabilities), so the two
+> prefixes differ in granularity on purpose: `Performed` says which stages ran, `Receipts` says what was
+> written. The durable journal records the partial on the `Refused` record and serves it on a resume; a
+> death INSIDE a stage records no partial and stays indeterminate (D23). A partially performed stage
+> contributes no inverse: `Undo.run` still refuses an uncommitted plan, and what a host does with the
+> files the stage left is the host's, read off `changed`.
 
 **What remains open.**
 

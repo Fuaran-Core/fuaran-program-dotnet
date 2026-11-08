@@ -119,7 +119,11 @@ module UndoCode =
     let InverseDrift = "undo-inverse-drift"
 
     /// A plan whose run rolled back: there is nothing to undo, and the residual
-    /// a perform-phase failure left is the forward outcome's to report.
+    /// a perform-phase failure left is the forward outcome's to report — its
+    /// `Performed` and, per effect, its `Receipts`, a failing stage's partial
+    /// receipt among them (Phase 2224, D68). A partially performed stage
+    /// contributes no inverse: an inverse is the witness's law over an op
+    /// applied, and a performer's partial write is neither.
     [<Literal>]
     let UncommittedPlan = "undo-uncommitted-plan"
 

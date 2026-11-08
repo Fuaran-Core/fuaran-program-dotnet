@@ -5201,3 +5201,130 @@ commit the floor and the extractions it compiles beside its oracle project and h
 
 **Not changed.** No package surface. The asset rides the untagged `0.14.0` draft as an additive release
 artefact (`STABILITY.md`); a release that moves no declared file carries the sha of the last.
+
+## D68 — An op performer FAILS with `OpFailure`: the reason beside the receipt of what it performed before failing; the perform fold keeps a failing stage's partial receipt, so the uncommitted outcome's `Receipts` are per EFFECT while `Performed` stays per STAGE; the durable `Refused` record carries the partial and a resume is served it; a death inside a stage stays indeterminate; a partial contributes no inverse; the staging model is unchanged and says why; amends D43 and D8 (2026-11-08)
+
+**Context.** Under D43 an op performer answers `Result<OpReceipt, string>`. A performer that writes
+some of an op's files and then fails can only answer `Error reason`, and the receipts of the writes
+it DID make are lost: `Handler.perform` records the `PerformFailed` and leaves `Receipts` at the
+stages before it. D8's residual — "the ops that ran before it" — is therefore STAGE-granular, and a
+multi-write stage that fails part-way leaves files on disk nothing Program returns names. The plane
+probe kept an effect-granular receipt list of its own for exactly this; moving onto Program's prefix
+(roadmap-engine#769) lost it for every multi-write stage, `Receipts.changed` under-reported, and a
+host cleaning up or a resume reasoning about what the dead stage left had to re-read the world
+(Phase 2224, finding F-PARTIAL).
+
+**Premises checked against the tree first.**
+
+- The loss is real and is in one arm: `Handler.perform`'s `Error reason` branch does not touch
+  `acc.Receipts`. Pinned at the toy witness (`ReceiptTests`, "a performer that writes two of three
+  files and fails…"): with the partial dropped from that branch the test reads the two receipts as
+  missing, which is the 0.14 behaviour.
+- The durable wrapper journals a refusal as `Refused of reason` only; a resume is served the reason
+  and nothing else (`Durable.runGuarded`, `wrapAt`). The journal is a host document, not a specified
+  one (D23), so its record can grow without a specification act.
+- The F* staging model (`proofs/Staging.fst`) carries NO receipt: its accumulator has `ac_externally`
+  and `ac_performed` and its `perform` lands a success and halts on a failure; `residual_is_prefix`
+  is a statement about CAPABILITIES (`out.oc_performed == take k (caps staged)`). Receipts were added
+  to the F# in Phase 1981/2197 beside the model, never in it (`proofs.json`, `op-receipts-out-of-model`
+  by the same reasoning as `op-prefix-out-of-model`).
+- `HandlerOutcome.Receipts` crosses no wire (D43): `HandlerWire.fs` does not carry it and the
+  `PerformFailed` document is `(capability, reason)`. So the partial can reach the outcome without
+  touching the program wire specification.
+
+**1. The shape: a failure is a record, not a string.** `OpFailure = { Reason: string; Performed:
+OpReceipt }` and `OpPerformance.Performed of (OpPrefix -> 'Node -> 'Op -> Result<OpReceipt, OpFailure>)`.
+`Reason` is what the `PerformFailed` diagnostic surfaces verbatim, as the string was; `Performed` is
+the receipt of what the performer had done when it failed, `OpReceipt.none` when nothing. Every
+registration that existed keeps its signature over a `string` refusal and is lifted
+(`OpFailure.plain`): `performedBy`, `performedWithDetail`, `performedWithPrefix`, `performedChecked`,
+`performedWithoutReceipt` — the plain failure stays the easy registration. The one new registration,
+`performedWithFailure`, is the full form; a performer that wants contracts as well composes them first
+(`performedWithFailure (OpContract.checkAll contracts perform)`), because `OpContract.check` / `checkAll`
+now run over the failure type: a raw refusal passes through WITH its partial, and a receipt a contract
+rejects becomes `OpFailure.plain (describe contract)`.
+
+Rejected:
+
+- *`Result<OpReceipt, string * OpReceipt>` or `Error of reason * partial` as a bare tuple.* The pair
+  is the same information with no name for the second half and no place for the easy constructor;
+  every caller would spell `, OpReceipt.none`.
+- *A `PerformResult` DU (`Completed | Failed | FailedAfter`).* It replaces `Result` with a
+  three-way type every registration and every contract must re-learn, and its two failing cases carry
+  one shape (`FailedAfter reason none` IS `Failed reason`), which is a shape that drifts. The record's
+  `Performed = none` says the same thing with one case.
+- *Carrying the partial inside `OpReceipt.Detail` on the success path.* The op did NOT complete; a
+  receipt that says it did, with a note, is the lie the two-phase law exists to refuse.
+
+**2. The perform fold keeps the partial; `Performed` does not move.** `Handler.perform`'s failing
+branch appends the partial receipt to `Receipts` when it carries anything (a write or a detail), and
+appends nothing for `OpReceipt.none`. The uncommitted outcome's `Receipts` therefore name EVERY EFFECT
+PERFORMED: the completed stages' receipts and, last, the failing stage's partial. `Performed`,
+`Externally` and the `PerformFailed` diagnostic are unchanged: the failing capability is not reported
+as performed, and the residual D8 states — the capabilities before the failing one — is exactly what it
+was. The two prefixes now have different granularity on purpose: `Performed` answers "which stages
+ran", `Receipts` answers "what was written", and the failing stage's partial is the one receipt no
+`Performed` entry accounts for. `Receipts.changed` and `accountAll` need no change — they already
+read every receipt — so a host's clean-up reads `changed` and finds the two files the dead stage left.
+
+A plain failure is deliberately NOT appended as an empty receipt: `Receipts` records effects, an
+empty receipt records none, and a consumer whose performers never report a partial sees the 0.14
+reading byte for byte.
+
+**3. The durable journal's `Refused` record carries the partial; a resume is served it.**
+`JournalPhase.Refused of reason * partial: JVal option` and `JournaledStep.Refusal` likewise. The op
+stage's wrapper encodes the partial as it encodes a completed receipt (`OpReceipt.encode`), journals
+it beside the reason, and on a resume decodes the served partial back into `OpFailure.partial`, so the
+resumed outcome's `Receipts` are the fresh run's. In the stored form (`Journal.encode`) the member is
+`"partial"` and is ABSENT when there is none: a record written before this decision, or by any step
+whose failure performed nothing (every host call, read and plan act — `wrapAt` refuses with `None`
+there; only the op stage's `wrapAtWith` can carry one), decodes as a refusal with no partial, so an
+older journal reads unchanged. A served partial that is not an encoded receipt is refused as
+`op-receipt-malformed` in the reason's place (the stage was refused either way; the journal's defect is
+what an operator must act on), never read as a receipt with no writes (D43 §5).
+
+**The partial does NOT make a death inside a stage determinate (D23 holds).** The `Refused` record,
+like `Completed`, is written AFTER the performer returns. A process that dies inside the performer —
+after some writes — leaves `Attempted` alone; the partial it had made is known only to the dead process
+and is not a partial the journal can serve. The step stays INDETERMINATE and the resume is refused
+(`durable-indeterminate-step`) or re-invoked only under the named facet or override, exactly as before;
+`ReceiptTests` pins it ("a death inside a stage stays indeterminate"). The window this closes is the
+one between "the performer knew it had failed" and "Program recorded nothing of what it did"; the
+window between "the performer was running" and "the process is gone" is where exactly-once ends and is
+not moved.
+
+**4. The undo trail: a partially performed stage stays ONE-WAY.** A plan whose run rolled back is
+refused by `Undo.run` as `undo-uncommitted-plan` — "the residual a perform-phase failure left is the
+forward outcome's to report" — and that is unchanged: the partial receipt is part of that forward
+report (`Receipts`), not an inverse. An inverse is the state witness's law over an op APPLIED (K9);
+a performer's partial write is neither an applied op nor a thing the witness has an inverse for, and
+inventing a compensation from a receipt would be Program guessing at a host's storage. What a host
+does with the two files is the host's, read off `changed`.
+
+**5. The proof leg: the staging model is unchanged, and this is why.** `residual_is_prefix` quantifies
+over `oc_performed` — the staged CAPABILITIES before the failing one — and the F# that it models
+(`Handler.perform`'s halt, `Externally`, `Performed`) does not move; the model never carried receipts
+(premise above), so there is no receipt-granular clause to extend and extending the model would mean
+modelling `OpReceipt`, which Phases 1981/2197/2223 deliberately kept beside it. The claim therefore
+stands as stated: the stage-granular prefix over capabilities. The evidence that would falsify it is
+(a) the failing stage's capability appearing in `Performed` (the differential host
+`ToyStagingOracleTests` compares production's outcome against the extracted model's on every staged
+list it generates, performer refusals included, and would disagree), and (b) `Performed` on a
+rolled-back run differing from the capabilities before the failure, which `ReceiptTests` asserts
+beside the per-effect receipts. The prover ran on the committed model with its oracle byte-identical,
+and the oracle's host agreed with production under the new shape (Phase 2224's envelope records the
+run). What the model does NOT say — and is recorded in `proofs.json`'s out-of-model list so nobody
+reads it as proved — is anything about receipts, partial or whole.
+
+**No program-wire change.** The receipt reaches no wire (D43); the `PerformFailed` document keeps
+`(capability, reason)`; the journal is a host store (D23). The first consumer that wants the partial
+across a wire of its own reads it off `HandlerOutcome.Receipts`, as it reads `changed`.
+
+**What it closes for the first consumer.** After a multi-write stage fails part-way, the plane probe's
+verb — on Program alone — knows which of the stage's files are on disk: `changed` names them, and a
+resumed run is told the same without re-reading the world. The host-kept receipt list D196 deleted does
+not come back.
+
+**Version.** `OpPerformance.Performed`'s function type moves, `OpContract.check` / `checkAll` move with
+it, `JournalPhase.Refused` and `JournaledStep.Refusal` gain a field: breaking. `v0.14.1` is tagged, so
+this ADVANCES the slot to `0.15.0`; `STABILITY.md` carries the DRAFT entry.
