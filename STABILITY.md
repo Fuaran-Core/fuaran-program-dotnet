@@ -92,6 +92,22 @@ does not move: the receipt crosses no wire, and the `PerformFailed` document kee
 - **A served partial that is not an encoded receipt is refused** (`op-receipt-malformed` in the
   reason's place) — the same refusal a malformed completed receipt has met since 0.9.0.
 
+
+### The Core floor moves to 0.41.0 (cohort raise, 2026-11-09) — rides the draft, breaking by dependency
+
+**What changed.** The five `Fuaran.Core.*` pins (`Wire`, `Column`, `Tree`, `OpStream`, `Unit`) move
+0.40.2 → 0.41.0, Core's release of 2026-11-08 (`v0.41.0`, every package on nuget.org). Nothing in this
+repository's own surface moves for it; `Fuaran.Compute.DataFrame` stays at 0.43.0, which pins Core
+0.40.2 and lifts to 0.41.0 at restore. The act is recorded in the estate's version ledger.
+
+**The class.** A consumer's Core floor rises with this version — a consumer on Core 0.40.2 that takes
+0.15.0 takes Core 0.41.0 with it — so the move is breaking by dependency. It RIDES `0.15.0`, whose class
+is already breaking: the draft is untagged and no public-path consumer pins it. The plane members that
+run the published `Fuaran.Program` (the roadmap engine's verb host and the packages restored beside it)
+stay on Core 0.40.2 under recorded `cohort-lag(0.41.0)` markers until a Program built on this line is
+released; that release is the operator's act, not this entry's.
+
+
 ## 0.14.1 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223, 2620, 2383)
 
 **0.14.0 was never released.** It was a draft slot that was packed to a local feed more than once while its
