@@ -1170,28 +1170,6 @@ let private contracts =
 
 // ─── the model beside production ─────────────────────────────────────────────
 
-/// The journal snapshot as the model reads it, from the production journal's
-/// own entries — `ToyDurableReplayTests`'s adaptor, restated for the read.
-let private modelJournal (entries: JournalEntry list) : Staging.journal<JVal> =
-    { j_step =
-        fun k ->
-            match Journal.stepOf entries (int k) with
-            | JournaledStep.Unrun -> Staging.JUnrun
-            | JournaledStep.Value v -> Staging.JValue v
-            | JournaledStep.Refusal(r, _) -> Staging.JRefusal r
-            | JournaledStep.Indeterminate _ -> Staging.JIndeterminate
-      j_recorded =
-        fun k ->
-            match Journal.capabilityOf entries (int k), Journal.subjectOf entries (int k) with
-            | Some capability, Some subject ->
-                Staging.OSome(
-                    capability,
-                    (match subject with
-                     | Some s -> Staging.OSome s
-                     | None -> Staging.ONone)
-                )
-            | _ -> Staging.ONone }
-
 let private entry (step: int) (capability: string) (subject: string option) (phase: JournalPhase) : JournalEntry =
     { Invocation = "inv"
       Step = step
@@ -1227,7 +1205,9 @@ let private productionRead (entries: JournalEntry list) (live: string) : Result<
     answered.Value |> Option.defaultWith (fun () -> failtest "the plan never read")
 
 let private modelRead (entries: JournalEntry list) (live: string) : Result<JVal, string> =
-    match Staging.entry_read (modelJournal entries) (bigint 0) "bundle" (Staging.ROk(JStr live)) with
+    match
+        Staging.entry_read (ToyStagingOracleTests.keyedJournal entries) (bigint 0) "bundle" (Staging.ROk(JStr live))
+    with
     | Staging.ROk v -> Ok v
     | Staging.RErr r -> Error r
 
@@ -1258,7 +1238,13 @@ let private oracle =
               let entries = snd readShapes[1]
 
               let model =
-                  match Staging.entry_read (modelJournal entries) (bigint 0) "other" (Staging.ROk(JStr "Live")) with
+                  match
+                      Staging.entry_read
+                          (ToyStagingOracleTests.keyedJournal entries)
+                          (bigint 0)
+                          "other"
+                          (Staging.ROk(JStr "Live"))
+                  with
                   | Staging.ROk v -> Ok v
                   | Staging.RErr r -> Error r
 

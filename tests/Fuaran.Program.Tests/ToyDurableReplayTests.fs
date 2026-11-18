@@ -208,23 +208,6 @@ let private modelRegistry: Staging.registry<ToyNode, JVal, ToyOp, obj, Token> =
       r_query_stage = fun _ _ -> failwith "the replay differential plans nothing"
       r_record = fun _ -> failwith "the replay differential plans nothing" }
 
-/// The journal snapshot as the model reads it, from the production journal's
-/// own entries: `stepOf` for the three-state reading, `capabilityOf` and
-/// `subjectOf` for the recorded identity.
-let private modelJournal (entries: JournalEntry list) : Staging.journal<JVal> =
-    { j_step =
-        fun k ->
-            match Journal.stepOf entries (int k) with
-            | JournaledStep.Unrun -> Staging.JUnrun
-            | JournaledStep.Value v -> Staging.JValue v
-            | JournaledStep.Refusal(r, _) -> Staging.JRefusal r
-            | JournaledStep.Indeterminate _ -> Staging.JIndeterminate
-      j_recorded =
-        fun k ->
-            match Journal.capabilityOf entries (int k), Journal.subjectOf entries (int k) with
-            | Some capability, Some subject -> Staging.OSome(capability, modelOpt subject)
-            | _ -> Staging.ONone }
-
 /// The staged list the plan phase stages for `editsThenAudit` under a
 /// registered op performer, with the resume's performers as tokens. `ops` is
 /// the two op stages' ops in plan order — a parameter so a GO RED case can
@@ -309,7 +292,7 @@ let private replayDifferentialBent
             editsThenAudit
 
     let dur: Staging.durable<JVal, Token> =
-        { d_journal = modelJournal (bend.ModelEntries snapshot)
+        { d_journal = ToyStagingOracleTests.keyedJournal (bend.ModelEntries snapshot)
           d_subject = fun call -> modelOpt call.sc_performer.Subject
           d_idempotent = fun call -> call.sc_performer.Idempotent
           d_reinvoke = bend.ModelReinvoke services.ReinvokeIndeterminate }

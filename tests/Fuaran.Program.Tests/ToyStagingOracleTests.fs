@@ -2790,7 +2790,11 @@ let private decidedOf (entries: JournalEntry list) =
         | JournalPhase.Refused(reason, _) -> Some(e.Step, e.Capability, e.Subject, Error reason)
         | _ -> None)
 
-let private keyedJournal (entries: JournalEntry list) : Staging.journal<JVal> =
+/// The journal snapshot as the model reads it, from the production journal's
+/// own entries: `stepOf` for the step's reading, `capabilityOf` and `subjectOf`
+/// for the recorded identity — the one adaptor every model-beside-production
+/// suite reads through.
+let internal keyedJournal (entries: JournalEntry list) : Staging.journal<JVal> =
     { j_step =
         fun k ->
             match Journal.stepOf entries (int k) with
