@@ -2793,14 +2793,20 @@ let private decidedOf (entries: JournalEntry list) =
 /// The journal snapshot as the model reads it, from the production journal's
 /// own entries: `stepOf` for the step's reading, `capabilityOf` and `subjectOf`
 /// for the recorded identity — the one adaptor every model-beside-production
-/// suite reads through.
+/// suite reads through. A RETRYABLE refusal (Phase 2792, D69) reduces to the
+/// model's states: unrun while the run has not completed — nothing the journal
+/// must serve, so the step is attempted again — and a refusal once it has.
 let internal keyedJournal (entries: JournalEntry list) : Staging.journal<JVal> =
+    let complete = Journal.isComplete entries
+
     { j_step =
         fun k ->
             match Journal.stepOf entries (int k) with
             | JournaledStep.Unrun -> Staging.JUnrun
             | JournaledStep.Value v -> Staging.JValue v
             | JournaledStep.Refusal(r, _) -> Staging.JRefusal r
+            | JournaledStep.Retryable(r, _) when complete -> Staging.JRefusal r
+            | JournaledStep.Retryable _ -> Staging.JUnrun
             | JournaledStep.Indeterminate _ -> Staging.JIndeterminate
       j_recorded =
         fun k ->

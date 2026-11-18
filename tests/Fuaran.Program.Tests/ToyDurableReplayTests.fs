@@ -669,7 +669,8 @@ let private killedAfter (performances: int) (inner: EffectJournal) : EffectJourn
                 | JournalPhase.Attempted when entry.Step >= 0 && recorded >= performances ->
                     raise (ProcessDied "killed")
                 | JournalPhase.Completed _
-                | JournalPhase.Refused _ when entry.Step >= 0 ->
+                | JournalPhase.Refused _
+                | JournalPhase.RefusedRetryable _ when entry.Step >= 0 ->
                     inner.Append entry
                     recorded <- recorded + 1
                 | _ -> inner.Append entry }

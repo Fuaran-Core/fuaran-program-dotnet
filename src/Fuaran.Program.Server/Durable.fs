@@ -116,6 +116,18 @@ open Fuaran.Program.Bounded
 //  under `durable-plan-act-diverged`, naming the act — never as a read that
 //  diverged, because nothing was read.
 //
+//  ── A refusal may be RETRYABLE (Phase 2792, D69) ────────────────────────────
+//  A refusal is served on every later run, as an answer is — right for one the
+//  step's own inputs decide, wrong for one whose cause lies outside the run and
+//  can pass. The host classes a refusal when it is recorded
+//  (`DurableServices.classingRetryable`, over the step's capability, subject
+//  and reason) and the record carries the class (`RefusedRetryable`). A resume
+//  of a run that has not completed performs such a step again at its ordinal,
+//  one attempt per resume; a run that stops on one writes no invocation marker,
+//  so it stays resumable and its outcome says so (`DurableOutcome.Retryable`).
+//  A refusal that performed part of its effects is classed retryable only
+//  where the step repeats freely, so a retry never duplicates an effect.
+//
 //  The consequence a reader should carry away is the one the facets state: this
 //  interpreter's exactly-once claim is about what IT performs — and, since
 //  Phase 2165, about what its plan READ. What a caller does with a returned
@@ -672,6 +684,15 @@ type DurableOutcome<'Node, 'Store, 'Op, 'Effect> =
         Indeterminate: int list
         /// Ordinals re-invoked under an explicit override of that refusal.
         Overrides: DurableOverrideRecord list
+        /// Ordinals PERFORMED AGAIN because their latest record was a
+        /// retryable refusal (Phase 2792, D69) — each also in `Invoked`.
+        Retried: int list
+        /// Ordinals a resume of this run will perform again (Phase 2792, D69):
+        /// non-empty exactly when the run did not commit and recorded a
+        /// retryable refusal. Then the run is RESUMABLE — no invocation marker
+        /// was written, so its store keeps it — and this is how a host tells
+        /// "resume later" from an uncommitted run that will never pass.
+        Retryable: int list
     }
 
 /// The seams the durable interpreter adds to the direct one. Everything else it
@@ -682,8 +703,10 @@ type DurableServices =
         /// this interpreter degrades exactly to the direct one and the facets
         /// say so.
         Journal: EffectJournal
-        /// What the host declares about its own performers. Read only where the
-        /// journal cannot decide a step, and by the facet derivation.
+        /// What the host declares about its own performers. Read where the
+        /// journal cannot decide a step, where a refusal that performed part of
+        /// its effects is classed (Phase 2792, D69), and by the facet
+        /// derivation.
         Performers: PerformerFacets
         /// Whether an INDETERMINATE step is re-invoked rather than refused.
         ///
@@ -702,6 +725,14 @@ type DurableServices =
         /// declared in it. `None`, the default, judges no windowed clause: a
         /// capability declaring one is refused `limit-unjudgeable:no-clock`.
         Clock: (unit -> int64) option
+        /// Which refusals are RETRYABLE (Phase 2792, D69): asked once, when a
+        /// performer's refusal is recorded, with the step as the journal files
+        /// it and the performer's reason; the answer is written into the
+        /// record, so a resume reads the class and never asks again. The
+        /// default classes nothing: every refusal is final and served on
+        /// resume. A refusal that recorded a partial is retryable only where
+        /// the step is declared `Idempotent`, whatever this answers.
+        Retryable: StepRefusal -> bool
     }
 
 module DurableServices =
@@ -716,7 +747,8 @@ module DurableServices =
         { Journal = Journal.none
           Performers = PerformerFacets.none
           ReinvokeIndeterminate = false
-          Clock = None }
+          Clock = None
+          Retryable = fun _ -> false }
 
     let withJournal (journal: EffectJournal) (services: DurableServices) : DurableServices =
         { services with Journal = journal }
@@ -770,6 +802,19 @@ module DurableServices =
     let declaringPlanAct (act: string) (facet: IdempotencyFacet) (services: DurableServices) : DurableServices =
         { services with
             Performers = PerformerFacets.declarePlanAct act facet services.Performers }
+
+    /// Class the refusals `classify` answers `true` for as RETRYABLE (Phase
+    /// 2792, D69): a resume performs such a step again rather than serving
+    /// its refusal. Declarations accumulate — a refusal is retryable when any
+    /// declared classifier says so — and the class is recorded with the
+    /// refusal, so it is the classifier in force when the step REFUSED that
+    /// decides. A refusal whose cause the step's own inputs decide stays
+    /// unclassed: a resume would only refuse it again.
+    let classingRetryable (classify: StepRefusal -> bool) (services: DurableServices) : DurableServices =
+        let declared = services.Retryable
+
+        { services with
+            Retryable = fun refusal -> declared refusal || classify refusal }
 
     /// **The named opt-in.** Re-invoke a step the journal cannot decide, taking
     /// the duplicate hazard rather than the loss. Naming it is the
@@ -962,6 +1007,9 @@ module Durable =
         let invoked = ResizeArray<int>()
         let indeterminate = ResizeArray<int>()
         let overrides = ResizeArray<DurableOverrideRecord>()
+        let retried = ResizeArray<int>()
+        let retryable = ResizeArray<int>()
+        let complete = Journal.isComplete recorded
 
         let append (step: int) (capability: string) (subject: string option) (phase: JournalPhase) =
             services.Journal.Append
@@ -978,10 +1026,15 @@ module Durable =
         /// PARTIAL the performer reported beside its reason (Phase 2224, D68)
         /// — after the performer returned, like a completion, so a death
         /// inside the performer records no partial and stays indeterminate.
+        /// A refusal is classed when it is recorded (Phase 2792, D69): the
+        /// host's classifier, met with the step's repeat-safety where the
+        /// refusal performed something — a partial is retried only where
+        /// repeating the step is harmless by its own shape.
         let invoke
             (step: int)
             (capability: string)
             (subject: string option)
+            (declared: IdempotencyFacet)
             (performer: Fuaran.Core.JVal -> Result<Fuaran.Core.JVal, string * Fuaran.Core.JVal option>)
             (args: Fuaran.Core.JVal)
             : Result<Fuaran.Core.JVal, string * Fuaran.Core.JVal option> =
@@ -992,12 +1045,22 @@ module Durable =
             let result = performer args
             invoked.Add step
 
+            let retrySafe (reason: string) (partial: Fuaran.Core.JVal option) =
+                (partial.IsNone || declared = IdempotencyFacet.Idempotent)
+                && services.Retryable
+                    { Capability = capability
+                      Subject = subject
+                      Reason = reason }
+
             append
                 step
                 capability
                 subject
                 (match result with
                  | Ok value -> JournalPhase.Completed value
+                 | Error(reason, partial) when retrySafe reason partial ->
+                     retryable.Add step
+                     JournalPhase.RefusedRetryable(reason, partial)
                  | Error(reason, partial) -> JournalPhase.Refused(reason, partial))
 
             result
@@ -1032,7 +1095,7 @@ module Durable =
                 | Some reason -> Error(reason, None)
                 | None ->
                     beforeInvoking ()
-                    invoke step capability subject performer args
+                    invoke step capability subject declared performer args
 
             let previous = Journal.capabilityOf recorded step
 
@@ -1077,6 +1140,14 @@ module Durable =
                 | JournaledStep.Refusal(reason, partial) ->
                     replayed.Add step
                     Error(reason, partial)
+                // A RETRYABLE refusal (Phase 2792, D69) is performed again, at
+                // this ordinal, as an unrun step is — unless the run has
+                // completed: a complete invocation is replayed to recompute its
+                // outcome and reaches no performer, so it serves the refusal.
+                | JournaledStep.Retryable(reason, partial) when complete ->
+                    replayed.Add step
+                    Error(reason, partial)
+                | JournaledStep.Retryable _ -> attempt (fun () -> retried.Add step)
                 | JournaledStep.Unrun -> attempt ignore
                 | JournaledStep.Indeterminate _ ->
                     if declared = IdempotencyFacet.Idempotent then
@@ -1346,7 +1417,8 @@ module Durable =
         // so a receipt the contract rejects reaches this wrapper as the
         // refusal `return-contract:<name>` and is journaled as `Refused`, never
         // as a completed performance; a replay serves that refusal as it
-        // serves any other.
+        // serves any other final one — or performs the stage again, where the
+        // host classed it retryable (Phase 2792, D69).
         // What repeating THIS op does (Phase 2165, D39, F-FACET): the meet over
         // the effect kinds its reach names, under the per-kind declarations,
         // falling back to the whole-performer one — read per op, so a crash
@@ -1433,7 +1505,12 @@ module Durable =
         // a store, recomputed deterministically and never stored — so this
         // marker says only that a replay of this invocation will reach no
         // performer. Written once: the snapshot read at entry is what decides.
-        if not (Journal.isComplete recorded) then
+        // Withheld from a run that stopped on a RETRYABLE refusal (Phase 2792,
+        // D69): its resume WILL reach a performer, and an incomplete journal is
+        // what keeps the run in its store for that resume.
+        let resumable = not outcome.Committed && retryable.Count > 0
+
+        if not complete && not resumable then
             append
                 Journal.InvocationStep
                 Journal.InvocationCapability
@@ -1444,7 +1521,9 @@ module Durable =
           Replayed = List.ofSeq replayed
           Invoked = List.ofSeq invoked
           Indeterminate = List.ofSeq indeterminate
-          Overrides = List.ofSeq overrides }
+          Overrides = List.ofSeq overrides
+          Retried = List.ofSeq retried
+          Retryable = if resumable then List.ofSeq retryable else [] }
 
     /// **Run one handler under deterministic replay, performing its ops as the
     /// placement declares** — `runGuarded` above with no control in force.

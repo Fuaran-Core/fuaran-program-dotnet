@@ -5328,3 +5328,150 @@ not come back.
 **Version.** `OpPerformance.Performed`'s function type moves, `OpContract.check` / `checkAll` move with
 it, `JournalPhase.Refused` and `JournaledStep.Refusal` gain a field: breaking. `v0.14.1` is tagged, so
 this ADVANCES the slot to `0.15.0`; `STABILITY.md` carries the DRAFT entry.
+
+## D69 — A refusal can be RETRYABLE: the host classes a refusal when it is recorded (`DurableServices.classingRetryable`, over the step's capability, subject and the performer's reason), the record carries the class (`JournalPhase.RefusedRetryable`), and a resume performs a step whose latest record is a retryable refusal again at the same ordinal; one attempt per resume, no count in Program; a run that stops on one is left RESUMABLE and says so (`DurableOutcome.Retryable`); a refusal that performed part of its effects is retryable only where the step repeats freely; neither the program wire nor the staging model moves (2026-11-18)
+
+**Context.** A durable run that stops on a refusal stops for ever. `Journal.stepOf` reads a step's
+latest `Completed` or `Refused` record and the wrapper serves either (D12, D23), so a resume of that run
+replays the same refusal and the only way forward is a new run. That is right for a refusal the step's
+own inputs decide. It is wrong for one whose cause lies outside the run and can pass: a push rejected
+because the remote moved, a lock another process holds, a store that is briefly unreachable. A host
+whose run has already performed effects it cannot repeat — a push that landed, then a later step
+refused for such a cause — needs the run kept and the refused step performed again once the cause is
+gone, and until now could only do it with a step walk of its own beside Program (Phase 2792).
+
+**Premises checked against the tree first.**
+
+- A refusal is recorded AFTER the performer returns (`invoke`), as `Refused(reason, partial)`, and
+  served on every later run (`wrapAtWith`'s `JournaledStep.Refusal` arm). Confirmed in `Durable.fs`.
+- A refused step performed nothing — except an op stage that failed part-way, whose `partial` records
+  what it did perform (D68). So "performing it again disturbs nothing" holds for every refusal with no
+  partial and does NOT hold for one with a partial unless the step repeats freely. The design below
+  takes that exception rather than the shard's blanket premise.
+- Every run that stops on a refusal writes the invocation marker (`Journal.InvocationStep`,
+  "uncommitted"), so `Journal.isComplete` is true and a store may retire the run (D61). A run that is to
+  be resumed must therefore NOT be marked complete; nothing else in the tree reads the marker as
+  "resumable".
+- The journal is a host document, not a specified one (D23, D61): `PROGRAM_WIRE.md` §10.9 certifies
+  served performances and the divergence refusal, says "whether to re-invoke [an undecided position]
+  is a host's declared policy", and specifies no refusal record.
+- The staging model (`proofs/Staging.fst`) reads a step through a four-state `journaled`
+  (`JUnrun`/`JValue`/`JRefusal`/`JIndeterminate`), and `decide` answers `JUnrun` with
+  `Invoke false`, after the divergence check.
+
+**1. Where the class is declared: the HOST, per refusal, at the moment it is recorded.**
+`DurableServices.classingRetryable (classify: StepRefusal -> bool)` declares which refusals are
+retryable; `StepRefusal = { Capability; Subject; Reason }` is the step as the journal files it (the
+derived capability, the subject where the arm has one — the plan act's or entry read's name, an op's
+content address — and the performer's own reason). Declarations accumulate: a refusal is retryable
+when any declared classifier says so. The default classes nothing, so an unclassed refusal is FINAL and
+is served on resume exactly as before. The classifier is asked once, when the refusal is journaled,
+and its answer is written into the record; a resume reads the record and never asks again.
+
+Rejected:
+
+- *The performer carries the class in its own refusal.* Only the performer knows the cause, which is
+  the argument for it, but the performer's refusal is `string` for every host function, query
+  evaluator, read and act Program accepts; typing it would re-type every registration a host has
+  written to buy a bit most of them never set. The host is the party that registered the performer and
+  owns its reason vocabulary, so a classifier over the reason it answered reaches the same knowledge
+  without moving any registration. A reason PREFIX convention (`retryable:<reason>`) was rejected too:
+  it changes the text the `PerformFailed` diagnostic surfaces verbatim, and a meaning read into an
+  opaque string is the stringly contract the rest of this placement refuses.
+- *The effect kind alone, beside the repeat-safety declarations (`PerformerFacets`).* Too coarse:
+  one push refuses retryably (the remote moved) and finally (not authorised), and a per-kind flag
+  would make the host declare every refusal of the kind one way or lie. The repeat-safety declaration
+  is still read — it is the meet below — but it decides whether a retry is SAFE, not whether the
+  refusal is transient.
+- *Classify at resume time instead of at record time.* The journal would then not say what it holds:
+  a host reading a stopped run's store could not tell "resume later" from "never" without the
+  classifier the dead process held, and a resume under a changed classifier would decide the same
+  record differently. Recording the class makes the record the decision, as a recorded answer already
+  is.
+
+**2. The meet: a refusal that performed part of its effects is retryable only where the step
+repeats freely.** The class recorded is the classifier's answer AND (the refusal recorded no partial
+OR the step's repeat-safety declaration is `Idempotent`). A partial means the performer did part of the
+work; performing the step again performs that part again, which is exactly the duplicate the
+exactly-once claim forbids unless repeating is harmless by the step's own shape. `IdempotentWithStore`
+does not admit it: the store it leans on is this journal, and the journal records a refusal, not the
+partial effects as done. Such a refusal is recorded FINAL whatever the classifier said, and the partial
+is served on resume as D68 serves it.
+
+**3. The resume: the step is performed again, at the same ordinal.** A resume whose wrapper reaches a
+step whose latest record is a retryable refusal — and whose journal holds no invocation marker —
+attempts it exactly as it attempts an unrun step: the divergence check first (the recorded capability
+and subject must be this call's), the operator controls' refusal next (Phase 1983; a withdrawn
+performer is not retried), then `Attempted` and the new result, appended at the SAME ordinal. The
+journal stays append-only; `stepOf`'s "the latest result record wins" reads the new attempt. Steps
+before it are served as today. The new result is classified as the first was, so the run continues on a
+success, stops finally on a final refusal, and stops resumable again on a retryable one. A step with a
+retryable record in a journal that DOES hold the marker is served as a refusal, never retried: a
+complete invocation is replayed to recompute its outcome and must reach no performer (D61), and the
+only way such a record exists is a run that absorbed the refusal and finished.
+
+A retry performs the step against what the resume holds: its served prefix, its served reads and clock.
+A step whose every input is served (a windowed `Limit` decision under the served clock reading, say)
+refuses again however often it is retried; that is the classifier's to know, and Program does not
+second-guess it.
+
+**4. What bounds the retries: nothing in Program; each resume is one attempt.** A resume performs a
+retryable step at most once; whether and when to resume again is the host's, which is where the cause
+lives (a host knows when the remote moved or a lock was released, Program does not). A count in
+Program would be a second policy the host must keep in step with its own, and a backoff would need a
+clock the durable tier reads only through the journal. The journal keeps every attempt — each resume
+appends its `Attempted` and its result — and `Journal.attemptsOf` counts them, so a host that wants a
+bound reads it off the record and stops resuming.
+
+**5. What a run reports when it stops on a retryable refusal.** `DurableOutcome.Retryable` lists the
+ordinals a resume of this run will perform again; it is non-empty exactly when the run did not commit
+and recorded a retryable refusal, and then the run is RESUMABLE. `DurableOutcome.Retried` lists the
+ordinals this run performed again because their record was retryable (an audit list, beside
+`Overrides`). A run that stops resumable writes NO invocation marker, so `Journal.isComplete` is false
+and `JournalStore.Close` refuses to retire it (`journal-store-run-incomplete`), which is the store
+keeping the run for its resume rather than a defect. So a host tells the three ends apart from the
+outcome alone: committed; uncommitted with `Retryable` empty ("this will never pass" — the marker is
+written and the run may be retired); uncommitted with `Retryable` non-empty ("resume later"). A host
+that sees only the store reads the same from `Journal.retryable` over the run's entries.
+
+**6. The journal.** `JournalPhase.RefusedRetryable of reason * partial` is the record (written after
+the performer returns, like `Refused`), stored as its own arm `"$type": "RefusedRetryable"` with
+`Refused`'s members; `JournaledStep.Retryable of reason * partial` is `stepOf`'s reading of it.
+`JournalPhase.tag` gives it `refused-retryable`. A journal written before this decision holds no such
+record and reads, renders and describes byte for byte as before; a final refusal is written exactly as
+before. An older reader refuses the new arm as an unknown journal phase rather than serving it as
+final, which is the right failure for a store that may only be resumed by a reader that knows the
+class.
+
+**7. Exactly-once and the receipts a contract checks.** A retried refusal does not weaken the
+exactly-once claim: the step it performs again performed nothing the first time, or (§2) performed
+something that repeats freely, so the step's effect is still observed once. The facet derivation is
+therefore unchanged and `Facets.fs` says so. A retried op stage is performed through the registered
+performer, contracts included, so its receipt is checked as any first performance's is, and the
+resumed outcome's `Receipts` are the retry's: the refused attempt left no partial (or, under §2, its
+partial was of a step that repeats freely), so nothing of the earlier attempt is reported as performed.
+`docs/server-handler-atomicity.md` §2 carries the same account.
+
+**8. The proof leg: the staging model is unchanged, and this is why.** The model has no class of
+refusal, and the retry is a READING of the record, not a new decision: on a journal with no marker, a
+retryable refusal is read as `JUnrun` — nothing the journal must serve — and `decide` answers it as it
+answers an unrun step, after the same divergence check, which is what production does. On a journal
+with the marker it is read as `JRefusal`, served. The production-to-model adaptor makes exactly that
+reduction; there were three identical copies of it (`ToyStagingOracleTests`, `ToyDurableReplayTests`,
+`DurableInterpreterTests`), each of which the new case would have had to extend alike, so it is now ONE
+(`ToyStagingOracleTests.keyedJournal`) and the other two read through it. `DurableInterpreterTests` adds a
+retryable read to the shapes on which production and the extracted `entry_read` are compared, and the
+comparison goes red when production serves that record instead of performing it again. What the model does
+NOT carry is the classification and the meet of §2, which happen where the record is WRITTEN; the
+journal's writes are the host port and already stand outside the theorem. `proofs.json` does not move.
+
+**No program-wire change.** No specified document carries a refusal class: the journal is a host store
+(D23, D61), the `PerformFailed` document keeps `(capability, reason)`, and §10.9's `durable-journal`
+scenarios never classify a refusal, so every one of them runs and passes as before. The specification
+leaves re-invocation policy to the host in so many words, and the retry class is a policy of the same
+kind; a scenario family for it waits until a second witness needs the class certified across hosts.
+
+**Version.** `JournalPhase` and `JournaledStep` gain a case, and `DurableServices` and
+`DurableOutcome` gain fields: breaking for a host that matches either union exhaustively or constructs
+either record in full. It RIDES `0.15.0`, whose class is already breaking (D68) and which is untagged
+and publicly unpinned; `STABILITY.md` appends to that entry.

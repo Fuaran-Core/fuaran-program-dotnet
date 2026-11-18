@@ -668,6 +668,17 @@ module Facets =
     /// And a journal that does not survive a restart makes every one of those
     /// distinctions moot: nothing is recorded across the failure the guarantee is
     /// about, so the whole derivation falls back to the direct interpreter's.
+    ///
+    /// **A retried refusal moves none of this** (Phase 2792, D69). A resume
+    /// performs a step again only where its record is a refusal the host classed
+    /// retryable, and a refusal is classed so only where it performed nothing
+    /// or the step is declared `Idempotent` — so the step it repeats left no
+    /// effect to duplicate, or one that repeats freely, and its effect is still
+    /// observed once. A retried op stage is performed through the registered
+    /// performer, its contracts included, so the receipt a contract checks is
+    /// the retry's, checked as a first performance's is; nothing of the refused
+    /// attempt is reported as performed. The derivation therefore reads no
+    /// retry class: it would answer the same with or without one.
     let ofEffect
         (discipline: PlacementDiscipline)
         (performers: PerformerFacets)

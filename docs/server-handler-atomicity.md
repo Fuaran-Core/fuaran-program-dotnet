@@ -228,6 +228,25 @@ seam; it is the seam both other placements already have, used deliberately.
 > death INSIDE a stage records no partial and stays indeterminate (D23). A partially performed stage
 > contributes no inverse: `Undo.run` still refuses an uncommitted plan, and what a host does with the
 > files the stage left is the host's, read off `changed`.
+>
+> **A refusal may be RETRYABLE, since [D69](../DECISIONS.md) (Phase 2792).** A refusal is otherwise
+> served on every later run, as an answer is: right for a refusal the step's own inputs decide, wrong
+> for one whose cause lies outside the run and can pass (a push rejected because the remote moved, a
+> lock another process holds, a store briefly unreachable). The host classes a refusal when it is
+> recorded (`DurableServices.classingRetryable`, over the step's capability, subject and reason), and
+> the record carries the class (`RefusedRetryable`); an unclassed refusal is final, as before. A resume
+> of a run that has not completed performs a retryable step AGAIN at its ordinal, after the same
+> divergence check and the same operator controls an unrun step meets, one attempt per resume; steps
+> before it are served. A run that stops on one writes no invocation marker, so it stays in its store
+> for the resume, and its outcome names the step (`DurableOutcome.Retryable`), which is how a host
+> tells "resume later" from "this will never pass"; `Journal.attemptsOf` counts the attempts the
+> journal keeps, for a host that bounds its resumes. **What it does to exactly-once: nothing.** A
+> refusal is classed retryable only where it performed nothing, or where the step is declared
+> `Idempotent` and its partial repeats freely, so the retry duplicates no effect. **What it does to the
+> receipts a contract checks:** a retried op stage is performed through the registered performer, its
+> contracts composed in front, so the receipt is the retry's and is checked as a first performance's
+> is; nothing of the refused attempt is reported as performed. A complete run's replay never retries:
+> it serves the refusal, and reaches no performer.
 
 **What remains open.**
 

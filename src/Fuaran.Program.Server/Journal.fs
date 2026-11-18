@@ -74,6 +74,23 @@ type JournalPhase =
     /// Written AFTER, like `Completed`: a step the performer never returned
     /// from has no partial and stays `Attempted` alone, indeterminate.
     | Refused of reason: string * partial: Fuaran.Core.JVal option
+    /// The step ran and the performer refused, and the refusal was classed
+    /// RETRYABLE when it was recorded (Phase 2792, D69): its cause lies outside
+    /// the run and can pass, so a resume performs the step again at this
+    /// ordinal rather than serving the refusal. The host classes it
+    /// (`DurableServices.classingRetryable`); a refusal that recorded a
+    /// `partial` is classed retryable only where the step repeats freely.
+    /// Written AFTER, like `Refused`, with the same members.
+    | RefusedRetryable of reason: string * partial: Fuaran.Core.JVal option
+
+/// A refusal as the host classes it (Phase 2792, D69): the step as the journal
+/// files it — its derived capability and its subject, where the arm has one —
+/// and the performer's own reason. What `DurableServices.classingRetryable`
+/// is handed, once, when the refusal is recorded.
+type StepRefusal =
+    { Capability: string
+      Subject: string option
+      Reason: string }
 
 /// One journal record.
 ///
@@ -130,6 +147,7 @@ module JournalPhase =
         | JournalPhase.Attempted -> "attempted"
         | JournalPhase.Completed _ -> "completed"
         | JournalPhase.Refused _ -> "refused"
+        | JournalPhase.RefusedRetryable _ -> "refused-retryable"
 
 /// What the journal knows about one step, after the records for it are read
 /// together. This is the three-state reading the header describes, as a value —
@@ -144,6 +162,10 @@ type JournaledStep =
     /// The step ran and was refused, for this reason — with the partial
     /// receipt the refusal recorded, where it recorded one (Phase 2224, D68).
     | Refusal of reason: string * partial: Fuaran.Core.JVal option
+    /// The step ran and was refused RETRYABLY (Phase 2792, D69): a resume of a
+    /// run that has not completed performs it again; a completed run's replay
+    /// serves it as a refusal.
+    | Retryable of reason: string * partial: Fuaran.Core.JVal option
     /// `Attempted` with no result. The effect may or may not have happened, and
     /// the capability it was attempted under is carried so a caller can say
     /// WHICH step it cannot decide.
@@ -224,6 +246,7 @@ module Journal =
                 match e.Phase with
                 | JournalPhase.Completed value -> Some(JournaledStep.Value value)
                 | JournalPhase.Refused(reason, partial) -> Some(JournaledStep.Refusal(reason, partial))
+                | JournalPhase.RefusedRetryable(reason, partial) -> Some(JournaledStep.Retryable(reason, partial))
                 | JournalPhase.Attempted -> None)
 
         match result, forStep with
@@ -267,6 +290,34 @@ module Journal =
         | JournaledStep.Value _ -> true
         | _ -> false
 
+    /// How many times `step` was attempted (Phase 2792, D69): the journal
+    /// keeps every attempt, each resume that performs a retryable step again
+    /// appending its own `Attempted` and result at the same ordinal. Program
+    /// bounds nothing — each resume is one attempt — so a host that wants a
+    /// bound reads it here and stops resuming.
+    let attemptsOf (entries: JournalEntry list) (step: int) : int =
+        entries
+        |> List.filter (fun e -> e.Step = step && e.Phase = JournalPhase.Attempted)
+        |> List.length
+
+    /// The ordinals a resume of this run would perform again (Phase 2792,
+    /// D69): those whose latest record is a RETRYABLE refusal, in ordinal
+    /// order — empty for a run that has completed, whose replay serves every
+    /// refusal. Non-empty is "resume later"; a host that sees only the store
+    /// tells it from "this will never pass" here.
+    let retryable (entries: JournalEntry list) : int list =
+        if isComplete entries then
+            []
+        else
+            entries
+            |> List.map _.Step
+            |> List.distinct
+            |> List.sort
+            |> List.filter (fun step ->
+                match stepOf entries step with
+                | JournaledStep.Retryable _ -> true
+                | _ -> false)
+
     /// A log-safe rendering of one invocation's journal — ordinals, capabilities,
     /// an op stage's subject (a content address, so it is log-safe by
     /// construction) and phase tags, and no recorded value. The values are safe
@@ -292,6 +343,12 @@ module Journal =
 
     /// One entry's canonical document.
     let encode (entry: JournalEntry) : Fuaran.Core.JVal =
+        let refusal (reason: string) (partial: Fuaran.Core.JVal option) =
+            [ "reason", Fuaran.Core.JStr reason ]
+            @ (match partial with
+               | None -> []
+               | Some performed -> [ "partial", performed ])
+
         let subject =
             match entry.Subject with
             | None -> []
@@ -301,12 +358,8 @@ module Journal =
             match entry.Phase with
             | JournalPhase.Attempted -> "Attempted", []
             | JournalPhase.Completed value -> "Completed", [ "value", value ]
-            | JournalPhase.Refused(reason, partial) ->
-                "Refused",
-                [ "reason", Fuaran.Core.JStr reason ]
-                @ (match partial with
-                   | None -> []
-                   | Some performed -> [ "partial", performed ])
+            | JournalPhase.Refused(reason, partial) -> "Refused", refusal reason partial
+            | JournalPhase.RefusedRetryable(reason, partial) -> "RefusedRetryable", refusal reason partial
 
         Fuaran.Core.Canonical.typed
             arm
@@ -343,18 +396,21 @@ module Journal =
                                   Subject = subject
                                   Phase = phase })))))
 
+        let refusal (phase: string * Fuaran.Core.JVal option -> JournalPhase) (v: Fuaran.Core.JVal) =
+            ProgramWire.requireString "reason" v
+            |> Result.map (fun reason -> phase (reason, ProgramWire.tryMember "partial" v))
+
         match ProgramWire.tag value with
         | None -> ProgramWire.refuse RefusalClass.MissingMember "required member '$type' is absent"
         | Some "Attempted" -> entry [] (fun _ -> Ok JournalPhase.Attempted)
         | Some "Completed" ->
             entry [ "value" ] (fun v -> ProgramWire.requireMember "value" v |> Result.map JournalPhase.Completed)
-        | Some "Refused" ->
-            // `partial` is optional (Phase 2224, D68): a record written before
-            // refusals carried one, or by a step that performed nothing, has
-            // none, and reads as a refusal with no partial.
-            entry [ "reason"; "partial" ] (fun v ->
-                ProgramWire.requireString "reason" v
-                |> Result.map (fun reason -> JournalPhase.Refused(reason, ProgramWire.tryMember "partial" v)))
+        // `partial` is optional (Phase 2224, D68): a record written before
+        // refusals carried one, or by a step that performed nothing, has none,
+        // and reads as a refusal with no partial. A retryable refusal (Phase
+        // 2792, D69) is its own arm with the same members.
+        | Some "Refused" -> entry [ "reason"; "partial" ] (refusal JournalPhase.Refused)
+        | Some "RefusedRetryable" -> entry [ "reason"; "partial" ] (refusal JournalPhase.RefusedRetryable)
         | Some other -> ProgramWire.refuse RefusalClass.UnknownEffectArm ("'" + other + "' is not a journal phase")
 
 // ============================================================================

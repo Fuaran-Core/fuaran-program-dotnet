@@ -108,6 +108,40 @@ stay on Core 0.40.2 under recorded `cohort-lag(0.41.0)` markers until a Program 
 released; that release is the operator's act, not this entry's.
 
 
+### Rides the draft: a refused step can be declared retryable, so a resume performs it again (Phase 2792)
+
+**Class: breaking — rides `0.15.0`**, whose class is already breaking: two closed unions gain a case and
+two records gain fields. `DECISIONS.md` D69 records the design. The program wire specification does not
+move: no specified document carries a refusal class, and the journal is a host store.
+
+**What a consumer gains.**
+
+- `DurableServices.classingRetryable (classify: StepRefusal -> bool)`: the host classes a refusal as
+  RETRYABLE when it is recorded, over `StepRefusal = { Capability; Subject; Reason }`. Declarations
+  accumulate. A resume of a run that has not completed performs a retryable step again at its ordinal,
+  one attempt per resume; steps before it are served.
+- `DurableOutcome.Retryable`: the ordinals a resume will perform again, non-empty exactly when the run
+  stopped resumable ("resume later", as against an uncommitted run that will never pass), and
+  `DurableOutcome.Retried`: the ordinals this run performed again.
+- `Journal.retryable` (the same answer from the store alone) and `Journal.attemptsOf` (the attempts the
+  journal keeps at a step, for a host that bounds its resumes; Program bounds nothing).
+
+**What a consumer pays.**
+
+- **`JournalPhase` gains `RefusedRetryable of reason * partial`, and `JournaledStep` gains
+  `Retryable of reason * partial`.** A host that matches either exhaustively adds the arm. A retryable
+  record is stored under its own `$type`, `"RefusedRetryable"`, with `Refused`'s members; a reader that
+  refuses unknown arms refuses it, which is right for a reader that does not know the class.
+- **`DurableServices` gains `Retryable: StepRefusal -> bool`, and `DurableOutcome` gains `Retried` and
+  `Retryable`.** A host that builds `DurableServices` from `DurableServices.create` is unaffected; one
+  that writes the record in full adds `Retryable = fun _ -> false`.
+- **A run that stops on a retryable refusal writes no invocation marker**, so `Journal.isComplete` is
+  false for it and `JournalStore.Close` refuses it until a resume completes it. That is the store keeping
+  the run for its resume.
+- **Nothing moves for a host that classes nothing.** Every refusal is final and served on resume, and
+  every journal, rendered entry and outcome is byte-identical to the draft before this entry.
+
+
 ## 0.14.1 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223, 2620, 2383)
 
 **0.14.0 was never released.** It was a draft slot that was packed to a local feed more than once while its

@@ -1168,7 +1168,7 @@ let private contracts =
                   "the empty list is the performer"
           } ]
 
-// ─── the model beside production ─────────────────────────────────────────────
+// ─── a retryable refusal (Phase 2792, D69) ───────────────────────────────────
 
 let private entry (step: int) (capability: string) (subject: string option) (phase: JournalPhase) : JournalEntry =
     { Invocation = "inv"
@@ -1176,6 +1176,244 @@ let private entry (step: int) (capability: string) (subject: string option) (pha
       Capability = capability
       Subject = subject
       Phase = phase }
+
+/// An op stage, then a land: the op is the step whose performer fails part-way.
+let private oneEditThenLand: Handler<ToyAction, ToyOp> =
+    { Name = "edit-then-land"
+      Stages =
+        [ Effect(ServerEffect.ApplyOps [ Relabel("title", "Edited") ])
+          Effect(ServerEffect.HostCall("land", JStr "main", None)) ] }
+
+/// A land, then a push: the push is the step whose refusal may pass. `land` is
+/// what a retry must never perform again.
+let private landThenPush: Handler<ToyAction, ToyOp> =
+    { Name = "land"
+      Stages =
+        [ Effect(ServerEffect.HostCall("land", JStr "main", None))
+          Effect(ServerEffect.HostCall("push", JStr "store", None)) ] }
+
+/// A push that refuses with each reason in `refusals`, in turn, and then
+/// succeeds — counting every performance.
+let private pushing (count: int ref) (refusals: string list) =
+    let pending = ref refusals
+
+    fun (_: JVal) ->
+        count.Value <- count.Value + 1
+
+        match pending.Value with
+        | reason :: rest ->
+            pending.Value <- rest
+            Error reason
+        | [] -> Ok(JStr "pushed")
+
+/// The host's classifier: a push the remote moved under can pass.
+let private remoteMoved (refusal: StepRefusal) =
+    refusal.Capability = "host:push" && refusal.Reason = "remote-moved"
+
+let private retrying (journal: EffectJournal) =
+    DurableServices.create
+    |> DurableServices.withJournal journal
+    |> DurableServices.classingRetryable remoteMoved
+
+let private runLand
+    (services: DurableServices)
+    (lands: int ref)
+    (push: JVal -> Result<JVal, string>)
+    (performance: OpPerformance<ToyNode, ToyOp>)
+    (handler: Handler<ToyAction, ToyOp>)
+    =
+    Durable.runWith
+        witness
+        services
+        "inv"
+        (registryOf [ "land", counting lands "landed"; "push", push ])
+        performance
+        Fuaran.Compute.DataFrame.noResolve
+        "node"
+        handler
+        emptyStore
+
+let private retry =
+    testList
+        "a refused step can be declared retryable, so a resume performs it again (Phase 2792, D69)"
+        [ test "a step refused as retryable is performed again on resume, and its success completes the run" {
+              let journal = freshJournal ()
+              let lands = ref 0
+              let pushes = ref 0
+              let push = pushing pushes [ "remote-moved" ]
+
+              let first =
+                  runLand (retrying journal) lands push OpPerformance.InMemory landThenPush
+
+              Expect.isFalse first.Outcome.Committed "the first run stops on the push"
+              Expect.equal first.Retryable [ 1 ] "and says a resume will perform the push again"
+              Expect.isFalse (Journal.isComplete (journal.Read "inv")) "no invocation marker: the run is resumable"
+              Expect.equal (Journal.retryable (journal.Read "inv")) [ 1 ] "the store alone says so too"
+
+              Expect.contains
+                  (Journal.describe (journal.Read "inv"))
+                  "1 host:push refused-retryable"
+                  "the record carries the class"
+
+              let resumed =
+                  runLand (retrying journal) lands push OpPerformance.InMemory landThenPush
+
+              Expect.isTrue resumed.Outcome.Committed "the retried push succeeds and the run commits"
+              Expect.equal lands.Value 1 "the land is served, never performed again"
+              Expect.equal pushes.Value 2 "the push is performed once more"
+              Expect.equal resumed.Replayed [ 0 ] "the step before it is served as today"
+              Expect.equal resumed.Retried [ 1 ] "the push is reported as retried"
+              Expect.equal resumed.Invoked [ 1 ] "and as the one performance"
+              Expect.isEmpty resumed.Retryable "nothing is left to retry"
+              Expect.isTrue (Journal.isComplete (journal.Read "inv")) "the marker is written once the run completes"
+              Expect.equal (Journal.attemptsOf (journal.Read "inv") 1) 2 "the journal keeps both attempts"
+
+              let replay =
+                  runLand (retrying journal) lands push OpPerformance.InMemory landThenPush
+
+              Expect.equal (lands.Value, pushes.Value) (1, 2) "a complete run's replay performs nothing"
+              Expect.equal replay.Replayed [ 0; 1 ] "and serves both steps"
+          }
+
+          test "a step refused without the class is served its refusal, unchanged" {
+              let refusedUnder (services: EffectJournal -> DurableServices) =
+                  let journal = freshJournal ()
+                  let lands = ref 0
+                  let pushes = ref 0
+                  let push = pushing pushes [ "not-authorised"; "not-authorised" ]
+
+                  let first =
+                      runLand (services journal) lands push OpPerformance.InMemory landThenPush
+
+                  let resumed =
+                      runLand (services journal) lands push OpPerformance.InMemory landThenPush
+
+                  first, resumed, pushes.Value, journal.Read "inv" |> List.map Journal.render
+
+              let first, resumed, pushes, rendered = refusedUnder retrying
+
+              let _, _, _, unclassed =
+                  refusedUnder (fun journal -> DurableServices.create |> DurableServices.withJournal journal)
+
+              Expect.isEmpty first.Retryable "an unclassed refusal is final"
+              Expect.equal pushes 1 "the resume does not push again"
+              Expect.equal resumed.Replayed [ 0; 1 ] "it is served the refusal"
+              Expect.isEmpty resumed.Retried "and retries nothing"
+              Expect.isFalse resumed.Outcome.Committed "so the run stays refused"
+              Expect.equal rendered unclassed "and the journal is byte-identical to one with no classifier at all"
+          }
+
+          test "a retryable refusal that recurs leaves the run resumable, and reports so" {
+              let store = JournalStore.inMemory ()
+              let services = retrying store.Journal
+              let lands = ref 0
+              let pushes = ref 0
+              let push = pushing pushes [ "remote-moved"; "remote-moved" ]
+
+              runLand services lands push OpPerformance.InMemory landThenPush |> ignore
+              let again = runLand services lands push OpPerformance.InMemory landThenPush
+
+              Expect.isFalse again.Outcome.Committed "the push refused again"
+              Expect.equal again.Retried [ 1 ] "after being performed again"
+              Expect.equal again.Retryable [ 1 ] "and the run is still resumable"
+              Expect.equal (Journal.attemptsOf (store.Journal.Read "inv") 1) 2 "with both attempts kept"
+
+              Expect.equal
+                  (store.Close "inv")
+                  (Error JournalStore.RunIncomplete)
+                  "the store keeps a resumable run rather than retiring it"
+
+              let last = runLand services lands push OpPerformance.InMemory landThenPush
+              Expect.isTrue last.Outcome.Committed "a third resume passes"
+              Expect.equal lands.Value 1 "and the land ran once across all three"
+              Expect.equal (store.Close "inv") (Ok()) "the completed run is retired"
+          }
+
+          test "a complete run's replay serves a retryable record and reaches no performer" {
+              let journal = freshJournal ()
+
+              [ entry 0 "host:land" None JournalPhase.Attempted
+                entry 0 "host:land" None (JournalPhase.Completed(JStr "landed"))
+                entry 1 "host:push" None JournalPhase.Attempted
+                entry 1 "host:push" None (JournalPhase.RefusedRetryable("remote-moved", None))
+                entry
+                    Journal.InvocationStep
+                    Journal.InvocationCapability
+                    None
+                    (JournalPhase.Completed(JStr "uncommitted")) ]
+              |> List.iter journal.Append
+
+              let lands = ref 0
+              let pushes = ref 0
+
+              let replay =
+                  runLand (retrying journal) lands (pushing pushes []) OpPerformance.InMemory landThenPush
+
+              Expect.equal (lands.Value, pushes.Value) (0, 0) "nothing is performed"
+              Expect.equal replay.Replayed [ 0; 1 ] "both steps are served"
+              Expect.isEmpty replay.Retryable "and nothing is left to retry"
+              Expect.isEmpty (Journal.retryable (journal.Read "inv")) "a complete run retries nothing"
+          }
+
+          test "a refusal that performed part of its effects is retryable only where the step repeats freely" {
+              let partly =
+                  OpPerformance.performedWithFailure (fun _ _ _ ->
+                      Error(OpFailure.partial "remote-moved" (OpReceipt.ofDetail (JStr "half"))))
+
+              let classedUnder (services: DurableServices) =
+                  let journal = freshJournal ()
+
+                  let outcome =
+                      runLand
+                          (services
+                           |> DurableServices.withJournal journal
+                           |> DurableServices.classingRetryable (fun r -> r.Reason = "remote-moved"))
+                          (ref 0)
+                          (fun _ -> Ok(JStr "pushed"))
+                          partly
+                          oneEditThenLand
+
+                  outcome.Retryable, journal.Read "inv" |> Journal.describe
+
+              let undeclared, undeclaredRecord = classedUnder DurableServices.create
+
+              let idempotent, idempotentRecord =
+                  classedUnder (
+                      DurableServices.create
+                      |> DurableServices.declaringOpPerformer IdempotencyFacet.Idempotent
+                  )
+
+              Expect.isEmpty undeclared "a partial of a step not declared idempotent is final"
+              Expect.isTrue (undeclaredRecord |> List.exists (fun l -> l.EndsWith " refused")) "and recorded so"
+              Expect.equal idempotent [ 0 ] "a partial of an idempotent step is retryable"
+
+              Expect.isTrue
+                  (idempotentRecord |> List.exists (fun l -> l.EndsWith " refused-retryable"))
+                  "and recorded so"
+          }
+
+          test "the retryable record round-trips its stored form, and a final one is written as before" {
+              let retryable =
+                  entry 3 "host:push" None (JournalPhase.RefusedRetryable("remote-moved", Some(JStr "half")))
+
+              let final = entry 3 "host:push" None (JournalPhase.Refused("remote-moved", None))
+
+              Expect.equal
+                  (Journal.render retryable
+                   |> ProgramWire.parseDocument
+                   |> Result.bind Journal.decode)
+                  (Ok retryable)
+                  "decoded as written"
+
+              Expect.stringContains (Journal.render retryable) "\"$type\":\"RefusedRetryable\"" "its own arm"
+
+              Expect.equal
+                  (Journal.render final)
+                  "{\"$type\":\"Refused\",\"capability\":\"host:push\",\"invocation\":\"inv\",\"reason\":\"remote-moved\",\"step\":3}"
+                  "a final refusal keeps its stored form"
+          } ]
+
+// ─── the model beside production ─────────────────────────────────────────────
 
 /// What production's reader answered the plan, observed through the
 /// witness: the read's answer is what `Apply` relabels with, or the refusal
@@ -1219,6 +1457,9 @@ let private readShapes: (string * JournalEntry list) list =
       "the read refused",
       [ entry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted
         entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.Refused("the host could not read", None)) ]
+      "the read refused as retryable (Phase 2792)",
+      [ entry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted
+        entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.RefusedRetryable("briefly unreachable", None)) ]
       "the read attempted and undecided", [ entry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted ]
       "another read recorded at the ordinal",
       [ entry 0 Durable.EntryReadCapability (Some "other") JournalPhase.Attempted
@@ -1255,4 +1496,4 @@ let private oracle =
 let tests =
     testList
         "Phase 2165 - the durable tier at the toy witness: the entry read, the prefix, per-kind facets and composed contracts"
-        [ entryRead; planAct; prefix; facet; contracts; oracle ]
+        [ entryRead; planAct; prefix; facet; contracts; retry; oracle ]
