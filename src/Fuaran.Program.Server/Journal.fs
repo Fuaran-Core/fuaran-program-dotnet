@@ -657,6 +657,11 @@ module JournalStore =
     /// The file a run's journal lives in under `directory`.
     let fileOf (directory: string) (run: string) : string = named ".journal" directory run
 
+    /// The lock file whose exclusive open is the hold on a run (Phase 2797,
+    /// D72), as a full path: the key the process's holds are kept under.
+    let private lockOf (directory: string) (run: string) : string =
+        System.IO.Path.GetFullPath(named ".lock" directory run)
+
     /// The runs THIS PROCESS holds (Phase 2797, D72), by the full path of the
     /// lock file: the open handle that is the hold, shared by every file store
     /// in the process. Locked for its own reads and writes.
@@ -701,7 +706,7 @@ module JournalStore =
     /// does or no exclusive hold can be had. The handle is the gate a file
     /// store serialises the run's reads and appends on.
     let private hold (directory: string) (run: string) : System.IO.FileStream =
-        let path = System.IO.Path.GetFullPath(named ".lock" directory run)
+        let path = lockOf directory run
 
         lock held (fun () ->
             match held.TryGetValue path with
@@ -747,7 +752,7 @@ module JournalStore =
     /// append and close of the run in this process. A hold a close gave up
     /// while `f` waited is taken afresh rather than written under.
     let private holding (directory: string) (run: string) (f: unit -> 'T) : 'T =
-        let path = System.IO.Path.GetFullPath(named ".lock" directory run)
+        let path = lockOf directory run
 
         let rec attempt () =
             let gate = hold directory run
@@ -770,7 +775,7 @@ module JournalStore =
 
     /// Give up the process's hold on `run`. The lock file stays (see the header).
     let private release (directory: string) (run: string) : unit =
-        let path = System.IO.Path.GetFullPath(named ".lock" directory run)
+        let path = lockOf directory run
 
         lock held (fun () ->
             match held.TryGetValue path with
