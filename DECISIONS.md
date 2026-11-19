@@ -5475,3 +5475,150 @@ kind; a scenario family for it waits until a second witness needs the class cert
 `DurableOutcome` gain fields: breaking for a host that matches either union exhaustively or constructs
 either record in full. It RIDES `0.15.0`, whose class is already breaking (D68) and which is untagged
 and publicly unpinned; `STABILITY.md` appends to that entry.
+
+## D70 — A journaled plan-phase answer can STAND ON A CONDITION: the host declares a named check beside the step's name (`DurableServices.standingRead` / `standingAct`), a resume of a run that has not completed asks it of the answer it would serve, and journals what it answered (`JournalPhase.Checked`); an answer that no longer stands is performed again at its ordinal and the plan re-made from there, its later records voided by the check record (`Journal.current`), but only while nothing recorded after it has changed the world; an answer something later has acted on is served, unasked; neither the program wire nor the staging model moves (2026-11-19)
+
+**Context.** A resume replays the dead run's world. A journaled entry read is served and the live world is
+consulted for none of it (D39); a journaled plan-phase act is served its answer and not performed again
+(D63). That is what makes a run replayable, and it is wrong where an answer was only ever good for the world
+it was taken in. The worked case: a run merges a target branch into some work, verifies the merged tree (an
+expensive check), then pushes. It dies between the check and the push and is resumed after the target branch
+has moved. The journaled merge and the journaled check result describe a tree that is no longer the one to
+push, and serving them pushes work verified against a stale base. The consumer's rule is: before the push, ask
+whether the merge still stands on the present base and whether the check result is for the present tree, and
+re-make each that fell; after the push, re-make nothing. Until now a host could express that only with a step
+walk of its own beside Program (Phase 2793).
+
+**Premises checked against the tree first.**
+
+- Every plan-phase answer (entry read, plan act, derivation, finding, extent read) is journaled at its ordinal
+  through the one wrapper, `wrapAtWith`, and served from its `Value` arm; the plan phase completes before any
+  staged call is performed (D8), so every staged call takes a later ordinal than every plan-phase answer, and
+  was planned on all of them. Confirmed in `Durable.fs`.
+- `Journal.stepOf` reads a step's latest result record, and a step with records but no result reads as
+  indeterminate. A journal is append-only, and nothing in it says a record is no longer the run's.
+- The invocation marker is written unless the run stopped resumable (D69 §5); a completed invocation is
+  replayed and reaches no performer (D61).
+- The journal is a host document, not a specified one (D23, D61, D69): §10.9 of the program wire certifies
+  served performances and the divergence refusal and specifies no condition or check record.
+- The staging model (`proofs/Staging.fst`) reads a step through the four-state `journaled` and
+  `entry_read_served` / `resumed_plan_observes_entry` are stated over a journal snapshot that records the read
+  completed. The one production-to-model adaptor reads production's records through `Journal.stepOf`,
+  `capabilityOf` and `subjectOf` (`ToyStagingOracleTests.keyedJournal`, D69 §8).
+
+**1. Where the condition is declared: beside the entry reader, by the step's name, on the services — not on
+the read or the act.** `StandingCondition = { Name; Stands: JVal -> bool }`: a named check, answered by the
+host from the present world, handed the answer the journal holds. `DurableServices.standingRead read condition`
+and `DurableServices.standingAct act condition` declare it for the entry read or plan-phase act of that name;
+the subject is the one the witness already hands its `EntryReader` or `PlanActor`, so no witness, recorder
+type or call site moves, and a witness never learns it is being resumed. The default declares nothing, and an
+answer with no condition is served exactly as before.
+
+Rejected: *a condition passed with the read or the act* (a third argument to `PlanRecorders.Read` / `.Act`).
+It reads naturally at the call site, but the interpreter needs to know, at the moment an EARLIER answer falls,
+whether a LATER recorded step carries a condition (§3), and a condition handed at the call site is known only
+once the plan reaches that step on this resume, which is after the decision it is needed for. It would also
+re-type every witness that reads or acts, for a declaration most of them never make. The services are where
+the host already declares what replay may do with a step (`declaringPlanAct`, `classingRetryable`), and the
+condition is a declaration of the same kind.
+
+**2. When it is asked: on a resume that would SERVE the answer, and only then.** The wrapper's `Value` arm, after
+the divergence check, asks the condition when the step's capability and subject carry one, the run has not
+completed, and nothing recorded after the step pins it (§3). A first run asks nothing: nothing is served. A
+completed run asks nothing: its replay recomputes an outcome and reaches no performer (D61), so a check could
+only ever be answered and ignored. A served REFUSAL is not checked: a final refusal is the step's own verdict,
+and a retryable one is performed again anyway (D69). A host that cannot tell whether an answer stands answers
+`false`: an answer not shown to stand is re-made, which is the safe reading.
+
+**3. What a failed check does: re-plan from that ordinal, while nothing recorded after it has changed the
+world; otherwise serve, unasked.** The interpreter knows what depends on an answer by ORDINAL: the plan is
+deterministic over its answers, so every step at a later ordinal was planned on it. A re-plan is sound
+exactly while those later steps having happened does not matter, and the record of each says whether it can:
+
+- a later step whose latest record is a refusal that performed nothing (no partial, D68) reached nothing;
+- a later read, derivation, finding, extent read, clock reading or limit decision (`ReadEntry`, `Derive`,
+  `Report`, `ReadExtent`, `ReadClock`, `Limit`) changes nothing outside the run, so re-making it is a first
+  read or record;
+- a later step that carries a standing condition of its own is one the host has declared is re-made when the
+  world it was taken in moved, and an earlier answer falling is that world moving;
+- anything else — a host call, an op stage, a staged query, a plan act with no condition — may have changed
+  the world, with any record at all, `Attempted` alone included.
+
+The answer is PINNED when a later step is of the last kind. A pinned answer is served and its condition is not
+asked: whatever it answered, the effect it justified has happened, and the answer is the record of what that
+effect was performed against. Re-making it would plan a run whose staged calls the performed ones do not match
+(the divergence D12 refuses), and refusing would strand a run that has already performed effects, which could
+then never complete and would never report what it performed. That is the worked case's rule: after the push,
+nothing is re-made, and the run completes as the dead one would have.
+
+Repeat-safety (`IdempotencyFacet`) does NOT unpin a later effect. It says that performing the same call again
+leaves the world as performing it once did; a re-plan does not perform the same call again, it performs the
+call the NEW answer plans, and the earlier performance stands in the world beside it. Only the host can say an
+earlier performance does not matter, and it says so by declaring a condition on that step.
+
+An unpinned answer whose condition answers `false` is performed again AT ITS ORDINAL, through the attempt path
+an unrun step takes (`Attempted`, the performer, the new result, classified as any result is), and every later
+ordinal is treated as unrun for the rest of the run: the plan continues on the new answer and performs, rather
+than serves, what it reaches next. `DurableOutcome.Remade` lists the ordinals re-made. In the worked case: the
+merge's condition falls, the merge is performed again on the present base, the verification it planned is
+performed again on the new tree (its record is voided, and it is unasked), and the push is performed once.
+When the merge stands and the verification's condition falls, only the verification is performed again.
+
+**4. The journal: the check is a record, and a fall voids the records it supersedes.**
+`JournalPhase.Checked of condition: string * stands: bool` is written at the answer's ordinal, under its
+capability and subject, after its records and before any re-make, both when it stands and when it falls; it is
+stored as its own arm `"$type": "Checked"` with members `condition` and `stands`, and `JournalPhase.tag` gives
+`checked-stands` / `checked-fell`. It is not a result: `stepOf` reads past it. A fell check SUPERSEDES every
+record appended before it at its ordinal or a later one: `Journal.current` is the journal less those records,
+and `stepOf`, `capabilityOf` and `subjectOf` read through it, so every reader in Program (the wrapper, the
+trace readers `Durable.findings` / `derivations`, `Journal.retryable`, the operator controls' mid-stage
+windows) and the model adaptor see the run as it now stands. The journal stays append-only; nothing is
+removed, the supersession is a reading. `Journal.attemptsOf` alone reads the raw records: it counts every
+attempt the journal keeps, voided or not, for a host that bounds its resumes.
+
+So a second resume replays the first resume's decision: it reads the re-made answer (or, if the first resume
+died inside the re-make, the step as unrun or indeterminate under the act's declared repeat-safety), and none
+of the dead run's later answers, which the fall voided. It does not re-make on account of the first fall. It
+does ask the condition again, of the answer it now serves, because that is what a standing condition declares:
+the world may have moved again since the first resume, and an answer that stood then may not stand now. A
+check that stood decides nothing a later resume must honour; it is journaled as the audit record that it ran.
+
+**5. Composition with a retryable refusal (D69).** A later step whose record is a retryable refusal that
+performed nothing does not pin an earlier answer (§3), so a push refused because the remote moved leaves the
+merge's condition asked on the resume, and when it has fallen the merge, the verification and the push are all
+performed again, the push as a fresh performance rather than a retry (`Invoked`, not `Retried`). A re-made act
+that refuses retryably is recorded `RefusedRetryable` at its ordinal like any refusal, the run stops resumable
+(no marker), and the next resume performs it again through D69's path; its condition is not asked, because
+there is no answer to check. A completed run is never checked and never retried.
+
+**6. What this does to the claims.** *Exactly-once:* a durable run performs a journaled step once, except a
+plan-phase answer whose declared condition fell on a resume while nothing recorded after it had changed the
+world, which it performs again, once per fall. That is a performance the host asked for by declaring the
+condition, of a step whose earlier answer the run no longer relies on; no later effect was performed on the
+voided answer, because a later effect pins it. The facet derivation reads no plan act (D63) and no condition,
+so it is unchanged, and `Facets.fs` says so. *"A resumed plan observes what the dead run's entry saw"* becomes
+true except where a standing condition is declared and fell: from that ordinal on, the resumed plan observes
+the present world, which is the point. `docs/server-handler-atomicity.md` §2 carries the same account.
+
+**7. The proof leg: the staging model is unchanged, and this is why.** The model has no condition, and needs
+none: the check is a WRITE to the journal, made before the step is decided, and the decision reads the journal
+after it. Through `Journal.current`, a fell check leaves the step unrun at the moment it is decided, and
+`decide` answers an unrun step with `Invoke`, after the same divergence check, which is what production does;
+a check that stood leaves the step completed and `decide` serves it, which is what production does.
+`entry_read_served` and `resumed_plan_observes_entry` remain true as stated: their hypothesis is a journal that
+records the read completed, and a fell check is exactly what makes the journal no longer record that. The
+adaptor reads through `stepOf`, so it needed no change, and `DurableInterpreterTests` adds the two check
+records to the shapes on which production and the extracted `entry_read` are compared, plus production under a
+declared condition that falls against the model over the journal production left. What the model does not
+carry is the asking, which is the host's port, like the classification of D69 §8 and the journal's writes.
+`proofs.json` does not move.
+
+**No program-wire change.** No specified document carries a condition or a check: the journal is a host store
+(D23, D61), and §10.9's `durable-journal` scenarios declare no condition, so every one of them runs and passes
+as before. A scenario family for the check waits until a second witness needs it certified across hosts.
+
+**Version.** `JournalPhase` gains a case, and `DurableServices` and `DurableOutcome` gain fields: breaking for a
+host that matches the union exhaustively or constructs either record in full. It RIDES `0.15.0`, whose class
+is already breaking (D68, D69) and which is untagged and publicly unpinned; `STABILITY.md` appends to that
+entry. A run that declares no condition, and every journal that holds no check record, reads, renders, replays
+and reports byte for byte as before.
