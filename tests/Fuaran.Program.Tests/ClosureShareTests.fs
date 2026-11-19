@@ -613,7 +613,7 @@ let corpus =
                   Expect.equal derived (v.GetProperty("read").GetRawText()) id
           }
 
-          test "the corpus carries the shard's four cases, read ok, and both tiers" {
+          test "the corpus carries the four required cases, read ok, and both tiers" {
               use doc = JsonDocument.Parse(File.ReadAllText corpusPath)
 
               let reads =
@@ -629,6 +629,38 @@ let corpus =
                   "a server tier is certified"
 
               Expect.isFalse (reads["no-exits"].GetProperty("serverWalked").GetBoolean()) "and a document without one"
+          }
+
+          // The ladder's row and the corpus state ONE definition: the row's
+          // claim is the corpus's statement, character for character, and its
+          // evidence names this file and the corpus.
+          test "the proof ladder's row states the corpus's definition" {
+              let ladder =
+                  Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "proofs.json")
+                  |> File.ReadAllText
+
+              use doc = JsonDocument.Parse ladder
+
+              let row =
+                  doc.RootElement.GetProperty("claims").EnumerateArray()
+                  |> Seq.tryFind (fun c -> c.GetProperty("id").GetString() = "closure-share-definition")
+
+              match row with
+              | None -> failtest "proofs.json has no closure-share-definition row"
+              | Some row ->
+                  Expect.equal (row.GetProperty("level").GetString()) "tested" "a tested row"
+                  Expect.equal (row.GetProperty("claim").GetString()) Definition "its statement is the definition"
+                  let evidence = row.GetProperty("evidence")
+
+                  Expect.equal
+                      (evidence.GetProperty("host").GetString())
+                      "tests/Fuaran.Program.Tests/ClosureShareTests.fs"
+                      "hosted here"
+
+                  Expect.equal
+                      (evidence.GetProperty("artifact").GetString())
+                      "conformance/demanded-closure-share.json"
+                      "its family is the corpus"
           }
 
           // The demanded family's documents were re-cut at version 15 by hand,

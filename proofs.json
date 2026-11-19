@@ -2621,6 +2621,46 @@
         "runner": "run.ps1 (the Tests project)",
         "note": "the UI adapters left this repository (fuaran#2012), so 'the UI tier's reading is unchanged' is tested here at the continuing toy witness and proved at ui_witness (ui_never_halts, continuing_run_is_fold); GenericityTests, written before the declaration existed, is unchanged and green"
       }
+    },
+    {
+      "id": "closure-share-definition",
+      "level": "tested",
+      "phase": "Phase 2446",
+      "claim": "Per tier of the demanded document, over DISTINCT demands: the client tier counts its effect kinds and state namespaces inside, and its host calls (a call action's endpoint among them), opaque handlers and opaque leaves as exits; the server tier counts its closed arms' capabilities inside and its host functions as exits. The share is inside / (inside + exits) in basis points, rounded down, and 10000 for a tier demanding nothing. The two tiers are never added together, and a document with no server walk carries the client tier's share alone.",
+      "evidence": {
+        "family": "demanded-closure-share",
+        "host": "tests/Fuaran.Program.Tests/ClosureShareTests.fs",
+        "artifact": "conformance/demanded-closure-share.json",
+        "cases": [
+          "each client-tier member counts on its side, and the descriptive members on neither",
+          "each server-tier member counts on its side, and the descriptive members on neither",
+          "names are counted once, so a document joined with itself counts what it did",
+          "the two tiers are never blended",
+          "the share is in basis points, rounded down",
+          "one exit never reads as wholly closed",
+          "a tier demanding nothing reads 10000, and its counts say it is empty",
+          "a tree with no exits is wholly inside",
+          "a tree whose only behaviour is a host call is wholly out",
+          "a server handler mixing compute stages and performed effects, per tier",
+          "a hand-authored tree's opaque handlers exit",
+          "an opaque leaf exits",
+          "the version is 15",
+          "the client tier's share sits after quantities, the server tier's after constraints",
+          "a document with no server walk carries the tree's share alone",
+          "every walk's document reads back as itself, byte for byte",
+          "a carried client share its lists do not project is refused at the member",
+          "a carried server share its lists do not project is refused at the member",
+          "a tier without its share is refused, never recounted",
+          "a share of the wrong shape is refused at the member that is wrong",
+          "the committed corpus is what this file emits",
+          "every recorded reading is what the reader makes of its document",
+          "the corpus carries the four required cases, read ok, and both tiers",
+          "the proof ladder's row states the corpus's definition",
+          "every document the demanded family reads is the encoder's own bytes"
+        ],
+        "runner": "run.ps1 (the Tests project)",
+        "note": "a DEFINITION certified, not a property proved: the share is a count over the demanded document, so no model owns it and no prover runs. The corpus is emitted from real walks at the toy witness (a tree with no exits, a tree whose only behaviour is a host call, a server handler mixing compute stages and performed effects, a hand-authored tree with opaque handlers, an opaque leaf, a server walk that found nothing) and carries the reader's refusals of a carried share its lists do not project; a reader in another host certifies against it with no package dependency. DECISIONS.md D71"
+      }
     }
   ]
 }

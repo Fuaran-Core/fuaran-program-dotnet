@@ -38,6 +38,9 @@ with the leg that checks them and the seam that ties each model back to the code
   reversible from its declared form is undone to its entry state by the undo run, a compensable one
   to the compensated state, and the first step an undo cannot perform is named before anything runs.
 
+One ladder below has no model: [the closure share](#the-closure-share-phase-2446) (Phase 2446) is a
+definition over the demanded document, certified as a `tested` row and proved nowhere.
+
 **"Formally verified" appears in this repository in exactly one place — the ladders below — and
 it is spent on the laws in the five ladders and nothing else** — the fold's four, each stated over
 the generic view and again at the UI witness, the budget's five, the staging theorem's four with
@@ -1831,6 +1834,40 @@ pipeline's witness classes its render compensable and its commit one-way.
   is not offered.
 - **The performer's own effect**, as the staging ladder says: the undo performs an inverse through
   the same performer, and what the performer does with it is the host's.
+
+## The closure share (Phase 2446)
+
+How much of a program's behaviour stays inside the closed vocabularies, against how much exits to a
+host, is one projection of the demanded document (`DECISIONS.md` D71). It is a DEFINITION and not a
+property of an interpreter, so it sits on the ladder as a `tested` row with no model and no prover run:
+what is certified is that the shipped code computes the number the definition states, over real walks,
+and that a reader refuses a document carrying any other number.
+
+### The claims ladder
+
+#### Differentially tested
+
+1. **The closure share is computed as defined** — `closure-share-definition`. Per tier of the demanded
+   document, over DISTINCT demands: the client tier counts its effect kinds and state namespaces inside,
+   and its host calls (a call action's endpoint among them), opaque handlers and opaque leaves as exits;
+   the server tier counts its closed arms' capabilities inside and its host functions as exits. The share
+   is inside / (inside + exits) in basis points, rounded down, and 10000 for a tier demanding nothing. The
+   two tiers are never added together, and a document with no server walk carries the client tier's
+   share alone. Family: `conformance/demanded-closure-share.json`, emitted from walks at the toy witness
+   (a tree with no exits, a tree whose only behaviour is a host call, a server handler mixing compute
+   stages and performed effects, a hand-authored tree with opaque handlers, an opaque leaf, a server walk
+   that found nothing) beside the reader's refusals of a carried share its lists do not project. Host:
+   `tests/Fuaran.Program.Tests/ClosureShareTests.fs`, which also holds the corpus to its own emission and
+   the row's statement to the corpus's, character for character.
+
+#### Not claimed
+
+- **That distinct demands are the right unit for every consumer.** The share counts what a program can
+  ask for, once per name; a decision that turns on how often a demand occurs needs a different
+  projection, over the walk rather than the document.
+- **That a closed arm's performance is safe.** Inside means expressed in a vocabulary whose meaning is
+  specified, not that the host's performance of it is correct. The effect gate's theorems speak to the
+  performance.
 
 ## Running it
 
