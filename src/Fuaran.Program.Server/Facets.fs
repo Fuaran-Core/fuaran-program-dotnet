@@ -690,6 +690,18 @@ module Facets =
     /// voided answer, because a later effect PINS it and it is then served
     /// unasked. The derivation reads no plan-phase act (D63) and no condition,
     /// so what it claims of a handler's arms is unchanged.
+    ///
+    /// **Every claim here assumes ONE WRITER per run** (Phase 2797, D72). A
+    /// resume serves what the journal holds as the run's own record, so a
+    /// second process writing the same run would make a served answer
+    /// another process's and an ordinal hold two steps. Under the file store
+    /// (`JournalStore.file`), a run's records are written by one live process
+    /// at a time: the store holds the run for the process that first reads or
+    /// appends it, refuses every other live process (`JournalStore.RunHeld`)
+    /// before it reads or writes, and gives the run to the next process when
+    /// the holder ends. Under the in-memory store it holds by construction.
+    /// A journal a host supplies itself carries the obligation itself, and
+    /// nothing here can check it — as with `JournalSurvivesRestart`.
     let ofEffect
         (discipline: PlacementDiscipline)
         (performers: PerformerFacets)

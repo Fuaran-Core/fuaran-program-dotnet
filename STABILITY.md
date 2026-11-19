@@ -94,6 +94,45 @@ Every walk (`Demanded.ofTree`, `ofAction`, `union`, `ServerDemanded.*`), every c
 `checkProjection`, the quantities and their pricing, the signed envelope's verification by recomputation,
 the specification, and every theorem: the share is a count over the document, and no model owns it.
 
+### Rides the draft: the file journal store holds a run for one live process (Phase 2797)
+
+**Class: additive by the surface rule — rides `0.16.0`**, whose class is already breaking. No record gains a
+member and no closed union gains a case: `JournalStore` keeps its two members, and what is new is a type
+and two literals beside the existing ones. The behaviour it adds is a refusal, and two hosts meet it, below.
+`DECISIONS.md` D72 records the design. The program wire specification does not move: the journal is a
+host store, and the concurrency question the specification leaves open is a different one (D72 §6).
+
+**What a consumer gains.**
+
+- Under `JournalStore.file`, a run's records are written by one live process at a time. The first read or
+  append of a run in a process takes an exclusive hold on it, for the process's lifetime, shared by every
+  file store in the process; a second live process is refused before it reads or writes anything.
+- `JournalStoreRefusedException` (an `IOException`), raised by the file store's `Read` and `Append`, with
+  `Refusal` and `Run`; `JournalStore.RunHeld` (another live process holds the run) and
+  `JournalStore.HoldUnavailable` (no exclusive hold can be had here). `Close` answers `Error RunHeld` for
+  a run another process holds.
+- A process that dies holding a run blocks nobody: the system releases the hold, and the next process
+  takes the run and resumes from what the dead one recorded.
+
+**What a consumer pays.**
+
+- **A second process resuming a run another live process holds is refused** where it used to interleave
+  its records with the first's, or die on a raw I/O error. A durable run raises the refusal out of
+  `Durable.run` before anything is read, performed or recorded. That is the change.
+- **A host whose file system or runtime gives no exclusive lock is refused** (`HoldUnavailable`) at the
+  first read or append of a run, where it used to run unprotected. On Linux and macOS this includes a
+  process with `DOTNET_SYSTEM_IO_DISABLEFILELOCKING` set.
+- **A run stays held by the live process that touched it** until a `Close` retires it or the process ends;
+  there is no other release. A long-lived process that leaves a run resumable, or only reads one, keeps it
+  from other processes until it ends.
+- **The store's directory gains one empty `<sha256>.lock` file per run id it has held**, never removed,
+  and the directory is created at a run's first read as well as its first append.
+- Measured: Windows, and Linux on this repository's CI. **macOS is not measured**: it runs the Linux
+  mechanism (`flock`), and no runner here can show it.
+
+**What did not move.** `JournalStore.inMemory`, which one process writes by construction and which never
+refuses; `EffectJournal`; the stored entry's form; every journal, golden, replay and toy-witness test.
+
 ## 0.15.0 — an op stage that fails part-way keeps the receipts of the effects it did perform (Phase 2224), and what rode the draft (the Core 0.41.0 floor, Phases 2792, 2793)
 
 **Class: breaking.** `v0.14.1` is tagged, so this cannot ride it: `OpPerformance.Performed`'s function

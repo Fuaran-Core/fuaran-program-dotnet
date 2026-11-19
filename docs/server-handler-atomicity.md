@@ -113,7 +113,10 @@ exists to avoid.
 
 *Concurrency is not addressed at all.* One session, one event, one handler. Two sessions running
 handlers against the same domain tree is a question about where durable state actually lives, which
-is a host concern today and may not stay one.
+is a host concern today and may not stay one. One narrower question IS answered: two processes
+resuming ONE durable run under the file journal store. A run's records are written by one live
+process at a time (§2, [D72](../DECISIONS.md)). That is a property of one run's journal, and it says
+nothing about two runs, or two sessions, over the same domain state.
 
 ---
 
@@ -267,6 +270,25 @@ seam; it is the seam both other placements already have, used deliberately.
 > entry saw":** true, except from an answer whose condition fell, where the resumed plan observes the
 > present world. A step whose record is a retryable refusal that performed nothing does not pin, so a push
 > refused because the remote moved leaves the merge to be checked, and re-made, on the resume.
+>
+> **Under the file store, a run's records are written by one live process at a time, since
+> [D72](../DECISIONS.md) (Phase 2797).** Every claim above rests on it: a resume serves what the journal
+> holds as the run's own record, and before this a second process resuming the same run read the first
+> one's records as its own, wrote beside them at the same ordinals, or died on a raw I/O error at a random
+> step. `JournalStore.file` now holds a run for the process that first reads or appends it: a lock file
+> beside the run's journal, opened exclusively for the process's lifetime and shared by every file store
+> in that process. Another live process asking for the run, by a read, an append or a close, is refused
+> before it reads or writes anything (`JournalStoreRefusedException`, class `JournalStore.RunHeld`,
+> naming the run; a close answers `Error JournalStore.RunHeld`). A read takes the hold as an append does,
+> because a read is how a resume begins, so a host that only reads is refused the same way and holds the
+> run once it has read it. The hold is given up by a close that retires the run, or by the process's end,
+> a kill included: the system releases it, so a dead holder blocks nobody and the next process resumes.
+> Windows enforces it with a share mode; Linux and macOS with `flock`, binding every process that opens
+> the run through a file store. Windows and Linux are measured by a test that starts child processes;
+> macOS runs the Linux mechanism and is not measured. Where no exclusive hold can be had, the store
+> refuses the run (`JournalStore.HoldUnavailable`) rather than writing on a hold that is not there. The
+> in-memory store holds by construction: no other process can reach it. A journal a host supplies itself
+> carries the obligation itself.
 
 **What remains open.**
 

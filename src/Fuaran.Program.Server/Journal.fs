@@ -636,7 +636,9 @@ module JournalStore =
 
     /// The in-memory store: `Journal.inMemory`'s storage with a close. It does
     /// not survive a restart and does not claim to — it is the store a
-    /// single-process fixture or a host with no durable storage binds.
+    /// single-process fixture or a host with no durable storage binds. One
+    /// process writes its runs by construction (Phase 2797, D72): no other
+    /// process can reach them, so it never refuses a run as held.
     let inMemory () : JournalStore =
         let entries = ResizeArray<JournalEntry>()
         let journal = Journal.over entries

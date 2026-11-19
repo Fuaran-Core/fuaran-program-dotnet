@@ -799,6 +799,11 @@ module DurableServices =
     /// the invocation id, so a run under `JournalStore.file` resumes after a
     /// process kill from what the dead run recorded. Closing the completed
     /// run is the host's act, once it holds the outcome (`JournalStore`).
+    /// Under the file store the run's first read, the interpreter's first
+    /// act, takes the process's hold on the run (Phase 2797, D72): a run
+    /// another live process holds raises `JournalStoreRefusedException`
+    /// (`JournalStore.RunHeld`) out of the run before anything is read,
+    /// performed or recorded.
     let withStore (store: JournalStore) (services: DurableServices) : DurableServices =
         withJournal store.Journal services
 

@@ -5715,3 +5715,86 @@ statement, and the ladder's `tested` row (`closure-share-definition`) cites it.
 writes: breaking. `v0.15.0` is tagged, so the work opens `0.16.0` as a draft of class breaking, and
 `STABILITY.md` carries the entry. The walks, coverage, quantities, the signed envelope's recomputation, the
 specification and every theorem are unchanged.
+
+## D72 — The file journal store HOLDS A RUN for one live process: the first read or append of a run in a process takes an exclusive hold on a lock file beside its journal, for the process's lifetime, shared by every file store in the process; a second live process is refused before it reads or writes (`JournalStoreRefusedException`, `JournalStore.RunHeld`, naming the run); the hold is given up by a close that retires the run or by the process's end; a hold that cannot prove itself exclusive refuses the run (`JournalStore.HoldUnavailable`); the in-memory store holds by construction; the program wire specification does not move (2026-11-19)
+
+**Context.** `JournalStore.file` (D61's store, Phase 2589) said in its own header that two processes resuming
+one run id at once was a question nothing in it answered. Each append opened the run's file and closed it, and
+appends were serialised by a lock inside one store value in one process. A host that needed one writer per run
+kept a lock of its own beside the store; every host of the file journal would have had to.
+
+**Premises checked against the tree first.**
+
+- At the working head the header still said so, and `JournalStore` has two members, `Journal` and `Close`.
+- The defect reproduces with two real processes (Windows, two `dotnet fsi` processes each reading the run once
+  and appending a step at a time, as the durable interpreter does). The second process read the first's three
+  records as its own run's and appended from ordinal 2, so ordinal 2 held both processes' `Attempted` records;
+  the first then died on a raw `IOException` from its next append, because on Windows an append's open
+  collides with the other process's. The failure is interleaving or a crash at a random step, never an answer.
+- Several file stores in ONE process over one directory are how the existing tests stand for a restart
+  (`ToyDurableReplayTests`, `KillAndResume.check`), and those tests remove the directory while the process
+  lives. Both constrain the design below.
+
+**1. The hold is per RUN, not per directory.** Two processes running different runs under one directory do
+not block each other, which is what a host running several workers over one store needs. Rejected: *one hold
+on the directory.* Simpler, and one lock file, but it serialises every run in a store through one process, a
+restriction the property does not ask for.
+
+**2. The holder is the PROCESS, for its lifetime.** The hold is one open handle, kept in a table the process
+shares across every file store, so two stores in one process over one directory share it and serialise the
+run's reads, appends and close on it. Rejected: *the store value as the holder.* A second store in the same
+process would be refused, which is not the property (one live PROCESS) and would break every test that
+stands for a restart with a fresh store.
+
+**3. Taken at the first read OR append, because a read is how a resume begins.** A process that read a run
+unheld, and appended after another process had written to it, would append on a record it never saw: the
+defect itself. So a read takes the hold, and a host that only reads is refused while another process holds
+the run, and holds it once it has read it. Rejected: *the hold at the first append.* It leaves the read the
+interpreter makes at entry outside the hold.
+
+**4. Given up by a close that retires the run (or finds nothing to retire), or by the process's end.** The
+system releases an open handle with its process, a kill included, so a dead holder blocks nobody and the next
+process takes the run and resumes. There is no other release. Rejected: *a release member on `JournalStore`.*
+It would let a live process hand a run on while it may still hold the record it read, which is the window the
+hold closes; and it would make the record type grow, breaking every literal of it. A host that needs a run
+resumed elsewhere ends the process that holds it. A close refused because the run is incomplete keeps the hold.
+
+**5. The mechanism, per platform, and what it does where there is none.** The runtime's exclusive open of the
+lock file: on Windows a share mode the system enforces against every opener (with deletion still shared, so a
+host can remove a store's directory); on Linux and macOS `flock(LOCK_EX | LOCK_NB)`, which binds every process
+that opens the run through a file store. A process that writes a store's files by other means is outside any
+store's contract on any platform. The hold PROVES itself: once taken, a second exclusive open from the same
+process must be refused as another process's would be. Where it is admitted — a file system that cannot lock,
+or a runtime with file locking switched off (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`) — the store gives the hold
+back and REFUSES THE RUN (`HoldUnavailable`). Rejected: *keep running and withdraw the durability claim.* The
+claim `SurvivesRestart` is about restarts, not writers, and is made when the store is built, before any run is
+asked for; degrading silently would re-open the defect on exactly the storage least able to show it. The lock
+file is never removed: removing it while another process has opened it but not yet locked it lets two
+processes hold two files under one name. It is empty, one per run id the directory has held. Windows and Linux
+are measured by `JournalStoreProcessTests`, which starts child processes; macOS runs the Linux mechanism and is
+not measured, and the store's header says so.
+
+**6. The in-memory store, and the specification.** `JournalStore.inMemory` answers the same contract by
+construction: its records live in one process's memory, no other process can reach a run, and it never
+refuses. The program wire specification does not move. Its open question (`PROGRAM_WIRE.md` §1 and §11.2) is
+two SESSIONS running handlers against the same DOMAIN STATE: where durable state lives, and what two
+interleaved handlers do to it. This decision answers a narrower one, two processes writing ONE RUN'S
+JOURNAL, and the journal is a host store that is not on the wire; §10.9's `durable-journal` obligation already
+runs its second process after the first has ended. Answering the narrower question says nothing about the
+open one, and the specification should not read as if it did.
+
+**Falsifiers.**
+
+- *The runtime raises a held file's refusal as a sharing violation on Windows and as `EWOULDBLOCK` (11 on
+  Linux, 35 on macOS) elsewhere.* Falsified by a runtime that reports it otherwise: the process test reads a
+  raw `IOException` where it expects `RunHeld`, and the classification gains the new form.
+- *The system releases the hold with the process.* Falsified by a platform that keeps a dead process's lock:
+  the dead-holder case reads `RunHeld`.
+- *A second open from the holder's own process is refused exactly when another process's would be.* Falsified
+  by a platform whose lock binds per process rather than per open: the self-proof refuses every run there with
+  `HoldUnavailable`, loudly, and the mechanism is re-chosen.
+
+**Version.** `JournalStore` keeps its two members and no union gains a case: the surface is additive (a type
+and two literals). A second process resuming a held run, and a host on storage that cannot lock, are refused
+where they used to run. It rides the `0.16.0` draft, which is already breaking, and `STABILITY.md` carries the
+entry.
