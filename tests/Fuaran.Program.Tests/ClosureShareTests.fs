@@ -465,10 +465,8 @@ let private corpusPath =
     Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "conformance", "demanded-closure-share.json")
     |> Path.GetFullPath
 
-let private esc (s: string) =
-    s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t")
-
-let private q (s: string) = "\"" + esc s + "\""
+/// A JSON string, escaped as the demanded family's corpus escapes one.
+let private q = DemandedCorpusReadTests.q
 
 let private renderShare (share: ClosureShare) : string =
     $"{{\"inside\":{share.Inside},\"exits\":{share.Exits},\"shareBasisPoints\":{share.BasisPoints}}}"

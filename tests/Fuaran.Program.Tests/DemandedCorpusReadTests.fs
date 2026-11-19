@@ -33,7 +33,8 @@ let private corpusPath =
 let private esc (s: string) =
     s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t")
 
-let private q (s: string) = "\"" + esc s + "\""
+/// Shared with the closure-share corpus (Phase 2446), which renders its strings the same way.
+let internal q (s: string) = "\"" + esc s + "\""
 let private arr (xs: string list) = "[" + String.concat "," xs + "]"
 
 let private reasons (rs: (int * string) list) =
