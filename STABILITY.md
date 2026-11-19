@@ -50,6 +50,50 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
+## 0.16.0 — DRAFT — the closure share is one projection of the demanded document (Phase 2446)
+
+**Class: breaking.** `v0.15.0` is tagged, so this cannot ride it: the demanded document's version moves,
+so a reader pinned to 0.15.0 refuses every document this version writes. `DECISIONS.md` D71 records the
+definition. The program wire specification does not move: it does not spell the demanded document.
+
+### What a consumer gains
+
+- `ClosureShare = { Inside; Exits }` in `Fuaran.Program.Bounded`, with `BasisPoints`: how much of one tier
+  of the demanded document stays inside the closed vocabularies against how much exits to a host, counted
+  over DISTINCT demands, the share in basis points rounded down (10000 for a tier demanding nothing).
+- `DemandedProjection.Closure`: the client tier's share — its effect kinds and state namespaces inside,
+  its host calls, opaque handlers and opaque leaves out. `ServerDemand.Closure`: the server tier's — the
+  closed arms' capabilities inside, the host functions out. The two are never added together, and a
+  document with no server walk has the client tier's alone.
+- The demanded document carries both, so a consumer reads the figure instead of recounting it, and the
+  reader holds the carried counts to the lists they are counted from.
+- `conformance/demanded-closure-share.json`: a family certifying the definition over real walks (a tree
+  with no exits, a tree whose only behaviour is a host call, a server handler mixing compute stages and
+  performed effects, a hand-authored tree with opaque handlers, an opaque leaf, a server walk that found
+  nothing) and the refusals of a carried share that disagrees.
+
+### What a consumer pays
+
+- **The demanded document moves to version 15.** `Demanded.Version` and `decodableVersions` are `15`; a
+  version-14 document is refused `UnknownVersion`, and an envelope signed under version 14 reports
+  `Unreadable` drift until re-signed. Every document gains `"closure":{"inside":n,"exits":m,"shareBasisPoints":b}`
+  after `quantities`, and every server tier the same member after `constraints`; no other byte moves.
+- **A reader refuses a document whose carried share its lists do not project** (`NotCanonical`, at
+  `closure` or `server.closure`), and one without the member (`MissingMember`). A producer that writes
+  the document by hand rather than through `Demanded.encode` computes the counts as the definition says.
+- **`conformance/demanded-effect-projection.json` is re-cut at version 15** by hand, every document
+  carrying its shares and nothing else moved, each reading unchanged. The emitter in the UI tier's
+  repository re-emits it when that tier adopts this release.
+- **No F# construction breaks.** The share is a member computed from the lists, not a field, so a record
+  literal of `DemandedProjection` or `ServerDemand` compiles unchanged, and a projection cannot carry a
+  share its lists contradict.
+
+### What did not move
+
+Every walk (`Demanded.ofTree`, `ofAction`, `union`, `ServerDemanded.*`), every coverage finding and
+`checkProjection`, the quantities and their pricing, the signed envelope's verification by recomputation,
+the specification, and every theorem: the share is a count over the document, and no model owns it.
+
 ## 0.15.0 — an op stage that fails part-way keeps the receipts of the effects it did perform (Phase 2224), and what rode the draft (the Core 0.41.0 floor, Phases 2792, 2793)
 
 **Class: breaking.** `v0.14.1` is tagged, so this cannot ride it: `OpPerformance.Performed`'s function

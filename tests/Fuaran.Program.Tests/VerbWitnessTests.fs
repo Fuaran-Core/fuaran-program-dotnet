@@ -180,14 +180,14 @@ let tests =
                   (Demanded.encode projection)
                   ($"{{\"kind\":\"demanded\",\"version\":{Demanded.Version},\"effects\":[],\"hostCalls\":[],"
                    + "\"stateNamespaces\":[],"
-                   + "\"opaqueHandlers\":[],\"iterations\":[],\"opaqueLeaves\":[],\"values\":[],\"quantities\":[],\"server\":{\"effects\":[\"ApplyOps\"],\"capabilities\":[\"ApplyOps\"],"
+                   + "\"opaqueHandlers\":[],\"iterations\":[],\"opaqueLeaves\":[],\"values\":[],\"quantities\":[],\"closure\":{\"inside\":0,\"exits\":0,\"shareBasisPoints\":10000},\"server\":{\"effects\":[\"ApplyOps\"],\"capabilities\":[\"ApplyOps\"],"
                    + "\"functions\":[],\"channels\":[],"
                    + "\"reach\":[{\"capability\":\"ApplyOps\",\"argument\":\"destination\",\"name\":\"local\"},"
                    + "{\"capability\":\"ApplyOps\",\"argument\":\"destination\",\"name\":\"origin\"},"
                    + "{\"capability\":\"ApplyOps\",\"argument\":\"path\",\"name\":\"notes/archive/x.md\"},"
                    + "{\"capability\":\"ApplyOps\",\"argument\":\"path\",\"name\":\"notes/x.md\"},"
                    + "{\"capability\":\"ApplyOps\",\"argument\":\"target\",\"name\":\"origin\"}],"
-                   + "\"replay\":[],\"undo\":[],\"constraints\":[]}}")
+                   + "\"replay\":[],\"undo\":[],\"constraints\":[],\"closure\":{\"inside\":1,\"exits\":0,\"shareBasisPoints\":10000}}}")
                   "the document's bytes"
 
               // And read back: the reach survives the round trip, so a reader

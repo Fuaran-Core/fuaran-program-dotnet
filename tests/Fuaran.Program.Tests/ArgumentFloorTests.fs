@@ -192,8 +192,13 @@ let private document =
                   )
 
               let encoded = Demanded.encode projection
-              Expect.equal Demanded.Version 14 "the version the two clauses moved it to"
-              Expect.stringContains encoded "\"version\":14" "carried in the document"
+
+              Expect.equal
+                  Demanded.Version
+                  15
+                  "the version: 14 when the two clauses moved it, 15 since the closure share (Phase 2446)"
+
+              Expect.stringContains encoded "\"version\":15" "carried in the document"
 
               Expect.stringContains
                   encoded

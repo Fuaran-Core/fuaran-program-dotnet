@@ -145,8 +145,8 @@ let private document =
               let projection = Demanded.ofTree witness (treeOf [ "run", workedExample ])
               let encoded = Demanded.encode projection
 
-              Expect.equal Demanded.Version 14 "the version Phase 2262 moved it to; the quantities rode 13"
-              Expect.stringContains encoded "\"version\":14" "carried in the document"
+              Expect.equal Demanded.Version 15 "the version Phase 2446 moved it to; the quantities rode 13"
+              Expect.stringContains encoded "\"version\":15" "carried in the document"
 
               Expect.stringContains
                   encoded

@@ -133,6 +133,16 @@ asked" as "asked, and the answer was nothing". And a host that declared no serve
 told it failed to serve one: the tier is checked only where both a demand and a declaration exist,
 because most hosts have no server placement at all.
 
+**Each tier says how much of it stays inside the closed vocabularies: the closure share** (Phase
+2446, `DECISIONS.md` D71). `DemandedProjection.Closure` and `ServerDemand.Closure` count a tier's
+DISTINCT demands: inside, the client tier's effect kinds and state namespaces and the server tier's
+closed-arm capabilities; out, the client tier's host calls, opaque handlers and opaque leaves and the
+server tier's host functions. `BasisPoints` is the share inside, rounded down, so one exit never reads
+as wholly closed. The two tiers are never added together, and a document with no server walk carries
+the client tier's share alone. The document carries both shares, so a consumer reads the figure rather
+than recounting it, and `decode` refuses a carried share its lists do not project.
+`conformance/demanded-closure-share.json` certifies the definition.
+
 **The document can be signed, and the signed pair verified by recomputation.** `SignedEnvelope.sign`
 signs the pair (canonical tree hash, demanded document bytes) through a host-supplied attestation
 sink consumed by shape; `SignedEnvelope.verify` re-derives the envelope from the tree, compares, and

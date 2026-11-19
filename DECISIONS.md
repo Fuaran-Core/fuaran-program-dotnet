@@ -5622,3 +5622,96 @@ host that matches the union exhaustively or constructs either record in full. It
 is already breaking (D68, D69) and which is untagged and publicly unpinned; `STABILITY.md` appends to that
 entry. A run that declares no condition, and every journal that holds no check record, reads, renders, replays
 and reports byte for byte as before.
+
+## D71 — The CLOSURE SHARE is one projection of the demanded document: per tier, the DISTINCT demands expressed inside the closed vocabularies (`Inside`) against those that exit to a host (`Exits`), and the share inside in basis points, rounded down; carried on every tier at document version 15 and held by the reader to the lists it is counted from; the two tiers are never added together (2026-11-19)
+
+**Context.** How much of a program's behaviour stays inside the closed algebra, against how much leaves it
+for host code, is a number several consumers want and none could compute the same way: each would walk the
+artefact itself, under its own name, and two readings of one program could disagree. The one place the number
+can be computed exactly already exists. `Demanded.ofTree` enumerates, without analysis, every effect a tree
+can cause, every host call it names and every handler the wire could not see; `ServerDemanded` does the same
+for the handlers behind it (Phase 2446).
+
+**Premises checked against the tree first.**
+
+- `DemandedProjection` holds, at the client tier, `Effects`, `HostCalls`, `StateNamespaces`, `OpaqueHandlers`,
+  `Iterations`, `OpaqueLeaves`, `Values` and `Quantities`, and the optional `Server` tier holds `Effects`,
+  `Capabilities`, `Functions`, `Channels`, `Reach`, `Replay`, `Undo` and `Constraints`. Every list is distinct
+  and sorted (`normalise`), and the decoder refuses one that is not.
+- At the server placement a handler's COMPUTE stages join the client tier (`ServerDemanded.ofStage`), and its
+  effect stages the server tier. A compute stage's call action is stripped as the inert arm.
+- The registry marks performers in one place: `ServerEffectRegistry.HostFunctions`, the performers for the
+  `HostCall` arm, by function name. The document carries each as a `ServerFunctionDemand` in
+  `Server.Functions`. Every other arm's capability is in `Server.Capabilities`, so the two lists partition
+  the server tier's arms.
+- `OpaqueLeaves` (D40) is a member the phase's list of exits did not name. It is an exit of the same class as
+  a host call: an act the wire carried whose behaviour lives in the host. It is counted as one (§2).
+- The document carries NAMES, not occurrences: no member records how many actions or stages demanded a name.
+
+**1. The unit is one distinct demand, not one occurrence.** A tier's counts are the lengths of its lists,
+de-duplicated. Rejected: *count reachable actions and effect stages by occurrence.* The document does not hold
+them, so the number would be an output of the walk rather than a projection of the document; a reader holding
+the document could not check it, and two producers could carry different numbers for one document. It would
+also weigh a capability by how often a tree repeats it, so copying one button would move the figure while
+changing nothing about what the program needs from a host. Distinct demands answer the question a consumer
+asks: of the things this program can ask for, how many are expressed in the closed vocabularies.
+
+**2. What counts where.** The client tier: `Inside` is `Effects` (closed client-effect kinds) plus
+`StateNamespaces` (the fold's own writes and dispatch-time reads, counted once per namespace); `Exits` is
+`HostCalls` (a call action's endpoint among them), `OpaqueHandlers` and `OpaqueLeaves`. The server tier:
+`Inside` is `Capabilities` (the closed arms: `ApplyOps`, `EmitPatch`, `Notify`, `RunQuery`, `Report`); `Exits`
+is `Functions`, the host functions a performer serves. Counted on neither side: `Iterations`, `Values` and
+`Quantities` (bounds and values of constructs whose demands are already counted, and spending), and the server
+tier's `Effects` (the discriminators the two counted lists partition), `Channels` and `Reach` (arguments of an
+arm already counted), `Replay`, `Undo` and `Constraints` (postures and the host's policy, not demands).
+
+A call action's endpoint is an exit at the client tier even when a server walk resolves it to a registered
+handler. The client tier's share says how much of the TREE leaves it; what the handler behind the call does is
+the server tier's share. Reading the call as inside when its handler is walked would blend the tiers.
+
+**3. The two tiers are never added together.** The client tier's share is `DemandedProjection.Closure`, the
+server tier's `ServerDemand.Closure`. A document with no server walk carries the client tier's alone, and its
+`server: null` says so. A server walk that found nothing carries a server share of `0 / 0`. Rejected: *one
+blended figure for the document.* The tiers count different things, and a blended number for a document
+without a server walk would read as a measure of a server side nobody looked at.
+
+**4. The figure.** `BasisPoints` is `inside * 10000 / (inside + exits)` in integer arithmetic, rounded DOWN,
+so a tier with one exit never reads as wholly closed, at any size. A tier demanding nothing reads 10000:
+nothing exits from it, and the two counts carried beside the figure say it is empty rather than full.
+Rejected: *a JSON number with a fraction.* A fraction has no single spelling across hosts, and the document
+compares by value. Rejected: *`null` for an empty tier.* A member spelled `null` is an absent member on this
+document's own read policy, and the readers this document certifies have no null.
+
+**5. Carried, and checked.** The share is a MEMBER computed from the lists, not a record field: a projection
+cannot hold a share its lists contradict, and a record literal of either type compiles unchanged. On the wire
+it is `"closure":{"inside":n,"exits":m,"shareBasisPoints":b}`, after `quantities` on the document and after
+`constraints` on every server tier, so a consumer reads it instead of recounting. The decoder reads it last,
+against lists already known to be canonical, and refuses a share its lists do not project as `NotCanonical` at
+`closure` or `server.closure`: the canonical document is the one carrying the counts its lists give. An absent
+member is `MissingMember`, on version 13's argument: absence says the producer predates the share.
+
+**6. Version 15, and the two corpora.** The member is present on every document and every tier, so the
+document's version moves to 15 and a version-14 document is refused by version.
+`conformance/demanded-effect-projection.json` is re-cut by hand at version 15: each document gains its shares,
+and no reading moves. Its emitter lives in the UI tier's repository and re-emits when that tier adopts this
+release; until then the copies differ by these members, as they did at every earlier move. A test holds every
+readable document in it to the encoder's own bytes, since the reader checks the counts and not the member's
+place. The definition is certified by a family of its own, `conformance/demanded-closure-share.json`, emitted
+from real walks at the toy witness by `ClosureShareTests.emitCorpus`; the corpus carries the definition as its
+statement, and the ladder's `tested` row (`closure-share-definition`) cites it.
+
+**Falsifiers.**
+
+- *Every exit the walk can see is in one of the counted lists.* Falsified by a new member naming a host act a
+  walk can see but none of `HostCalls`, `OpaqueHandlers`, `OpaqueLeaves` or `Functions` carries. Such a member
+  is added to `Exits`, the document's version moves, and the family gains a vector.
+- *A closed arm's behaviour is specified, so its capability is inside.* Falsified by an arm whose performance
+  is host code the vocabulary does not specify. That arm moves to `Exits`.
+- *Distinct demands are the unit a consumer needs.* Falsified by a consumer whose decision depends on how often
+  a demand occurs. Occurrence counts would then be a second projection over the walk, under another name, and
+  this one would stand beside it.
+
+**Version.** The document's version moves, so a reader pinned to version 14 refuses every document this
+writes: breaking. `v0.15.0` is tagged, so the work opens `0.16.0` as a draft of class breaking, and
+`STABILITY.md` carries the entry. The walks, coverage, quantities, the signed envelope's recomputation, the
+specification and every theorem are unchanged.

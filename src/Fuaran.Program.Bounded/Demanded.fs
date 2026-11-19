@@ -663,6 +663,46 @@ type OpReachDemand =
         Name: string
     }
 
+/// How much of one tier of the demanded document stays inside the closed
+/// vocabularies, against how much exits to a host (Phase 2446, D71).
+///
+/// A PROJECTION of the document and nothing else: both counts are read off the
+/// tier's own lists, so a reader holding the document can recompute them, and
+/// the decoder refuses a document whose carried counts disagree with its lists.
+/// The unit is one DISTINCT demand the tier names — an effect kind, a state
+/// namespace, a host call, a server capability, a host function — never an
+/// occurrence: the document lists names, not actions, and a measure that
+/// counted occurrences would be an output of the walk that no reader of the
+/// document could check.
+///
+/// The client tier (the document's top-level members, a compute stage's demands
+/// included): `Inside` counts its effect kinds and its state namespaces — what
+/// the closed client-effect vocabulary and the fold's own store reads and writes
+/// express — and `Exits` its host calls (a call action's endpoint among them),
+/// its opaque handlers and its opaque leaves, the three ways a tree's behaviour
+/// leaves what a walk can see. The server tier: `Inside` counts the closed arms'
+/// capabilities, `Exits` the host functions, the one arm whose behaviour is a
+/// performer the host registered. The two tiers are never added together.
+type ClosureShare =
+    {
+        /// The tier's distinct demands expressed inside the closed vocabularies.
+        Inside: int
+        /// The tier's distinct demands that exit to a host.
+        Exits: int
+    }
+
+    /// The share inside, in basis points (parts per ten thousand), ROUNDED
+    /// DOWN, so a tier with one exit never reads as wholly closed. A tier
+    /// demanding nothing reads 10000: nothing exits from it, and the two counts
+    /// beside the figure say that it is empty rather than full.
+    member this.BasisPoints: int =
+        let total = int64 this.Inside + int64 this.Exits
+
+        if total <= 0L then
+            10000
+        else
+            int (10000L * int64 this.Inside / total)
+
 /// What a SERVER placement's handler registration can ever ask of its host —
 /// the second tier of the document, and the half a program tree cannot express.
 ///
@@ -728,6 +768,13 @@ type ServerDemand =
         /// that silence reads as unconstrained rather than as an empty bound.
         Constraints: ServerConstraintDemand list
     }
+
+    /// The server tier's closure share (Phase 2446, D71): the closed arms'
+    /// capabilities inside, the host functions out. Distinct names, so a tier
+    /// that is not yet normalised counts what its normal form counts.
+    member this.Closure: ClosureShare =
+        { Inside = this.Capabilities |> List.distinct |> List.length
+          Exits = this.Functions |> List.distinct |> List.length }
 
 /// What a program tree can ever ask of its host, as data.
 ///
@@ -799,6 +846,24 @@ type DemandedProjection =
         /// before this phase.
         Quantities: QuantityDemand list
     }
+
+    /// The closure share of the document's CLIENT tier (Phase 2446, D71) —
+    /// its top-level members, which at the server placement include what the
+    /// handlers' compute stages demand. The server tier's is `Server`'s own
+    /// `Closure`, and the two are never blended: a document with no server walk
+    /// has this one alone, and its `Server = None` says so.
+    ///
+    /// Carried on the wire beside `quantities` (`closure`), so no consumer
+    /// recomputes it; counted over DISTINCT names, so a projection that is not
+    /// yet normalised counts what its normal form counts.
+    member this.Closure: ClosureShare =
+        { Inside =
+            (this.Effects |> List.distinct |> List.length)
+            + (this.StateNamespaces |> List.map _.Namespace |> List.distinct |> List.length)
+          Exits =
+            (this.HostCalls |> List.distinct |> List.length)
+            + (this.OpaqueHandlers |> List.distinct |> List.length)
+            + (this.OpaqueLeaves |> List.distinct |> List.length) }
 
 /// One quantity the program can spend, as the document carries it (Phase
 /// 2261): the name and unit the leaves declared it under, and the worst case
@@ -1087,7 +1152,9 @@ type DemandedDefect =
     /// Every member read, but the document's lists are not in the distinct,
     /// sorted order the document's own contract promises — so two such documents
     /// would not compare by value, which is the property the whole encoding
-    /// exists to provide.
+    /// exists to provide. Also a tier's `closure` whose counts disagree with
+    /// the lists they are a projection of (Phase 2446): the canonical document
+    /// carries the counts its lists give, and no other.
     | NotCanonical
 
 /// One refusal: the class, the member it is at, the version it was read under,
@@ -1646,7 +1713,7 @@ module Demanded =
     /// The version this encoder emits, and — see `decodableVersions` — the only
     /// one this reader reads.
     [<Literal>]
-    let Version = 14
+    let Version = 15
 
     // The policy clause's discriminator, written once and read once. A literal
     // spelled at the encoder and again at the reader is the drift this document
@@ -1840,7 +1907,20 @@ module Demanded =
     /// selects a shape, so a reader pinned to version 13 refuses either at the
     /// clause — and a document for a host declaring neither differs from its
     /// version-13 bytes in the version alone.
+    ///
+    /// **Version 15 adds the closure share** (Phase 2446, D71): a `closure`
+    /// member on the document, after `quantities`, and on every server tier,
+    /// after `constraints` — `{"inside":n,"exits":m,"shareBasisPoints":b}`,
+    /// each a projection of the tier's own lists. Present on EVERY document
+    /// and every tier from here on, on version 13's argument: an absent member
+    /// says the producer predates the share, a present one that it was
+    /// counted. The members are derived, so a reader checks them rather than
+    /// trusting them: one that disagrees with the lists is refused
+    /// `NotCanonical`. No other byte moves.
     let encode (projection: DemandedProjection) : string =
+        let closure (share: ClosureShare) : string =
+            $"""{{"inside":{share.Inside},"exits":{share.Exits},"shareBasisPoints":{share.BasisPoints}}}"""
+
         let effects = projection.Effects |> List.map q |> arr
 
         let hostCalls =
@@ -1962,9 +2042,9 @@ module Demanded =
                         $"""{{"capability":{q c.Capability},"clauses":{clauses}}}""")
                     |> arr
 
-                $"""{{"effects":{se},"capabilities":{sc},"functions":{fns},"channels":{channels},"reach":{reach},"replay":{replay},"undo":{undo},"constraints":{constraints}}}"""
+                $"""{{"effects":{se},"capabilities":{sc},"functions":{fns},"channels":{channels},"reach":{reach},"replay":{replay},"undo":{undo},"constraints":{constraints},"closure":{closure s.Closure}}}"""
 
-        $"""{{"kind":{q Kind},"version":{Version},"effects":{effects},"hostCalls":{hostCalls},"stateNamespaces":{namespaces},"opaqueHandlers":{opaque},"iterations":{iterations},"opaqueLeaves":{opaqueLeaves},"values":{values},"quantities":{quantities},"server":{server}}}"""
+        $"""{{"kind":{q Kind},"version":{Version},"effects":{effects},"hostCalls":{hostCalls},"stateNamespaces":{namespaces},"opaqueHandlers":{opaque},"iterations":{iterations},"opaqueLeaves":{opaqueLeaves},"values":{values},"quantities":{quantities},"closure":{closure projection.Closure},"server":{server}}}"""
 
     // ─── the projection as a wire document: reading one back ─────────────────
     //
@@ -2552,7 +2632,8 @@ module Demanded =
               "reach"
               "replay"
               "undo"
-              "constraints" ]
+              "constraints"
+              "closure" ]
             value
         |> Result.bind (fun () -> requireStrings version (child path "effects") "effects" value)
         |> Result.bind (fun effects ->
@@ -2644,6 +2725,43 @@ module Demanded =
         else
             None
 
+    /// The `closure` member `holder` carries at `path`, read and held to the
+    /// share `derived` that the tier's own lists project (Phase 2446, D71).
+    ///
+    /// The member is required on every tier, and a closure that disagrees with
+    /// its lists is refused `NotCanonical` at the member: its counts are
+    /// derived, so the canonical document is the one whose carried counts are
+    /// the ones its lists give, and a consumer reading the carried figure must
+    /// be able to trust it without recounting.
+    let private checkClosure
+        (version: int option)
+        (path: string)
+        (holder: Fuaran.Core.JVal)
+        (derived: ClosureShare)
+        : Result<unit, DemandedDecodeFailure> =
+        requireMember version path "closure" holder
+        |> Result.bind (fun closure ->
+            declaredOnly version path [ "inside"; "exits"; "shareBasisPoints" ] closure
+            |> Result.bind (fun () -> requireInt version (child path "inside") "inside" closure)
+            |> Result.bind (fun inside ->
+                requireInt version (child path "exits") "exits" closure
+                |> Result.bind (fun exits ->
+                    requireInt version (child path "shareBasisPoints") "shareBasisPoints" closure
+                    |> Result.bind (fun basisPoints ->
+                        if
+                            inside = derived.Inside
+                            && exits = derived.Exits
+                            && basisPoints = derived.BasisPoints
+                        then
+                            Ok()
+                        else
+                            failWith
+                                DemandedDefect.NotCanonical
+                                version
+                                path
+                                ($"member '{path}' carries inside {inside}, exits {exits}, share {basisPoints}; "
+                                 + $"the tier's lists project inside {derived.Inside}, exits {derived.Exits}, share {derived.BasisPoints}")))))
+
     /// Read a demanded document back into the projection that produced it.
     ///
     /// The inverse of `encode` in both directions, and the round-trip suite
@@ -2700,6 +2818,7 @@ module Demanded =
                       "opaqueLeaves"
                       "values"
                       "quantities"
+                      "closure"
                       "server" ]
                     root
                 |> Result.bind (fun () -> decodeClientTier v root)
@@ -2747,7 +2866,18 @@ module Demanded =
                             field
                             ("member '"
                              + field
-                             + "' is not distinct and sorted; two documents that compare by value is the property this encoding provides"))))
+                             + "' is not distinct and sorted; two documents that compare by value is the property this encoding provides"))
+                // The closure shares are read LAST: they are projections of the
+                // lists above, so they are checked against lists already known
+                // to be canonical, the client tier's first and the server
+                // tier's where a walk ran (Phase 2446).
+                |> Result.bind (fun projection ->
+                    checkClosure v "closure" root projection.Closure
+                    |> Result.bind (fun () ->
+                        match projection.Server, memberOf "server" root with
+                        | Some server, Some tier -> checkClosure v "server.closure" tier server.Closure
+                        | _ -> Ok())
+                    |> Result.map (fun () -> projection))))
 
     // ─── the coverage validator ──────────────────────────────────────────────
 

@@ -468,8 +468,8 @@ let private demanded =
                   |> ServerDemanded.withConstraints registry
 
               let document = Demanded.encode projection
-              Expect.equal Demanded.Version 14 "the version Phase 2262 moved it to; the clauses rode 12"
-              Expect.stringContains document "\"version\":14" "carried in the document"
+              Expect.equal Demanded.Version 15 "the version Phase 2446 moved it to; the clauses rode 12"
+              Expect.stringContains document "\"version\":15" "carried in the document"
 
               Expect.stringContains
                   document
