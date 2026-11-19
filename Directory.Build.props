@@ -237,7 +237,11 @@
          The demanded document moves to version 15: each tier carries its
          closure share, `ClosureShare` (inside, exits, basis points), a
          projection of the tier's own lists the reader holds the carried
-         counts to (DECISIONS.md D71). -->
+         counts to (DECISIONS.md D71).
+         Phase 2797 rides it, additive by surface: the file journal store holds
+         a run for one live process and refuses another
+         (`JournalStoreRefusedException`, `JournalStore.RunHeld` /
+         `HoldUnavailable`; DECISIONS.md D72). -->
     <Version>0.16.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
