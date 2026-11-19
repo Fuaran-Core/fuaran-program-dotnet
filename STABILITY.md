@@ -50,7 +50,7 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
-## 0.16.0 — DRAFT — the closure share is one projection of the demanded document (Phase 2446)
+## 0.16.0 — the closure share is one projection of the demanded document (Phase 2446), and what rode the draft (Phase 2797)
 
 **Class: breaking.** `v0.15.0` is tagged, so this cannot ride it: the demanded document's version moves,
 so a reader pinned to 0.15.0 refuses every document this version writes. `DECISIONS.md` D71 records the
