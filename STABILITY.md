@@ -50,7 +50,7 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
-## 0.15.0 — DRAFT — an op stage that fails part-way keeps the receipts of the effects it did perform (Phase 2224)
+## 0.15.0 — an op stage that fails part-way keeps the receipts of the effects it did perform (Phase 2224), and what rode the draft (the Core 0.41.0 floor, Phases 2792, 2793)
 
 **Class: breaking.** `v0.14.1` is tagged, so this cannot ride it: `OpPerformance.Performed`'s function
 type moves, and so do two records a host that pattern-matches the journal reads. `DECISIONS.md` D68
