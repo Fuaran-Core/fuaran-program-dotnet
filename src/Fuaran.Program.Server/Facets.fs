@@ -679,6 +679,17 @@ module Facets =
     /// the retry's, checked as a first performance's is; nothing of the refused
     /// attempt is reported as performed. The derivation therefore reads no
     /// retry class: it would answer the same with or without one.
+    ///
+    /// **Nor does a standing condition** (Phase 2793, D70). A resume performs a
+    /// journaled plan-phase answer again where the host declared a condition on
+    /// it and the condition fell, while nothing recorded after it may have
+    /// changed the world — once per fall, so exactly-once holds of every step
+    /// except one the host asked to have re-made, and "a resumed plan observes
+    /// what the dead run's entry saw" holds except from such an answer on, where
+    /// the plan observes the present world. No effect was performed on the
+    /// voided answer, because a later effect PINS it and it is then served
+    /// unasked. The derivation reads no plan-phase act (D63) and no condition,
+    /// so what it claims of a handler's arms is unchanged.
     let ofEffect
         (discipline: PlacementDiscipline)
         (performers: PerformerFacets)

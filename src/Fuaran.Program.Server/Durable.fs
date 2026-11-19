@@ -78,7 +78,8 @@ open Fuaran.Program.Bounded
 //  journaled under `ReadEntry` with the read's name as its subject and the
 //  value the host answered as its completed value, and a replay is SERVED
 //  that value and consults the live world for none of it. A resumed plan
-//  therefore observes what the dead run's entry saw, so it stages the same
+//  therefore observes what the dead run's entry saw — except from an answer
+//  whose declared standing condition fell (Phase 2793) — so it stages the same
 //  calls and the journaled stages are served; and a resume whose plan would
 //  read something else at that ordinal is refused under
 //  `durable-entry-read-diverged`, naming the read, before any stage.
@@ -128,9 +129,26 @@ open Fuaran.Program.Bounded
 //  A refusal that performed part of its effects is classed retryable only
 //  where the step repeats freely, so a retry never duplicates an effect.
 //
+//  ── A served answer can STAND ON A CONDITION (Phase 2793, D70) ──────────────
+//  Serving the dead run's answers is wrong where an answer was good only for
+//  the world it was taken in: a merge onto a base that has since moved, a
+//  verification of a tree that is no longer the one to push. The host declares
+//  a named check beside the read's or act's name (`DurableServices.standingRead`
+//  / `standingAct`), and a resume of a run that has not completed asks it of
+//  the answer before serving it, journaling what it answered (`Checked`). An
+//  answer that fell is performed again at its ordinal, and the check record
+//  voids every later record it supersedes (`Journal.current`), so the plan is
+//  re-made from there on the new answer — but only while nothing recorded
+//  after it may have changed the world. Once a later effect has been performed
+//  on the answer it is PINNED: it is served, unasked, and the run completes as
+//  the dead one would have. A run that declares no condition replays exactly
+//  as before.
+//
 //  The consequence a reader should carry away is the one the facets state: this
 //  interpreter's exactly-once claim is about what IT performs — and, since
-//  Phase 2165, about what its plan READ. What a caller does with a returned
+//  Phase 2165, about what its plan READ — with the one exception a host asks
+//  for: an answer whose standing condition fell is performed again, once per
+//  fall (Phase 2793). What a caller does with a returned
 //  notification is the caller's own delivery posture, and the composition
 //  joins the two.
 //
@@ -693,6 +711,24 @@ type DurableOutcome<'Node, 'Store, 'Op, 'Effect> =
         /// was written, so its store keeps it — and this is how a host tells
         /// "resume later" from an uncommitted run that will never pass.
         Retryable: int list
+        /// Ordinals PERFORMED AGAIN because the standing condition of the
+        /// answer they had journaled fell on this resume (Phase 2793, D70) —
+        /// each also in `Invoked`; every later ordinal was planned afresh.
+        Remade: int list
+    }
+
+/// A STANDING CONDITION on a journaled plan-phase answer (Phase 2793, D70): a
+/// named check, answered by the host from the present world, of whether the
+/// answer the journal holds still stands. Asked on a resume that would serve
+/// that answer, never on a first run and never on a completed one; a host
+/// that cannot tell answers `false`, and the answer is re-made.
+type StandingCondition =
+    {
+        /// The check's name — journaled with what it answered, so a reader of
+        /// the journal sees which check re-made the plan.
+        Name: string
+        /// Handed the answer the journal holds; `true` where it still stands.
+        Stands: Fuaran.Core.JVal -> bool
     }
 
 /// The seams the durable interpreter adds to the direct one. Everything else it
@@ -733,6 +769,11 @@ type DurableServices =
         /// resume. A refusal that recorded a partial is retryable only where
         /// the step is declared `Idempotent`, whatever this answers.
         Retryable: StepRefusal -> bool
+        /// The STANDING CONDITIONS on journaled plan-phase answers (Phase
+        /// 2793, D70), keyed by the step's capability — `ReadEntry` or
+        /// `PlanAct` — and its subject, the read's or the act's name. The
+        /// default declares none, and every answer is served as recorded.
+        Standing: Map<string * string, StandingCondition>
     }
 
 module DurableServices =
@@ -748,7 +789,8 @@ module DurableServices =
           Performers = PerformerFacets.none
           ReinvokeIndeterminate = false
           Clock = None
-          Retryable = fun _ -> false }
+          Retryable = fun _ -> false
+          Standing = Map.empty }
 
     let withJournal (journal: EffectJournal) (services: DurableServices) : DurableServices =
         { services with Journal = journal }
@@ -815,6 +857,21 @@ module DurableServices =
 
         { services with
             Retryable = fun refusal -> declared refusal || classify refusal }
+
+    /// Declare that the plan's ENTRY READ of this name stands only while
+    /// `condition` holds (Phase 2793, D70): a resume asks it of the recorded
+    /// read before serving it, and reads the world again where it fell.
+    let standingRead (read: string) (condition: StandingCondition) (services: DurableServices) : DurableServices =
+        { services with
+            Standing = Map.add (EntryReader.Capability, read) condition services.Standing }
+
+    /// Declare that the plan-phase ACT of this name stands only while
+    /// `condition` holds (Phase 2793, D70): a resume asks it of the recorded
+    /// answer before serving it, and performs the act again where it fell —
+    /// while nothing recorded after it has changed the world.
+    let standingAct (act: string) (condition: StandingCondition) (services: DurableServices) : DurableServices =
+        { services with
+            Standing = Map.add (PlanActor.Capability, act) condition services.Standing }
 
     /// **The named opt-in.** Re-invoke a step the journal cannot decide, taking
     /// the duplicate hazard rather than the loss. Naming it is the
@@ -994,7 +1051,11 @@ module Durable =
         : DurableOutcome<'Node, 'Store, 'Op, 'Effect>
               when 'Position :> IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>
         =
-        let recorded = services.Journal.Read invocation
+        // Mutable for one reason (Phase 2793, D70): a standing condition that
+        // FALLS on this resume re-makes the plan from its ordinal, and the
+        // check record it appends is added here too, so every later ordinal
+        // of this run reads the journal's `current` records — unrun.
+        let mutable recorded = services.Journal.Read invocation
 
         // The ordinal of the next performer invocation. Mutable because the
         // fold it is threaded through does not know this interpreter exists —
@@ -1009,6 +1070,7 @@ module Durable =
         let overrides = ResizeArray<DurableOverrideRecord>()
         let retried = ResizeArray<int>()
         let retryable = ResizeArray<int>()
+        let remade = ResizeArray<int>()
         let complete = Journal.isComplete recorded
 
         let append (step: int) (capability: string) (subject: string option) (phase: JournalPhase) =
@@ -1064,6 +1126,47 @@ module Durable =
                  | Error(reason, partial) -> JournalPhase.Refused(reason, partial))
 
             result
+
+        /// The standing condition declared on a step, by its capability and
+        /// subject (Phase 2793, D70) — only a read's or an act's can carry one.
+        let standingOf (capability: string) (subject: string option) : StandingCondition option =
+            subject
+            |> Option.bind (fun subject -> Map.tryFind (capability, subject) services.Standing)
+
+        /// Whether the journaled answer at `step` is PINNED (Phase 2793, D70):
+        /// some step recorded after it — and planned on it, since the plan is
+        /// deterministic over its answers — may have changed the world. A
+        /// refusal that performed nothing reached nothing; the plan's reads
+        /// and records change nothing outside the run; a step carrying a
+        /// condition of its own is one the host declared is re-made when its
+        /// world moved. Anything else pins, whatever its record — `Attempted`
+        /// alone included — and whatever its repeat-safety: a re-plan does not
+        /// repeat a call, it performs the one the new answer plans, and the
+        /// earlier performance stands in the world beside it.
+        let pinned (step: int) : bool =
+            let changesNothingOutside (capability: string) =
+                capability = EntryReadCapability
+                || capability = ExtentReader.Capability
+                || capability = FindingCapability
+                || capability = DeriveCapability
+                || capability = ClockCapability
+                || capability = LimitCapability
+
+            recorded
+            |> List.map _.Step
+            |> List.distinct
+            |> List.exists (fun later ->
+                later > step
+                && match Journal.stepOf recorded later with
+                   | JournaledStep.Unrun
+                   | JournaledStep.Refusal(_, None)
+                   | JournaledStep.Retryable(_, None) -> false
+                   | _ ->
+                       match Journal.capabilityOf recorded later with
+                       | None -> false
+                       | Some capability ->
+                           not (changesNothingOutside capability)
+                           && (standingOf capability (Journal.subjectOf recorded later |> Option.flatten)).IsNone)
 
         /// ONE wrapper for every performer the perform phase reaches — a host
         /// call's (`capability` = `host:<fn>`, no subject) and an op stage's
@@ -1134,9 +1237,39 @@ module Durable =
                 Error(diverged, None)
             else
                 match Journal.stepOf recorded step with
+                // A served answer that STANDS ON A CONDITION (Phase 2793, D70)
+                // is checked before it is served, on a resume of a run that
+                // has not completed and while nothing after it pins it; what
+                // the host answered is journaled. One that fell is performed
+                // again here, and the check record — added to this run's
+                // snapshot as to the journal — voids every later ordinal's
+                // records, so the plan is re-made on the new answer.
                 | JournaledStep.Value value ->
-                    replayed.Add step
-                    Ok value
+                    let stands =
+                        match standingOf capability subject with
+                        | Some condition when not complete && not (pinned step) ->
+                            let stands = condition.Stands value
+
+                            let check =
+                                { Invocation = invocation
+                                  Step = step
+                                  Capability = capability
+                                  Subject = subject
+                                  Phase = JournalPhase.Checked(condition.Name, stands) }
+
+                            services.Journal.Append check
+
+                            if not stands then
+                                recorded <- recorded @ [ check ]
+
+                            stands
+                        | _ -> true
+
+                    if stands then
+                        replayed.Add step
+                        Ok value
+                    else
+                        attempt (fun () -> remade.Add step)
                 | JournaledStep.Refusal(reason, partial) ->
                     replayed.Add step
                     Error(reason, partial)
@@ -1523,7 +1656,8 @@ module Durable =
           Indeterminate = List.ofSeq indeterminate
           Overrides = List.ofSeq overrides
           Retried = List.ofSeq retried
-          Retryable = if resumable then List.ofSeq retryable else [] }
+          Retryable = if resumable then List.ofSeq retryable else []
+          Remade = List.ofSeq remade }
 
     /// **Run one handler under deterministic replay, performing its ops as the
     /// placement declares** — `runGuarded` above with no control in force.

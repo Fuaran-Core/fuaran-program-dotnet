@@ -142,6 +142,38 @@ move: no specified document carries a refusal class, and the journal is a host s
   every journal, rendered entry and outcome is byte-identical to the draft before this entry.
 
 
+### Rides the draft: a served answer can be checked against the present world on resume (Phase 2793)
+
+**Class: breaking — rides `0.15.0`**, whose class is already breaking: a closed union gains a case and two
+records gain fields. `DECISIONS.md` D70 records the design. The program wire specification does not move:
+no specified document carries a condition or a check, and the journal is a host store.
+
+**What a consumer gains.**
+
+- `StandingCondition = { Name; Stands: JVal -> bool }`, declared with `DurableServices.standingRead` (an
+  entry read, by name) or `DurableServices.standingAct` (a plan-phase act, by name). A resume of a run that
+  has not completed asks it of the answer it would serve; an answer that no longer stands is performed again
+  at its ordinal and the plan re-made from there, while nothing recorded after it may have changed the world.
+  An answer a later effect was performed on is served unasked.
+- `DurableOutcome.Remade`: the ordinals this run performed again because their condition fell.
+- `Journal.current`: the records a fell check has not superseded — what `stepOf`, `capabilityOf` and
+  `subjectOf` now read.
+
+**What a consumer pays.**
+
+- **`JournalPhase` gains `Checked of condition * stands`.** A host that matches it exhaustively adds the
+  arm. A check is stored under its own `$type`, `"Checked"`, with `condition` and `stands`; a reader that
+  refuses unknown arms refuses it, which is right for a reader that would serve a voided answer.
+- **`DurableServices` gains `Standing`, and `DurableOutcome` gains `Remade`.** A host that builds
+  `DurableServices` from `DurableServices.create` is unaffected; one that writes the record in full adds
+  `Standing = Map.empty`.
+- **`Journal.stepOf`, `capabilityOf` and `subjectOf` read the journal's current records**, so after a fell
+  check they no longer answer the records it superseded; a journal with no fell check reads as before.
+  `Journal.attemptsOf` still counts every attempt the journal keeps.
+- **Nothing moves for a host that declares no condition.** No check is asked or recorded, and every journal,
+  rendered entry and outcome is byte-identical to the draft before this entry.
+
+
 ## 0.14.1 — a server effect declares the quantities it spends, priced per event through the calls (Phase 2438), and what rode the draft (Phases 2440, 2441, 2589, 2590, 2222, 2223, 2620, 2383)
 
 **0.14.0 was never released.** It was a draft slot that was packed to a local feed more than once while its

@@ -704,6 +704,9 @@ let private storeUnits =
                                       "writes", JArr [ JObj [ "digest", JStr "sha256:ab"; "target", JStr "footer" ] ] ]
                             )
                         ))
+                    // A standing condition's check, both answers (Phase 2793, D70).
+                    entry 3 Durable.PlanActCapability (Some "merge") (JournalPhase.Checked("on-present-base", true))
+                    entry 3 Durable.PlanActCapability (Some "merge") (JournalPhase.Checked("on-present-base", false))
                     entry Journal.InvocationStep Journal.InvocationCapability None (JournalPhase.Completed(JStr "")) ] do
                   let text = Journal.render e
                   Expect.isFalse (text.Contains "\n") "one line"
@@ -723,6 +726,60 @@ let private storeUnits =
 
               Expect.isTrue (refused """{"$type":"Lost","capability":"c","invocation":"run","step":0}""") "a phase"
               Expect.isTrue (refused """{"$type":"Completed","capability":"c","invocation":"run","step":0}""") "a value"
+
+              Expect.isTrue
+                  (refused """{"$type":"Checked","capability":"c","condition":"x","invocation":"run","step":0}""")
+                  "a check without what it answered"
+
+              Expect.isTrue
+                  (refused
+                      """{"$type":"Checked","capability":"c","condition":"","invocation":"run","stands":true,"step":0}""")
+                  "a check without a name"
+
+              Expect.equal
+                  (Journal.render (entry 0 "PlanAct" (Some "merge") (JournalPhase.Checked("on-present-base", false))))
+                  """{"$type":"Checked","capability":"PlanAct","condition":"on-present-base","invocation":"run","stands":false,"step":0,"subject":"merge"}"""
+                  "a check's stored form"
+          }
+
+          test "a fell check supersedes what it re-made, and the reading survives a fresh store instance (Phase 2793)" {
+              withDirectory (fun directory ->
+                  let store = JournalStore.file directory
+                  let act phase = entry 0 "PlanAct" (Some "merge") phase
+                  let later phase = entry 1 "PlanAct" (Some "verify") phase
+
+                  [ act JournalPhase.Attempted
+                    act (JournalPhase.Completed(JStr "old"))
+                    later JournalPhase.Attempted
+                    later (JournalPhase.Completed(JStr "verified old"))
+                    act (JournalPhase.Checked("on-present-base", false))
+                    act JournalPhase.Attempted
+                    act (JournalPhase.Completed(JStr "new")) ]
+                  |> List.iter store.Journal.Append
+
+                  let read = (JournalStore.file directory).Journal.Read "run"
+                  Expect.equal (List.length read) 7 "the journal stays append-only: nothing was removed"
+
+                  Expect.equal
+                      (Journal.stepOf read 0)
+                      (JournaledStep.Value(JStr "new"))
+                      "the re-made answer is the step's"
+
+                  Expect.equal
+                      (Journal.stepOf read 1)
+                      JournaledStep.Unrun
+                      "the later answer, planned on the old one, is void"
+
+                  Expect.equal (Journal.capabilityOf read 1) None "and has no recorded identity to diverge from"
+                  Expect.equal (Journal.attemptsOf read 0) 2 "every attempt is still counted"
+                  Expect.equal (List.length (Journal.current read)) 3 "the current reading: the check and the re-make"
+
+                  let stood = read @ [ act (JournalPhase.Checked("on-present-base", true)) ]
+
+                  Expect.equal
+                      (Journal.current stood)
+                      (Journal.current read @ [ List.last stood ])
+                      "a check that stood voids nothing")
           }
 
           test "the file store keeps each run's entries, in order, across a fresh instance" {

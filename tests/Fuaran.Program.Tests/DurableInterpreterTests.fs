@@ -1413,12 +1413,434 @@ let private retry =
                   "a final refusal keeps its stored form"
           } ]
 
+// ─── a served answer checked against the present world (Phase 2793, D70) ─────
+
+/// The world the worked case runs in: the target branch's head, the tree the
+/// work holds, and what each act and the push did — every count survives the
+/// process, as the world does.
+type private Remote() =
+    member val Base = "b1" with get, set
+    member val Tree = "" with get, set
+    member val Merges = 0 with get, set
+    member val Verifications = 0 with get, set
+    member val Notes = 0 with get, set
+    member val Pushes = 0 with get, set
+    member val Pushed: string list = [] with get, set
+    member val Asked: string list = [] with get, set
+
+/// The worked case: merge the target branch into the work, verify the merged
+/// tree (the expensive check), then push. The merge and the verification are
+/// plan-phase acts at ordinals 0 and 1; the push is a host call at 2.
+let private mergeVerifyPush: Handler<ToyAction, ToyOp> =
+    { Name = "land"
+      Stages =
+        [ Effect(
+              ServerEffect.ApplyOps
+                  [ Relabel("title", actingMarker + "merge")
+                    Relabel("footer", actingMarker + "verify") ]
+          )
+          Effect(ServerEffect.HostCall("push", JStr "main", None)) ] }
+
+/// The same, with an act between the two that carries no condition — a note
+/// the run posts, which a re-plan would post again.
+let private mergeNoteVerifyPush: Handler<ToyAction, ToyOp> =
+    { Name = "land-noting"
+      Stages =
+        [ Effect(
+              ServerEffect.ApplyOps
+                  [ Relabel("title", actingMarker + "merge")
+                    Relabel("title", actingMarker + "note")
+                    Relabel("footer", actingMarker + "verify") ]
+          )
+          Effect(ServerEffect.HostCall("push", JStr "main", None)) ] }
+
+let private landingActs (remote: Remote) =
+    Map.ofList
+        [ "merge",
+          fun () ->
+              remote.Merges <- remote.Merges + 1
+              remote.Tree <- "work+" + remote.Base
+              Ok(JStr remote.Tree)
+          "verify",
+          fun () ->
+              remote.Verifications <- remote.Verifications + 1
+              Ok(JStr("verified:" + remote.Tree))
+          "note",
+          fun () ->
+              remote.Notes <- remote.Notes + 1
+              Ok(JStr "noted") ]
+
+/// A push that refuses with each reason in `refusals`, in turn, then publishes
+/// the tree the work holds.
+let private pushOf (remote: Remote) (refusals: string list) =
+    let pending = ref refusals
+
+    fun (_: JVal) ->
+        remote.Pushes <- remote.Pushes + 1
+
+        match pending.Value with
+        | reason :: rest ->
+            pending.Value <- rest
+            Error reason
+        | [] ->
+            remote.Pushed <- remote.Pushed @ [ remote.Tree ]
+            Ok(JStr "pushed")
+
+/// The consumer's two conditions: the merge stands while it is a merge onto the
+/// PRESENT base; the verification stands while it verified the PRESENT tree —
+/// which is the merge's answer, so the second depends on the first.
+let private mergeOnPresentBase (remote: Remote) =
+    { Name = "merge-on-present-base"
+      Stands =
+        fun answer ->
+            remote.Asked <- remote.Asked @ [ "merge" ]
+            answer = JStr("work+" + remote.Base) }
+
+let private verifiedPresentTree (remote: Remote) =
+    { Name = "verified-present-tree"
+      Stands =
+        fun answer ->
+            remote.Asked <- remote.Asked @ [ "verify" ]
+            answer = JStr("verified:" + remote.Tree) }
+
+let private standing (remote: Remote) (journal: EffectJournal) =
+    DurableServices.create
+    |> DurableServices.withJournal journal
+    |> DurableServices.standingAct "merge" (mergeOnPresentBase remote)
+    |> DurableServices.standingAct "verify" (verifiedPresentTree remote)
+
+let private runLanding
+    (services: DurableServices)
+    (remote: Remote)
+    (push: JVal -> Result<JVal, string>)
+    (handler: Handler<ToyAction, ToyOp>)
+    =
+    runPlanning
+        (fun plan -> actingWitness (World()) plan (landingActs remote))
+        services
+        (registryOf [ "push", push ])
+        handler
+
+/// A journal the process dies in front of AFTER every step: the invocation
+/// marker's record kills it, so the push has been performed and recorded.
+let private dyingAtTheMarker (inner: EffectJournal) : EffectJournal =
+    { inner with
+        Append =
+            fun entry ->
+                if entry.Step = Journal.InvocationStep then
+                    raise (ProcessDied "after the push")
+                else
+                    inner.Append entry }
+
+/// The run dies between the verification and the push, and the target branch
+/// moves (or not) while it is down. Answers the remote and the journal.
+let private diedBeforePush (services: Remote -> EffectJournal -> DurableServices) (baseMovesTo: string option) =
+    let remote = Remote()
+    let journal = freshJournal ()
+
+    let died =
+        crashing (fun () ->
+            runLanding (services remote (dyingBeforeAttempting 2 journal)) remote (pushOf remote []) mergeVerifyPush)
+
+    Expect.isTrue died "the process died between the verification and the push"
+    Expect.equal (remote.Merges, remote.Verifications, remote.Pushes) (1, 1, 0) "merged and verified, not pushed"
+    baseMovesTo |> Option.iter (fun moved -> remote.Base <- moved)
+    remote, journal
+
+let private standingTests =
+    testList
+        "a served answer can be checked against the present world on resume (Phase 2793, D70)"
+        [ test "an answer whose condition holds is served, and the check is journaled" {
+              let remote, journal = diedBeforePush standing None
+
+              let resumed =
+                  runLanding (standing remote journal) remote (pushOf remote []) mergeVerifyPush
+
+              Expect.isTrue resumed.Outcome.Committed "the resumed run committed"
+              Expect.equal remote.Asked [ "merge"; "verify" ] "both conditions were asked, in plan order"
+              Expect.equal (remote.Merges, remote.Verifications) (1, 1) "neither act was performed again"
+              Expect.equal resumed.Replayed [ 0; 1 ] "both answers were served"
+              Expect.equal resumed.Invoked [ 2 ] "only the push ran"
+              Expect.isEmpty resumed.Remade "nothing was re-made"
+              Expect.equal remote.Pushed [ "work+b1" ] "the tree verified is the tree pushed"
+
+              let described = Journal.describe (journal.Read "inv")
+              Expect.contains described "0 PlanAct merge checked-stands" "the merge's check is journaled"
+              Expect.contains described "1 PlanAct verify checked-stands" "and the verification's"
+          }
+
+          test
+              "the merge's condition fails before the push: merge and verification are re-made, the run completes on the new answer" {
+              let remote, journal = diedBeforePush standing (Some "b2")
+
+              let resumed =
+                  runLanding (standing remote journal) remote (pushOf remote []) mergeVerifyPush
+
+              Expect.isTrue resumed.Outcome.Committed "the resumed run committed"
+              Expect.equal remote.Asked [ "merge" ] "the verification, planned on the fallen merge, was never asked"
+
+              Expect.equal
+                  (remote.Merges, remote.Verifications, remote.Pushes)
+                  (2, 2, 1)
+                  "re-merged, re-verified, pushed once"
+
+              Expect.equal remote.Pushed [ "work+b2" ] "the push published the tree verified against the PRESENT base"
+              Expect.equal resumed.Remade [ 0 ] "the merge is reported as re-made"
+              Expect.equal resumed.Invoked [ 0; 1; 2 ] "everything from the merge on was performed"
+              Expect.isEmpty resumed.Replayed "nothing of the dead run was served"
+
+              Expect.equal
+                  (labelOf "title" resumed.Outcome.Store.Tree, labelOf "footer" resumed.Outcome.Store.Tree)
+                  (Some "work+b2", Some "verified:work+b2")
+                  "the plan ran on the new answers"
+
+              let entries = journal.Read "inv"
+              Expect.contains (Journal.describe entries) "0 PlanAct merge checked-fell" "the fall is journaled"
+              Expect.equal (Journal.stepOf entries 0) (JournaledStep.Value(JStr "work+b2")) "the re-made merge stands"
+
+              Expect.equal
+                  (Journal.stepOf entries 1)
+                  (JournaledStep.Value(JStr "verified:work+b2"))
+                  "the dead run's verification is voided, not served"
+
+              Expect.equal (Journal.attemptsOf entries 0) 2 "the journal keeps both merges"
+          }
+
+          test "the verification's condition fails alone: only it is re-made" {
+              let remote, journal = diedBeforePush standing None
+              // The work's tree moved under the verification while the run was down.
+              remote.Tree <- "work+b1+fixup"
+
+              let resumed =
+                  runLanding (standing remote journal) remote (pushOf remote []) mergeVerifyPush
+
+              Expect.isTrue resumed.Outcome.Committed "the resumed run committed"
+              Expect.equal remote.Asked [ "merge"; "verify" ] "the merge stood, the verification was asked"
+              Expect.equal (remote.Merges, remote.Verifications) (1, 2) "the merge was served, the verification re-made"
+              Expect.equal resumed.Replayed [ 0 ] "the merge was served"
+              Expect.equal resumed.Remade [ 1 ] "the verification is reported as re-made"
+              Expect.equal remote.Pushed [ "work+b1+fixup" ] "the tree pushed is the tree verified"
+          }
+
+          test "after the push nothing is re-made: the answers are pinned, served unasked, and the run completes" {
+              let remote = Remote()
+              let journal = freshJournal ()
+
+              let died =
+                  crashing (fun () ->
+                      runLanding (standing remote (dyingAtTheMarker journal)) remote (pushOf remote []) mergeVerifyPush)
+
+              Expect.isTrue died "the process died after the push, before the run completed"
+              Expect.equal remote.Pushed [ "work+b1" ] "the push was performed"
+              remote.Base <- "b2"
+
+              let resumed =
+                  runLanding (standing remote journal) remote (pushOf remote []) mergeVerifyPush
+
+              Expect.isTrue resumed.Outcome.Committed "the run completes as the dead one would have"
+              Expect.isEmpty remote.Asked "no condition was asked: the push was performed on the answers"
+              Expect.equal (remote.Merges, remote.Verifications, remote.Pushes) (1, 1, 1) "nothing was performed again"
+              Expect.equal resumed.Replayed [ 0; 1; 2 ] "every step was served"
+              Expect.isEmpty resumed.Remade "nothing was re-made"
+              Expect.isTrue (Journal.isComplete (journal.Read "inv")) "and the run is complete"
+          }
+
+          test "a death inside the push pins the answers too: the push is indeterminate, never re-planned" {
+              let remote = Remote()
+              let journal = freshJournal ()
+
+              let died =
+                  crashing (fun () ->
+                      runLanding
+                          (standing remote journal)
+                          remote
+                          (fun _ -> raise (ProcessDied "inside the push"))
+                          mergeVerifyPush)
+
+              Expect.isTrue died "the process died inside the push"
+              remote.Base <- "b2"
+
+              let resumed =
+                  runLanding (standing remote journal) remote (pushOf remote []) mergeVerifyPush
+
+              Expect.isEmpty remote.Asked "an attempted push may have landed, so nothing is asked"
+              Expect.equal (remote.Merges, remote.Pushes) (1, 0) "nothing re-made, the push not performed again"
+              Expect.equal resumed.Indeterminate [ 2 ] "the push is refused as indeterminate, as before"
+          }
+
+          test "a later act with no condition pins an earlier answer: a re-plan would perform it again" {
+              let remote = Remote()
+              let journal = freshJournal ()
+
+              crashing (fun () ->
+                  runLanding
+                      (standing remote (dyingBeforeAttempting 3 journal))
+                      remote
+                      (pushOf remote [])
+                      mergeNoteVerifyPush)
+              |> ignore
+
+              remote.Base <- "b2"
+
+              let resumed =
+                  runLanding (standing remote journal) remote (pushOf remote []) mergeNoteVerifyPush
+
+              Expect.equal remote.Asked [ "verify" ] "the merge is pinned by the note after it; the verification is not"
+              Expect.equal (remote.Merges, remote.Notes) (1, 1) "the merge and the note were served"
+              Expect.equal resumed.Replayed [ 0; 1; 2 ] "every answer stood or was pinned"
+              Expect.isEmpty resumed.Remade "nothing was re-made"
+          }
+
+          test
+              "a second resume replays the first resume's decision: the voided answers stay void, the re-made one is checked again" {
+              let remote, journal = diedBeforePush standing (Some "b2")
+
+              // The first resume re-makes the merge, then dies at the verification's attempt.
+              let died =
+                  crashing (fun () ->
+                      runLanding
+                          (standing remote (dyingBeforeAttempting 1 journal))
+                          remote
+                          (pushOf remote [])
+                          mergeVerifyPush)
+
+              Expect.isTrue died "the first resume died after re-making the merge"
+
+              Expect.equal
+                  (remote.Merges, remote.Verifications)
+                  (2, 1)
+                  "the merge was re-made, the verification not yet"
+
+              remote.Asked <- []
+
+              let second =
+                  runLanding (standing remote journal) remote (pushOf remote []) mergeVerifyPush
+
+              Expect.isTrue second.Outcome.Committed "the second resume committed"
+              Expect.equal remote.Asked [ "merge" ] "the RE-MADE merge was checked; the voided verification never"
+
+              Expect.equal
+                  (remote.Merges, remote.Verifications, remote.Pushes)
+                  (2, 2, 1)
+                  "merged twice in all, never a third time"
+
+              Expect.equal second.Replayed [ 0 ] "the re-made merge was served"
+              Expect.isEmpty second.Remade "the first resume's fall is not re-decided"
+              Expect.equal second.Invoked [ 1; 2 ] "the verification, voided by the fall, was performed fresh"
+              Expect.equal remote.Pushed [ "work+b2" ] "and the right tree was pushed"
+          }
+
+          test
+              "a push refused retryably does not pin the merge: on resume it is checked, re-made, and the push is fresh" {
+              let remote = Remote()
+              let journal = freshJournal ()
+              let push = pushOf remote [ "remote-moved" ]
+
+              let services (journal: EffectJournal) =
+                  standing remote journal
+                  |> DurableServices.classingRetryable (fun refusal ->
+                      refusal.Capability = "host:push" && refusal.Reason = "remote-moved")
+
+              let first = runLanding (services journal) remote push mergeVerifyPush
+              Expect.equal first.Retryable [ 2 ] "the run stopped resumable on the push"
+              remote.Base <- "b2"
+              let resumed = runLanding (services journal) remote push mergeVerifyPush
+
+              Expect.isTrue resumed.Outcome.Committed "the resumed run committed"
+              Expect.equal remote.Asked [ "merge" ] "a refusal that performed nothing pins nothing"
+              Expect.equal resumed.Remade [ 0 ] "the merge was re-made"
+              Expect.isEmpty resumed.Retried "the push was a fresh performance on the new plan, not a retry"
+              Expect.equal remote.Pushed [ "work+b2" ] "and published the tree verified against the present base"
+          }
+
+          test "a re-made act that refuses retryably leaves the run resumable, and the next resume performs it again" {
+              let remote, journal = diedBeforePush standing (Some "b2")
+              let mutable locked = true
+
+              let acts =
+                  landingActs remote
+                  |> Map.add "merge" (fun () ->
+                      if locked then
+                          Error "lock-held"
+                      else
+                          (landingActs remote |> Map.find "merge") ())
+
+              let services =
+                  standing remote journal
+                  |> DurableServices.classingRetryable (fun refusal -> refusal.Reason = "lock-held")
+
+              let runWith () =
+                  runPlanning
+                      (fun plan -> actingWitness (World()) plan acts)
+                      services
+                      (registryOf [ "push", pushOf remote [] ])
+                      mergeVerifyPush
+
+              let first = runWith ()
+              Expect.equal first.Remade [ 0 ] "the merge fell and was re-made"
+              Expect.equal first.Retryable [ 0 ] "and its re-make refused retryably: the run is resumable"
+              Expect.isFalse (Journal.isComplete (journal.Read "inv")) "no marker"
+              locked <- false
+              remote.Asked <- []
+              let second = runWith ()
+
+              Expect.isTrue second.Outcome.Committed "the next resume completed"
+              Expect.isEmpty remote.Asked "a refusal has no answer to check"
+              Expect.equal second.Retried [ 0 ] "the merge was performed again on the retry path"
+              Expect.equal remote.Pushed [ "work+b2" ] "on the present base"
+          }
+
+          test
+              "a program with no condition replays as before: the stale answers are served, journal and outcome unchanged" {
+              let unconditioned (_: Remote) (journal: EffectJournal) =
+                  DurableServices.create |> DurableServices.withJournal journal
+
+              let resumeUnder (services: Remote -> EffectJournal -> DurableServices) =
+                  let remote, journal = diedBeforePush unconditioned (Some "b2")
+
+                  let resumed =
+                      runLanding (services remote journal) remote (pushOf remote []) mergeVerifyPush
+
+                  remote, resumed, journal.Read "inv" |> List.map Journal.render
+
+              let remote, resumed, rendered = resumeUnder unconditioned
+              Expect.equal remote.Pushed [ "work+b1" ] "without a condition the stale merge is served and pushed"
+              Expect.isEmpty resumed.Remade "nothing is re-made"
+
+              let elsewhere (remote: Remote) (journal: EffectJournal) =
+                  unconditioned remote journal
+                  |> DurableServices.standingAct "another act" (mergeOnPresentBase remote)
+
+              let _, resumedElsewhere, renderedElsewhere = resumeUnder elsewhere
+
+              Expect.equal
+                  renderedElsewhere
+                  rendered
+                  "a condition on a step the program never takes moves no journal byte"
+
+              let shape (o: DurableOutcome<_, _, _, _>) =
+                  o.Outcome.Committed,
+                  o.Outcome.Performed,
+                  labelOf "title" o.Outcome.Store.Tree,
+                  labelOf "footer" o.Outcome.Store.Tree,
+                  o.Replayed,
+                  o.Invoked,
+                  o.Remade
+
+              Expect.equal (shape resumedElsewhere) (shape resumed) "nor the outcome"
+              Expect.isFalse (rendered |> List.exists (fun line -> line.Contains "Checked")) "and no check is recorded"
+          } ]
+
 // ─── the model beside production ─────────────────────────────────────────────
 
 /// What production's reader answered the plan, observed through the
 /// witness: the read's answer is what `Apply` relabels with, or the refusal
 /// the plan halts on.
-let private productionRead (entries: JournalEntry list) (live: string) : Result<JVal, string> =
+let private productionReadUnder
+    (services: EffectJournal -> DurableServices)
+    (entries: JournalEntry list)
+    (live: string)
+    : Result<JVal, string> * JournalEntry list =
     let journal = freshJournal ()
     entries |> List.iter journal.Append
     let world = World()
@@ -1433,14 +1855,18 @@ let private productionRead (entries: JournalEntry list) (live: string) : Result<
 
     run
         (observing)
-        (DurableServices.create |> DurableServices.withJournal journal)
+        (services journal)
         "inv"
         (registryOf [ "audit", fun _ -> Ok(JStr "recorded") ])
         (OpPerformance.performedWithoutReceipt (fun _ _ -> Ok()))
         readThenRetireThenAudit
     |> ignore
 
-    answered.Value |> Option.defaultWith (fun () -> failtest "the plan never read")
+    answered.Value |> Option.defaultWith (fun () -> failtest "the plan never read"), journal.Read "inv"
+
+let private productionRead (entries: JournalEntry list) (live: string) : Result<JVal, string> =
+    productionReadUnder (fun journal -> DurableServices.create |> DurableServices.withJournal journal) entries live
+    |> fst
 
 let private modelRead (entries: JournalEntry list) (live: string) : Result<JVal, string> =
     match
@@ -1460,6 +1886,14 @@ let private readShapes: (string * JournalEntry list) list =
       "the read refused as retryable (Phase 2792)",
       [ entry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted
         entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.RefusedRetryable("briefly unreachable", None)) ]
+      "the read completed, and a resume's check found it standing (Phase 2793)",
+      [ entry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted
+        entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.Completed(JStr "Recorded"))
+        entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.Checked("bundle-unmoved", true)) ]
+      "the read completed, and a resume's check found it fallen (Phase 2793)",
+      [ entry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted
+        entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.Completed(JStr "Recorded"))
+        entry 0 Durable.EntryReadCapability (Some "bundle") (JournalPhase.Checked("bundle-unmoved", false)) ]
       "the read attempted and undecided", [ entry 0 Durable.EntryReadCapability (Some "bundle") JournalPhase.Attempted ]
       "another read recorded at the ordinal",
       [ entry 0 Durable.EntryReadCapability (Some "other") JournalPhase.Attempted
@@ -1475,6 +1909,33 @@ let private oracle =
               test (sprintf "%s: the extracted entry_read and production's reader agree" label) {
                   Expect.equal (productionRead entries "Live") (modelRead entries "Live") label
               }
+          test
+              "under a declared condition that falls, production reads live and the model agrees over the journal it left" {
+              let unmoved =
+                  { Name = "bundle-unmoved"
+                    Stands = fun answer -> answer = JStr "Live" }
+
+              let answered, left =
+                  productionReadUnder
+                      (fun journal ->
+                          DurableServices.create
+                          |> DurableServices.withJournal journal
+                          |> DurableServices.standingRead "bundle" unmoved)
+                      (snd readShapes[1])
+                      "Live"
+
+              Expect.equal answered (Ok(JStr "Live")) "the recorded read fell, so the plan read the world again"
+
+              Expect.equal
+                  (modelRead left "Elsewhere")
+                  answered
+                  "the model, over the journal production left, serves the re-made read"
+
+              Expect.notEqual
+                  (modelRead (snd readShapes[1]) "Live")
+                  answered
+                  "over the journal before the check it would not"
+          }
           test "GO RED: a model fed another subject disagrees with production, so the comparison can lose" {
               let entries = snd readShapes[1]
 
@@ -1496,4 +1957,4 @@ let private oracle =
 let tests =
     testList
         "Phase 2165 - the durable tier at the toy witness: the entry read, the prefix, per-kind facets and composed contracts"
-        [ entryRead; planAct; prefix; facet; contracts; retry; oracle ]
+        [ entryRead; planAct; prefix; facet; contracts; retry; standingTests; oracle ]

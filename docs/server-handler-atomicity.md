@@ -247,6 +247,26 @@ seam; it is the seam both other placements already have, used deliberately.
 > contracts composed in front, so the receipt is the retry's and is checked as a first performance's
 > is; nothing of the refused attempt is reported as performed. A complete run's replay never retries:
 > it serves the refusal, and reaches no performer.
+>
+> **A served answer can STAND ON A CONDITION, since [D70](../DECISIONS.md) (Phase 2793).** A resume
+> otherwise replays the dead run's world, which is wrong for an answer that was good only for the world it
+> was taken in: a run that merged a target branch, verified the merged tree, and died before pushing, is
+> resumed after the branch moved, and serving its merge and its verification would push work verified
+> against a stale base. The host declares a named check beside the entry read's or plan act's name
+> (`DurableServices.standingRead` / `standingAct`). A resume of a run that has not completed asks it of
+> the answer it would serve, and journals what it answered (`Checked`). An answer that FELL is performed
+> again at its ordinal, and the check record supersedes every record appended before it at that ordinal or
+> a later one (`Journal.current`), so the plan is re-made from there on the new answer and a second resume
+> reads the re-made run, not the dead one. That holds only while nothing recorded after the answer may
+> have changed the world: a host call, an op stage, a staged query or a plan act with no condition of its
+> own, with any record, PINS it, and a pinned answer is served unasked and the run completes as the dead
+> one would have. So the merge and the verification are re-made before the push, and nothing is re-made
+> after it. **What it does to exactly-once:** every step is performed once, except an answer the host
+> declared a condition on, which is performed again once per fall; no effect was performed on the voided
+> answer, because one would have pinned it. **What it does to "a resumed plan observes what the dead run's
+> entry saw":** true, except from an answer whose condition fell, where the resumed plan observes the
+> present world. A step whose record is a retryable refusal that performed nothing does not pin, so a push
+> refused because the remote moved leaves the merge to be checked, and re-made, on the resume.
 
 **What remains open.**
 

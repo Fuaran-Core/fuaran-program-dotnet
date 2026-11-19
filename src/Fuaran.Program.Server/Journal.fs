@@ -82,6 +82,14 @@ type JournalPhase =
     /// `partial` is classed retryable only where the step repeats freely.
     /// Written AFTER, like `Refused`, with the same members.
     | RefusedRetryable of reason: string * partial: Fuaran.Core.JVal option
+    /// A resume asked the step's STANDING CONDITION of the answer it would
+    /// serve (Phase 2793, D70): `condition` is the check's name, `stands`
+    /// what the host answered from the present world. Not a result — the
+    /// answer recorded before it is still the step's — except that a check
+    /// that FELL supersedes every record appended before it at its ordinal
+    /// or a later one (`Journal.current`): the answer is performed again,
+    /// and the plan re-made from there.
+    | Checked of condition: string * stands: bool
 
 /// A refusal as the host classes it (Phase 2792, D69): the step as the journal
 /// files it — its derived capability and its subject, where the arm has one —
@@ -148,6 +156,8 @@ module JournalPhase =
         | JournalPhase.Completed _ -> "completed"
         | JournalPhase.Refused _ -> "refused"
         | JournalPhase.RefusedRetryable _ -> "refused-retryable"
+        | JournalPhase.Checked(_, true) -> "checked-stands"
+        | JournalPhase.Checked(_, false) -> "checked-fell"
 
 /// What the journal knows about one step, after the records for it are read
 /// together. This is the three-state reading the header describes, as a value —
@@ -229,45 +239,6 @@ module Journal =
     /// about.
     let declaringDurable (journal: EffectJournal) : EffectJournal = { journal with SurvivesRestart = true }
 
-    /// What the journal says about `step` of `invocation`.
-    ///
-    /// The LAST result record wins where several exist. That cannot arise from
-    /// this placement's own writes — it appends one result per step per run and
-    /// serves a recorded step rather than re-running it — but a journal is
-    /// shared storage, and "read the newest" is the only rule that is total
-    /// against a host that also writes.
-    let stepOf (entries: JournalEntry list) (step: int) : JournaledStep =
-        let forStep = entries |> List.filter (fun e -> e.Step = step)
-
-        let result =
-            forStep
-            |> List.rev
-            |> List.tryPick (fun e ->
-                match e.Phase with
-                | JournalPhase.Completed value -> Some(JournaledStep.Value value)
-                | JournalPhase.Refused(reason, partial) -> Some(JournaledStep.Refusal(reason, partial))
-                | JournalPhase.RefusedRetryable(reason, partial) -> Some(JournaledStep.Retryable(reason, partial))
-                | JournalPhase.Attempted -> None)
-
-        match result, forStep with
-        | Some decided, _ -> decided
-        | None, [] -> JournaledStep.Unrun
-        | None, attempted -> JournaledStep.Indeterminate (List.head attempted).Capability
-
-    /// The capability recorded against `step`, if the journal has seen it. Read
-    /// by the replay-divergence check, which compares what a replay is about to
-    /// do against what the recorded run did at the same ordinal.
-    let capabilityOf (entries: JournalEntry list) (step: int) : string option =
-        entries |> List.tryFind (fun e -> e.Step = step) |> Option.map _.Capability
-
-    /// The subject recorded against `step`, if the journal has seen the step —
-    /// `Some (Some address)` for an op stage, `Some None` for a host call, and
-    /// `None` where nothing was recorded. Read beside `capabilityOf` by the
-    /// replay-divergence check (Phase 1980): the capability says which arm ran
-    /// at an ordinal, the subject says which op.
-    let subjectOf (entries: JournalEntry list) (step: int) : string option option =
-        entries |> List.tryFind (fun e -> e.Step = step) |> Option.map _.Subject
-
     /// The ordinal reserved for the INVOCATION itself rather than for one of its
     /// steps.
     ///
@@ -284,6 +255,87 @@ module Journal =
     [<Literal>]
     let InvocationCapability = "Invocation"
 
+
+    /// The records of a journal that are still the run's (Phase 2793, D70): the
+    /// journal less every record a FELL check supersedes — one appended before
+    /// a `Checked(_, false)` record, at that check's ordinal or a later one.
+    /// The check re-made the plan from its ordinal, so what the run recorded
+    /// there and after it, before the check, describes a plan the run no
+    /// longer holds. Nothing is removed: the journal stays append-only, and
+    /// this is a reading of it. The invocation marker is never superseded; a
+    /// journal with no fell check is answered as it is.
+    ///
+    /// `stepOf`, `capabilityOf` and `subjectOf` read through it, so every
+    /// reader of a step reads the run as it now stands.
+    let current (entries: JournalEntry list) : JournalEntry list =
+        let fell (e: JournalEntry) =
+            match e.Phase with
+            | JournalPhase.Checked(_, false) -> true
+            | _ -> false
+
+        if not (List.exists fell entries) then
+            entries
+        else
+            // From the newest record back, the lowest ordinal a later fell
+            // check re-made the plan from: a record at or after it is void.
+            List.foldBack
+                (fun (e: JournalEntry) (kept, from) ->
+                    let kept =
+                        if e.Step <> InvocationStep && e.Step >= from then
+                            kept
+                        else
+                            e :: kept
+
+                    kept, (if fell e then min from e.Step else from))
+                entries
+                ([], System.Int32.MaxValue)
+            |> fst
+
+    /// What the journal says about `step` of `invocation`, over its `current`
+    /// records.
+    ///
+    /// The LAST result record wins where several exist. A journal holds several
+    /// where a resume performed the step again — a retryable refusal (Phase
+    /// 2792, D69), or an answer whose standing condition fell (Phase 2793,
+    /// D70) — and a journal is shared storage, so "read the newest" is the only
+    /// rule that is total against a host that also writes. A check record is
+    /// not a result; a step whose only records are checks reads as unrun.
+    let stepOf (entries: JournalEntry list) (step: int) : JournaledStep =
+        let forStep = current entries |> List.filter (fun e -> e.Step = step)
+
+        let result =
+            forStep
+            |> List.rev
+            |> List.tryPick (fun e ->
+                match e.Phase with
+                | JournalPhase.Completed value -> Some(JournaledStep.Value value)
+                | JournalPhase.Refused(reason, partial) -> Some(JournaledStep.Refusal(reason, partial))
+                | JournalPhase.RefusedRetryable(reason, partial) -> Some(JournaledStep.Retryable(reason, partial))
+                | JournalPhase.Attempted
+                | JournalPhase.Checked _ -> None)
+
+        match result, forStep |> List.filter (fun e -> e.Phase = JournalPhase.Attempted) with
+        | Some decided, _ -> decided
+        | None, [] -> JournaledStep.Unrun
+        | None, attempted -> JournaledStep.Indeterminate (List.head attempted).Capability
+
+    /// The capability recorded against `step`, if the journal's `current`
+    /// records have seen it. Read by the replay-divergence check, which compares
+    /// what a replay is about to do against what the recorded run did at the
+    /// same ordinal.
+    let capabilityOf (entries: JournalEntry list) (step: int) : string option =
+        current entries
+        |> List.tryFind (fun e -> e.Step = step)
+        |> Option.map _.Capability
+
+    /// The subject recorded against `step`, if the journal's `current` records
+    /// have seen the step — `Some (Some address)` for an op stage, `Some None`
+    /// for a host call, and `None` where nothing was recorded. Read beside
+    /// `capabilityOf` by the replay-divergence check (Phase 1980): the
+    /// capability says which arm ran at an ordinal, the subject says which op.
+    let subjectOf (entries: JournalEntry list) (step: int) : string option option =
+        current entries |> List.tryFind (fun e -> e.Step = step) |> Option.map _.Subject
+
     /// Whether `invocation` has a recorded completion.
     let isComplete (entries: JournalEntry list) : bool =
         match stepOf entries InvocationStep with
@@ -294,7 +346,9 @@ module Journal =
     /// keeps every attempt, each resume that performs a retryable step again
     /// appending its own `Attempted` and result at the same ordinal. Program
     /// bounds nothing — each resume is one attempt — so a host that wants a
-    /// bound reads it here and stops resuming.
+    /// bound reads it here and stops resuming. It reads the RAW records, not
+    /// the `current` ones: an attempt a fell check later voided (Phase 2793,
+    /// D70) is still an attempt the journal keeps.
     let attemptsOf (entries: JournalEntry list) (step: int) : int =
         entries
         |> List.filter (fun e -> e.Step = step && e.Phase = JournalPhase.Attempted)
@@ -360,6 +414,8 @@ module Journal =
             | JournalPhase.Completed value -> "Completed", [ "value", value ]
             | JournalPhase.Refused(reason, partial) -> "Refused", refusal reason partial
             | JournalPhase.RefusedRetryable(reason, partial) -> "RefusedRetryable", refusal reason partial
+            | JournalPhase.Checked(condition, stands) ->
+                "Checked", [ "condition", Fuaran.Core.JStr condition; "stands", Fuaran.Core.JBool stands ]
 
         Fuaran.Core.Canonical.typed
             arm
@@ -411,6 +467,14 @@ module Journal =
         // 2792, D69) is its own arm with the same members.
         | Some "Refused" -> entry [ "reason"; "partial" ] (refusal JournalPhase.Refused)
         | Some "RefusedRetryable" -> entry [ "reason"; "partial" ] (refusal JournalPhase.RefusedRetryable)
+        // A standing condition's check (Phase 2793, D70): its name and what
+        // the host answered, both required.
+        | Some "Checked" ->
+            entry [ "condition"; "stands" ] (fun v ->
+                JournalWire.requireNonEmpty "condition" v
+                |> Result.bind (fun condition ->
+                    ProgramWire.requireBool "stands" v
+                    |> Result.map (fun stands -> JournalPhase.Checked(condition, stands))))
         | Some other -> ProgramWire.refuse RefusalClass.UnknownEffectArm ("'" + other + "' is not a journal phase")
 
 // ============================================================================
