@@ -76,6 +76,8 @@
     <Compile Include="StagedQueryPostureTests.fs" />
     <!-- Phase 2165 (D39): the durable tier's entry read, the op prefix, per-kind facets, composed contracts. -->
     <Compile Include="DurableInterpreterTests.fs" />
+    <!-- Phase 2797 (D72): the file journal store across processes: one live process holds a run. -->
+    <Compile Include="JournalStoreProcessTests.fs" />
     <Compile Include="OpaqueLeafTests.fs" />
     <Compile Include="TypedReadTests.fs" />
     <Compile Include="ReceiptTests.fs" />

@@ -527,11 +527,71 @@ module Journal =
 //  than skipping it: a journal read past a lost record would re-run the effect
 //  the record was there to stop.
 //
-//  One run is resumed by one process at a time. The store serialises its own
-//  appends within a process; two processes resuming one run id at once is the
-//  concurrency question the program wire specification leaves open, and
-//  nothing here answers it.
+//  ── One live process holds a run (Phase 2797, D72) ──────────────────────────
+//  A run's records are written by one live process at a time, and the file
+//  store enforces it rather than assuming it. The first read or append of a run
+//  in a process takes an EXCLUSIVE HOLD on the run: a lock file beside its
+//  journal (the same name, `.lock`), opened for the process's lifetime with no
+//  sharing. Every file store in the process over that directory shares the
+//  hold, and serialises its reads and appends of the run on it. A read takes
+//  the hold as an append does, because a read is how a resume begins: a
+//  process that read a run another process then wrote to would append on a
+//  record it never saw.
+//
+//  A second live process asking for a held run, by a read, an append or a
+//  close, is REFUSED before it reads or writes anything: `Read` and `Append`
+//  raise `JournalStoreRefusedException` naming the run and the refusal
+//  (`JournalStore.RunHeld`), and `Close` answers `Error JournalStore.RunHeld`.
+//  A host that only reads sees exactly that while another process holds the
+//  run, and holds the run itself once it has read it, until it closes it or
+//  ends. The hold is given up by a `Close` that retires the run (or finds
+//  nothing to retire), or by the process's end, a kill included: the operating
+//  system releases the lock with the process, so a hold left by a dead process
+//  blocks nobody and the next process takes it and resumes. There is no other
+//  release. A run that stops resumably stays held by the live process that ran
+//  it, which may resume it; another process resumes it once that one ends.
+//  The lock file is never removed, because removing it while another process
+//  has opened it but not yet locked it would let two processes hold two files
+//  under one name; it is empty, one per run id the directory has held.
+//
+//  The mechanism is the runtime's exclusive open. On Windows it is the share
+//  mode: an open asking for no sharing is refused by the system to every other
+//  open of the file, whatever opened it. On Linux and macOS the runtime takes
+//  `flock(LOCK_EX | LOCK_NB)` on the open: it binds every process that opens
+//  the file through a file store (or through `flock`), which is every writer
+//  this store admits; a process that writes the store's files by other means
+//  is outside any store's contract on any platform. Windows is measured by this
+//  repository's process test on Windows, and Linux by the same test on the
+//  repository's Linux CI; macOS runs the Linux mechanism and is NOT measured.
+//
+//  A file system that cannot give an exclusive hold — one whose locks the
+//  runtime cannot take, or a runtime with file locking switched off
+//  (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`) — makes the store REFUSE TO OPEN
+//  the run (`JournalStore.HoldUnavailable`), rather than write on a hold that
+//  is not there. The hold proves itself: once taken, a second exclusive open of
+//  the same lock file from this process must be refused exactly as another
+//  process's would be, and where it is admitted the store gives the hold back
+//  and refuses.
+//
+//  The in-memory store answers the same contract by construction: its records
+//  live in one process's memory, so no second process can reach a run, and it
+//  never raises the refusal.
 // ============================================================================
+
+/// A file store's refusal of a run (Phase 2797, D72): `Refusal` is
+/// `JournalStore.RunHeld` — another live process holds the run — or
+/// `JournalStore.HoldUnavailable` — the file system or the runtime cannot give
+/// an exclusive hold — and `Run` the run it refused. Raised by a read or an
+/// append before anything is read or written; an `IOException`, since it is an
+/// answer about storage.
+type JournalStoreRefusedException(refusal: string, run: string, detail: string) =
+    inherit System.IO.IOException(refusal + ": run '" + run + "' " + detail)
+
+    /// The refusal's class: `JournalStore.RunHeld` or `JournalStore.HoldUnavailable`.
+    member _.Refusal = refusal
+
+    /// The run the store refused.
+    member _.Run = run
 
 /// A journal's storage, by run: the journal the durable interpreter appends to
 /// and reads, and the act that retires a completed run's record.
@@ -552,6 +612,17 @@ module JournalStore =
     /// The refusal a close of a run that has not completed raises.
     [<Literal>]
     let RunIncomplete = "journal-store-run-incomplete"
+
+    /// The refusal a file store gives a run another live process holds
+    /// (Phase 2797, D72): raised by a read or an append
+    /// (`JournalStoreRefusedException`), answered by a close.
+    [<Literal>]
+    let RunHeld = "journal-store-run-held"
+
+    /// The refusal a file store gives a run it cannot hold exclusively, on a
+    /// file system or a runtime that gives no exclusive hold (Phase 2797, D72).
+    [<Literal>]
+    let HoldUnavailable = "journal-store-hold-unavailable"
 
     /// The decision every store's close takes, over the run's entries: `Ok`
     /// when there is nothing to retire or the run completed, the refusal
@@ -574,23 +645,146 @@ module JournalStore =
           Close =
             fun run -> closing (journal.Read run) (fun () -> entries.RemoveAll(fun e -> e.Invocation = run) |> ignore) }
 
-    /// The file a run's journal lives in under `directory`.
-    let fileOf (directory: string) (run: string) : string =
+    /// A run's files under `directory`, by the SHA-256 of its id and an extension.
+    let private named (extension: string) (directory: string) (run: string) : string =
         let digest =
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes run)
 
-        System.IO.Path.Combine(directory, System.Convert.ToHexString(digest).ToLowerInvariant() + ".journal")
+        System.IO.Path.Combine(directory, System.Convert.ToHexString(digest).ToLowerInvariant() + extension)
+
+    /// The file a run's journal lives in under `directory`.
+    let fileOf (directory: string) (run: string) : string = named ".journal" directory run
+
+    /// The runs THIS PROCESS holds (Phase 2797, D72), by the full path of the
+    /// lock file: the open handle that is the hold, shared by every file store
+    /// in the process. Locked for its own reads and writes.
+    let private held =
+        System.Collections.Generic.Dictionary<string, System.IO.FileStream>(
+            if System.OperatingSystem.IsLinux() then
+                System.StringComparer.Ordinal
+            else
+                System.StringComparer.OrdinalIgnoreCase
+        )
+
+    /// Whether an open was refused because another open holds the file: the
+    /// share-mode refusal on Windows, `flock`'s `EWOULDBLOCK` elsewhere, which
+    /// the runtime raises as an `IOException` carrying the errno (11 on Linux,
+    /// 35 on macOS).
+    let private refusedAsHeld (e: System.IO.IOException) : bool =
+        if System.OperatingSystem.IsWindows() then
+            // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+            let code = e.HResult &&& 0xFFFF
+            code = 32 || code = 33
+        elif System.OperatingSystem.IsLinux() then
+            e.HResult = 11
+        else
+            e.HResult = 35
+
+    /// The exclusive open that is a hold. On Windows the file may still be
+    /// deleted under it, so a host can remove a store's directory; it cannot be
+    /// opened. Elsewhere the runtime takes `flock(LOCK_EX)` for a `None` share.
+    let private exclusive (path: string) : System.IO.FileStream =
+        new System.IO.FileStream(
+            path,
+            System.IO.FileMode.OpenOrCreate,
+            System.IO.FileAccess.ReadWrite,
+            (if System.OperatingSystem.IsWindows() then
+                 System.IO.FileShare.Delete
+             else
+                 System.IO.FileShare.None)
+        )
+
+    /// The process's hold on `run` under `directory`, taken here if the
+    /// process does not yet hold it; refused, raising, if another live process
+    /// does or no exclusive hold can be had. The handle is the gate a file
+    /// store serialises the run's reads and appends on.
+    let private hold (directory: string) (run: string) : System.IO.FileStream =
+        let path = System.IO.Path.GetFullPath(named ".lock" directory run)
+
+        lock held (fun () ->
+            match held.TryGetValue path with
+            | true, stream -> stream
+            | _ ->
+                System.IO.Directory.CreateDirectory directory |> ignore
+
+                let stream =
+                    try
+                        exclusive path
+                    with :? System.IO.IOException as e when refusedAsHeld e ->
+                        raise (JournalStoreRefusedException(RunHeld, run, "is held by another live process"))
+
+                // The hold proves itself: a second exclusive open from this
+                // process must be refused as another process's would be.
+                let proven =
+                    try
+                        try
+                            (exclusive path).Dispose()
+                            false
+                        with :? System.IO.IOException as e when refusedAsHeld e ->
+                            true
+                    with _ ->
+                        stream.Dispose()
+                        reraise ()
+
+                if not proven then
+                    stream.Dispose()
+
+                    raise (
+                        JournalStoreRefusedException(
+                            HoldUnavailable,
+                            run,
+                            "cannot be held exclusively: the file system or the runtime gives no exclusive lock at "
+                            + path
+                        )
+                    )
+
+                held.[path] <- stream
+                stream)
+
+    /// `f` under the process's hold on `run`, serialised with every other read,
+    /// append and close of the run in this process. A hold a close gave up
+    /// while `f` waited is taken afresh rather than written under.
+    let private holding (directory: string) (run: string) (f: unit -> 'T) : 'T =
+        let path = System.IO.Path.GetFullPath(named ".lock" directory run)
+
+        let rec attempt () =
+            let gate = hold directory run
+
+            let current =
+                lock gate (fun () ->
+                    let live =
+                        lock held (fun () ->
+                            match held.TryGetValue path with
+                            | true, stream -> obj.ReferenceEquals(stream, gate)
+                            | _ -> false)
+
+                    if live then Some(f ()) else None)
+
+            match current with
+            | Some value -> value
+            | None -> attempt ()
+
+        attempt ()
+
+    /// Give up the process's hold on `run`. The lock file stays (see the header).
+    let private release (directory: string) (run: string) : unit =
+        let path = System.IO.Path.GetFullPath(named ".lock" directory run)
+
+        lock held (fun () ->
+            match held.TryGetValue path with
+            | true, stream ->
+                held.Remove path |> ignore
+                stream.Dispose()
+            | _ -> ())
 
     /// The file store: one append-only file per run under `directory`, created
-    /// on the first append. It survives a restart, and claims to.
+    /// on the first append, and one live process holding a run at a time
+    /// (Phase 2797, D72; see the header). It survives a restart, and claims to.
     let file (directory: string) : JournalStore =
-        let gate = obj ()
         let newline = byte '\n'
 
         let append (entry: JournalEntry) =
-            lock gate (fun () ->
-                System.IO.Directory.CreateDirectory directory |> ignore
-
+            holding directory entry.Invocation (fun () ->
                 use stream =
                     new System.IO.FileStream(
                         fileOf directory entry.Invocation,
@@ -618,7 +812,7 @@ module JournalStore =
                 stream.Flush true)
 
         let read (run: string) : JournalEntry list =
-            lock gate (fun () ->
+            holding directory run (fun () ->
                 let path = fileOf directory run
 
                 if not (System.IO.File.Exists path) then
@@ -650,12 +844,18 @@ module JournalStore =
                   SurvivesRestart = false }
           Close =
             fun run ->
-                lock gate (fun () ->
-                    closing (read run) (fun () ->
-                        let path = fileOf directory run
+                try
+                    holding directory run (fun () ->
+                        closing (read run) (fun () ->
+                            let path = fileOf directory run
 
-                        if System.IO.File.Exists path then
-                            System.IO.File.Delete path)) }
+                            if System.IO.File.Exists path then
+                                System.IO.File.Delete path
+
+                            // Retired, or nothing to retire: the hold is given up.
+                            release directory run))
+                with :? JournalStoreRefusedException as e ->
+                    Error e.Refusal }
 
 // ============================================================================
 //  OPERATOR CONTROLS — suspend, throttle, revoke and resume, as RECORDED OPS.
