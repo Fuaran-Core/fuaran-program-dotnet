@@ -1424,7 +1424,7 @@ type private Remote() =
     member val Merges = 0 with get, set
     member val Verifications = 0 with get, set
     member val Notes = 0 with get, set
-    member val Pushes = 0 with get, set
+    member val Pushes = ref 0
     member val Pushed: string list = [] with get, set
     member val Asked: string list = [] with get, set
 
@@ -1470,21 +1470,15 @@ let private landingActs (remote: Remote) =
               remote.Notes <- remote.Notes + 1
               Ok(JStr "noted") ]
 
-/// A push that refuses with each reason in `refusals`, in turn, then publishes
-/// the tree the work holds.
+/// `pushing`, publishing the tree the work holds whenever it succeeds.
 let private pushOf (remote: Remote) (refusals: string list) =
-    let pending = ref refusals
+    let push = pushing remote.Pushes refusals
 
-    fun (_: JVal) ->
-        remote.Pushes <- remote.Pushes + 1
-
-        match pending.Value with
-        | reason :: rest ->
-            pending.Value <- rest
-            Error reason
-        | [] ->
+    fun (args: JVal) ->
+        push args
+        |> Result.map (fun pushed ->
             remote.Pushed <- remote.Pushed @ [ remote.Tree ]
-            Ok(JStr "pushed")
+            pushed)
 
 /// The consumer's two conditions: the merge stands while it is a merge onto the
 /// PRESENT base; the verification stands while it verified the PRESENT tree —
@@ -1543,7 +1537,7 @@ let private diedBeforePush (services: Remote -> EffectJournal -> DurableServices
             runLanding (services remote (dyingBeforeAttempting 2 journal)) remote (pushOf remote []) mergeVerifyPush)
 
     Expect.isTrue died "the process died between the verification and the push"
-    Expect.equal (remote.Merges, remote.Verifications, remote.Pushes) (1, 1, 0) "merged and verified, not pushed"
+    Expect.equal (remote.Merges, remote.Verifications, remote.Pushes.Value) (1, 1, 0) "merged and verified, not pushed"
     baseMovesTo |> Option.iter (fun moved -> remote.Base <- moved)
     remote, journal
 
@@ -1580,7 +1574,7 @@ let private standingTests =
               Expect.equal remote.Asked [ "merge" ] "the verification, planned on the fallen merge, was never asked"
 
               Expect.equal
-                  (remote.Merges, remote.Verifications, remote.Pushes)
+                  (remote.Merges, remote.Verifications, remote.Pushes.Value)
                   (2, 2, 1)
                   "re-merged, re-verified, pushed once"
 
@@ -1639,7 +1633,12 @@ let private standingTests =
 
               Expect.isTrue resumed.Outcome.Committed "the run completes as the dead one would have"
               Expect.isEmpty remote.Asked "no condition was asked: the push was performed on the answers"
-              Expect.equal (remote.Merges, remote.Verifications, remote.Pushes) (1, 1, 1) "nothing was performed again"
+
+              Expect.equal
+                  (remote.Merges, remote.Verifications, remote.Pushes.Value)
+                  (1, 1, 1)
+                  "nothing was performed again"
+
               Expect.equal resumed.Replayed [ 0; 1; 2 ] "every step was served"
               Expect.isEmpty resumed.Remade "nothing was re-made"
               Expect.isTrue (Journal.isComplete (journal.Read "inv")) "and the run is complete"
@@ -1664,7 +1663,7 @@ let private standingTests =
                   runLanding (standing remote journal) remote (pushOf remote []) mergeVerifyPush
 
               Expect.isEmpty remote.Asked "an attempted push may have landed, so nothing is asked"
-              Expect.equal (remote.Merges, remote.Pushes) (1, 0) "nothing re-made, the push not performed again"
+              Expect.equal (remote.Merges, remote.Pushes.Value) (1, 0) "nothing re-made, the push not performed again"
               Expect.equal resumed.Indeterminate [ 2 ] "the push is refused as indeterminate, as before"
           }
 
@@ -1720,7 +1719,7 @@ let private standingTests =
               Expect.equal remote.Asked [ "merge" ] "the RE-MADE merge was checked; the voided verification never"
 
               Expect.equal
-                  (remote.Merges, remote.Verifications, remote.Pushes)
+                  (remote.Merges, remote.Verifications, remote.Pushes.Value)
                   (2, 2, 1)
                   "merged twice in all, never a third time"
 
