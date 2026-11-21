@@ -249,7 +249,14 @@
          assertion it could not evaluate instead of reading it as false; the
          report carries a structured refusal's discriminator only
          (DECISIONS.md D73). -->
-    <Version>0.16.1</Version>
+    <!-- 0.17.0 — Phase 2449. ADVANCES the untagged 0.16.1 draft: the change is
+         breaking in behaviour, a higher class than the additive draft carried,
+         and 2828 rides the new slot. The outcome, invocation and logic-tree
+         reference readers refuse a root `$type` naming another document, or
+         none, as `missing-member`, and all four document readers read the root
+         before any other member; `ProgramWire.requireDocument` is the one
+         additive member (DECISIONS.md D74). -->
+    <Version>0.17.0</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
          else. Undeclared would read as `local-feed`, under which a pin only this

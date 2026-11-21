@@ -307,12 +307,8 @@ module HandlerWire =
         (witness: ProgramWitness<'Node, 'Op, 'Walk, #IDispatchPosition<'Action, 'Expr, 'Store, 'Effect>>)
         (value: JVal)
         : Result<Handler<'Action, 'Op>, WireRefusal> =
-        ProgramWire.declaredOnly [ "$type"; "name"; "stages" ] value
-        |> Result.bind (fun () ->
-            match ProgramWire.tag value with
-            | Some "Handler" -> Ok()
-            | Some other -> ProgramWire.refuse RefusalClass.MissingMember ("'" + other + "' is not a handler document")
-            | None -> ProgramWire.refuse RefusalClass.MissingMember "required member '$type' is absent")
+        ProgramWire.requireDocument "Handler" "a handler document" value
+        |> Result.bind (fun () -> ProgramWire.declaredOnly [ "$type"; "name"; "stages" ] value)
         |> Result.bind (fun () -> ProgramWire.requireString "name" value)
         |> Result.bind (fun name ->
             // Empty and absent are different claims and are refused on different
@@ -580,7 +576,11 @@ module HandlerWire =
         // Every member is required even when empty: an omitted array and an
         // empty array would be two spellings of one fact, and a reader would
         // have to guess which producer it was talking to.
-        ProgramWire.declaredOnly [ "$type"; "committed"; "diagnostics"; "notifications"; "patches"; "performed" ] value
+        ProgramWire.requireDocument "HandlerReport" "an outcome document" value
+        |> Result.bind (fun () ->
+            ProgramWire.declaredOnly
+                [ "$type"; "committed"; "diagnostics"; "notifications"; "patches"; "performed" ]
+                value)
         |> Result.bind (fun () -> ProgramWire.requireBool "committed" value)
         |> Result.bind (fun committed ->
             ProgramWire.requireArray "diagnostics" value

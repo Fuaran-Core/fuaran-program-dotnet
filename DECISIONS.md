@@ -5933,3 +5933,61 @@ the form; one that does not changes nothing.
 union. `v0.16.0` is tagged, so this advances to `0.16.1`. The behaviour a consumer pays — a branch over an
 unavailable read halts, `Reads.Refusal()`'s text, and the report's `reason` for a structured refusal — is
 listed in `STABILITY.md`.
+
+## D74 — A document names its own type at the ROOT, and the root is read FIRST: the handler, outcome, invocation and logic-tree-reference readers refuse a root `$type` that names another document, names nothing, is absent or is not a string, as `missing-member`, before any other member is examined; the refusal names the document expected and never echoes the tag; the program wire specification states the rule (§2, Appendix A) and the corpus pins it for all four documents (2026-11-21)
+
+**2026-11-21. Phase 2449.**
+
+**Context.** A differential run of the Rust core against this repository's reference, over the toy
+subject's corpus and twenty thousand deterministic mutations of it, found 194 accept/reject disagreements,
+and 137 of them were one case: this repository ACCEPTED an outcome, an invocation or a logic-tree
+reference whose root `$type` named a different document, and the Rust core refused it. No vector pinned
+either reading, so both hosts conformed and the corpus could not tell them apart. That is a parser
+differential: two readers acting on different documents built from the same bytes.
+
+**Refuse or accept — the reading.** The text already decided it; only the corpus and this reader had not.
+Each of the four documents' member tables gives `$type` as required with a single admitted value (§4.1
+`"Handler"`, §6.3 `"HandlerReport"`, §8.3 `"Invocation"`, §9.2 `"LogicTreeRef"`); every schema in the
+specification's `schemas/v2/` holds it as a `const`; and this repository's own handler reader already
+refused a foreign root. A reader that accepts a foreign root is therefore the defect, and the Rust core
+does not move.
+
+**The class is `missing-member`, not a new one.** The required discriminator, with the one value its
+table admits, is not there — which is what `missing-member` already says of a required member. Both hosts
+already raised it for this case wherever they raised anything (the handler here; all four documents in
+the Rust core), so a new class would have moved every host and every pin for a distinction no reader acts
+on.
+
+**The root is read first.** Read after §2.9's member check — as this repository's handler reader did — a
+whole document of another kind is refused as `undeclared-member` here and `missing-member` there: both
+refuse, and the class still differs, which the differential reports and the corpus would pin as a
+failure. `ProgramWire.requireDocument` reads the root before anything else, and the four readers call it
+first. The detail is `the document is not <what>`: the tag the document chose is wire-carried and is not
+echoed (§4.4), so the handler reader's old `'<tag>' is not a handler document` goes with it.
+
+**The corpus.** One `reject-root-type` vector per document, each a valid document's members under another
+document's discriminator, so it carries one defect: `toy-outcome/` and `toy-handler/` at the toy subject,
+`handler/` at the referenced subject (whose host already refuses it on its released packages), and
+`invocation/` and `cross-layer/` for the two vocabulary-free documents. The referenced subject's outcome
+counterpart is not carried yet, and §10.7 records why, exactly as for the non-empty rule (D66): its host
+reads the outcome through a release that predates the rule.
+
+**Coordination the corpus cannot carry.** The two vocabulary-free vectors are certified at BOTH subjects,
+and the referenced subject's host reads them through a released Program package. Until it pins a release
+carrying this reading (0.17.0 or later) those two vectors are red there. They are not split off: the
+specification's routing rule (§10.7) says such a vector waits beside the hosts' work, and the landing of
+the specification's change is held to the release and the pin raise accordingly.
+
+**Measured.** The differential leg, re-run over this change's corpus (seed 2269, 20 000 mutations: 20 101
+inputs, 80 404 verdicts under the four claims), against a reference built before this change and then against
+this one. Class A, an accept/reject disagreement on an outcome, invocation, logic-tree reference or handler whose
+parsed root `$type` is not that document's, counted 358 before (124 outcome, 124 invocation, 110 reference) and
+**0** after. Accept/reject disagreements overall went from 394 to 36; the 36 are the other classes the first run
+recorded (a referenced value one reader reads and the other refuses, and the canonical-bytes profile), untouched
+here. Refusal-class disagreements, which the leg reports without failing, went from 2 582 to 946: reading the
+root first is what moved them.
+
+**What did not move.** The server-effect reader (its root names an arm; rule 6 refuses an unknown one as
+`unknown-effect-arm`), every other refusal class, every round-trip vector and golden, the journal and the
+demanded document. The version moves to 0.17.0 (breaking in behaviour, additive in surface), with Phase
+2828's draft riding it, as `STABILITY.md` records.

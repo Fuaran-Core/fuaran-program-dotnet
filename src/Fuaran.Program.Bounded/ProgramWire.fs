@@ -363,6 +363,22 @@ module ProgramWire =
     /// The tag of a `$type`-discriminated object, or `None` where there is none.
     let tag (value: JVal) : string option = tryString "$type" value
 
+    /// Hold a document's root to the kind the reader was asked for (§2,
+    /// Phase 2449): its `$type` must name THIS document, and a root naming
+    /// another document — or none — is refused as `missing-member`, the required
+    /// discriminator with its one admitted value being absent.
+    ///
+    /// Read FIRST, before any other member, so a document of another kind is
+    /// refused for this one class whatever members it carries: read after
+    /// §2.9's member check, the same bytes would be refused as
+    /// `undeclared-member` by one reader and `missing-member` by another. The
+    /// detail names the expected document only; the tag the document chose is
+    /// not echoed (§4.4).
+    let requireDocument (expected: string) (what: string) (value: JVal) : Result<unit, WireRefusal> =
+        match tag value with
+        | Some t when t = expected -> Ok()
+        | _ -> refuse RefusalClass.MissingMember ("the document is not " + what)
+
     /// Refuse any member the specification does not declare for this document.
     ///
     /// This is stricter than a must-ignore rule and deliberately so: a
@@ -821,7 +837,8 @@ module ProgramWire =
                 |> Option.defaultValue []))
 
     let decodeLogicTreeRef (value: JVal) : Result<LogicTreeRef, WireRefusal> =
-        declaredOnly [ "$type"; "hash"; "ref"; "slot" ] value
+        requireDocument "LogicTreeRef" "a logic-tree reference" value
+        |> Result.bind (fun () -> declaredOnly [ "$type"; "hash"; "ref"; "slot" ] value)
         |> Result.bind (fun () -> requireString "slot" value)
         |> Result.bind (fun slot ->
             if slot <> logicTreeSlot then
@@ -871,7 +888,8 @@ module ProgramWire =
                 |> Option.defaultValue []))
 
     let decodeInvocation (value: JVal) : Result<InvocationRecord, WireRefusal> =
-        declaredOnly [ "$type"; "endpoint"; "idempotencyKey"; "nodeId" ] value
+        requireDocument "Invocation" "an invocation document" value
+        |> Result.bind (fun () -> declaredOnly [ "$type"; "endpoint"; "idempotencyKey"; "nodeId" ] value)
         |> Result.bind (fun () -> requireNonEmpty "endpoint" value)
         |> Result.bind (fun endpoint ->
             requireNonEmpty "nodeId" value

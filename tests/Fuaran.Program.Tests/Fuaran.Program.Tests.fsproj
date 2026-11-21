@@ -84,6 +84,8 @@
     <Compile Include="ReportTests.fs" />
     <Compile Include="NonEmptyMemberTests.fs" />
     <Compile Include="InvocationNonEmptyTests.fs" />
+    <!-- Phase 2449 (D74): a document names its own type at the root. -->
+    <Compile Include="RootTypeTests.fs" />
     <!-- Phase 2220 (D47): the derived view. -->
     <Compile Include="DerivedViewTests.fs" />
     <Compile Include="WindowedLimitTests.fs" />

@@ -50,16 +50,56 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
-## 0.16.1 — the op channel carries a structured refusal, and a branch stops reading a condition it could not evaluate as false (Phase 2828)
+## 0.17.0 — a document names its own type at the root (Phase 2449), and what rode the draft (Phase 2828)
 
-**Class: additive by the surface rule.** `v0.16.0` is tagged, so this cannot ride it: it advances to the
-next patch. No record gains a field and no existing closed union gains a case; what is public and new is two
+**Class: breaking.** The draft stood at 0.16.1, untagged, carrying Phase 2828's additive change; a change of
+a higher class advances a draft rather than riding it, so the slot moves to 0.17.0 and 2828's entry rides it
+below. The surface is additive — one public function — but the readers start refusing documents they
+accepted: an outcome, an invocation or a logic-tree reference whose root `$type` names another document, or
+none, decoded on 0.16.x and is refused now. `DECISIONS.md` D74 records the reading. The program wire
+specification moves with it: §2 states the rule, Appendix A's `missing-member` row names it, and the corpus
+carries a `reject-root-type` vector for each of the four documents.
+
+### What a consumer gains
+
+- `ProgramWire.requireDocument expected what value` in `Fuaran.Program.Bounded`: `Ok ()` when the value's
+  root `$type` is `expected`, else a `missing-member` refusal whose detail is `the document is not <what>`
+  and never the tag the document chose.
+- The four document readers agree on what a document is before they read it: `HandlerWire.decodeHandlerJson`
+  (`Handler`), `HandlerWire.decodeReportJson` (`HandlerReport`), `ProgramWire.decodeInvocation`
+  (`Invocation`) and `ProgramWire.decodeLogicTreeRef` (`LogicTreeRef`) each read the root first, as the
+  specification now requires and a second host already did.
+
+### What a consumer pays
+
+- **An outcome, invocation or reference under another root is refused.** Each decoded on 0.16.x whatever
+  its `$type` said, and whether it had one. No conformant producer wrote such a document — every encoder
+  here emits the right tag — so what stops decoding is a document some other producer mislabelled, or
+  bytes handed to the wrong reader.
+- **The class of a whole document of another kind moves.** The root is read before the member check, so
+  a document of another kind handed to any of the four readers is refused as `missing-member`. The handler
+  reader used to check members first and refused such a document as `undeclared-member` wherever its
+  members differed.
+- **The handler reader's root-refusal detail moves.** `'<tag>' is not a handler document` and
+  `required member '$type' is absent` are both now `the document is not a handler document`, which no
+  longer echoes the tag.
+
+### What did not move
+
+Every document a conformant encoder writes, every round-trip vector and golden, every other refusal class,
+the server-effect reader (its root names an arm; an unknown one is still `unknown-effect-arm`), the
+journal's records, the demanded document and its version (15), and the staging model.
+
+### Rides the draft: the op channel carries a structured refusal, and a branch stops reading a condition it could not evaluate as false (Phase 2828)
+
+**Class: additive by the surface rule.** `v0.16.0` is tagged, so this could not ride it: it advanced the
+slot to 0.16.1, an untagged draft, and rides 0.17.0 since Phase 2449's breaking change advanced that draft. No record gains a field and no existing closed union gains a case; what is public and new is two
 types and their modules in `Fuaran.Program.Bounded`. The behaviour it changes is listed below, and three of
 those changes reach a consumer that already runs. `DECISIONS.md` D73 records the design, amending D19 §4 and
 D21. The program wire specification does not move: the outcome report keeps its shape, and a `Failed`
 diagnostic's `reason` becomes the discriminator the specification already asks an engine failure to carry.
 
-### What a consumer gains
+#### What a consumer gains
 
 - `OpRefusalClass` (`Refused` | `Malformed` | `Unavailable`) and `OpRefusal = { Class; Code; Detail }` in
   `Fuaran.Program.Bounded`, with `OpRefusal.refused` / `malformed` / `unavailable` (class, code, detail),
@@ -73,7 +113,7 @@ diagnostic's `reason` becomes the discriminator the specification already asks a
   nothing is staged or performed. A witness that renders its refusals through `OpRefusal.render` can say
   "this condition could not be evaluated" where it used to be able to say only "no".
 
-### What a consumer pays
+#### What a consumer pays
 
 - **A branch over an unavailable read halts.** `ReadUnavailable.refusal` (and so `Reads.Refusal()`) is now
   written in the canonical form, class `unavailable`, code `read-unavailable`:
@@ -89,7 +129,7 @@ diagnostic's `reason` becomes the discriminator the specification already asks a
   arm. After the true arm it is reported as the refusal, not wrapped as an assertion that did not hold;
   after the false arm the effect used to commit.
 
-### What did not move
+#### What did not move
 
 A refusal in no canonical form — every reason a witness wrote before this version, the in-repo verb's
 canonical-JSON refusals among them — reads exactly as it did: the false answer on a branch, the halt reason
