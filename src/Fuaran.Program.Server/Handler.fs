@@ -153,6 +153,11 @@ type ServerDiagnostic =
     /// the moment that changes, a verbatim message becomes a payload leak. The
     /// cost is a thinner error, and it is recorded as an open question rather
     /// than pretended away.
+    ///
+    /// A reason in the canonical refusal form (`OpRefusal`, Phase 2828, D73)
+    /// is held here WHOLE, detail included, because this outcome is the
+    /// host's; the report a caller receives carries its discriminator,
+    /// `<class>:<code>`, and never the detail (`HandlerReport.ofOutcome`).
     | Failed of capability: string * reason: string
     /// A STAGED host call failed in the perform phase (D8). Distinct from
     /// `Failed` because the two carry opposite news about the outside world: a
@@ -538,10 +543,13 @@ module Handler =
     /// the perform phase meets the ops in plan order; in memory, nothing is
     /// staged and the arm is the apply it always was. A BRANCH (Phase 1976)
     /// applies its entry condition for its answer — `Ok` takes the true arm,
-    /// `Error` the false arm — plans that arm as a sequence, and then, when it
+    /// a `refused` or non-canonical refusal the false arm, and a `malformed`
+    /// or `unavailable` one halts the effect with that refusal (Phase 2828,
+    /// D73) — plans that arm as a sequence, and then, when it
     /// carries an exit assertion, applies it against the state the arm left:
     /// it must hold after the true arm and fail after the false arm, or the
-    /// whole effect is refused with the assertion named
+    /// whole effect is refused with the assertion named, and an assertion
+    /// that could not be evaluated halts on its own refusal
     /// (`choose_plans_the_taken_arm`, `exit_violation_halts`). Neither
     /// condition is applied for its state, staged or performed. A REPEAT
     /// plans its body that many times, threaded as a sequence
@@ -613,26 +621,33 @@ module Handler =
                     | OpPerformance.Performed perform ->
                         Ok(tree', stagedOp perform capability tree tree' op :: staged, trail', flow)
             | OpView.Choose(entry, whenTrue, whenFalse, exit) ->
-                let tookTrue = Result.isOk (state.Stream.Apply entry tree)
-                let arm = if tookTrue then whenTrue else whenFalse
+                // A condition that could not be evaluated (Phase 2828, D73) is
+                // not the false answer: a `malformed` or `unavailable` refusal
+                // halts the effect with that refusal, and neither arm plans.
+                match state.Stream.Apply entry tree with
+                | Error reason when OpRefusal.halts reason -> Error reason
+                | answer ->
+                    let tookTrue = Result.isOk answer
+                    let arm = if tookTrue then whenTrue else whenFalse
 
-                match go arm tree staged trail (FlowDecision.Chose tookTrue :: flow) with
-                | Error code -> Error code
-                | Ok(tree', staged', trail', flow') ->
-                    match exit with
-                    | None -> Ok(tree', staged', trail', flow')
-                    | Some assertion ->
-                        match state.Stream.Apply assertion tree' with
-                        | Ok _ ->
-                            if tookTrue then
-                                Ok(tree', staged', trail', flow')
-                            else
-                                Error "the exit assertion held after the false arm"
-                        | Error reason ->
-                            if tookTrue then
-                                Error(sprintf "the exit assertion did not hold after the true arm: %s" reason)
-                            else
-                                Ok(tree', staged', trail', flow')
+                    match go arm tree staged trail (FlowDecision.Chose tookTrue :: flow) with
+                    | Error code -> Error code
+                    | Ok(tree', staged', trail', flow') ->
+                        match exit with
+                        | None -> Ok(tree', staged', trail', flow')
+                        | Some assertion ->
+                            match state.Stream.Apply assertion tree' with
+                            | Error reason when OpRefusal.halts reason -> Error reason
+                            | Ok _ ->
+                                if tookTrue then
+                                    Ok(tree', staged', trail', flow')
+                                else
+                                    Error "the exit assertion held after the false arm"
+                            | Error reason ->
+                                if tookTrue then
+                                    Error(sprintf "the exit assertion did not hold after the true arm: %s" reason)
+                                else
+                                    Ok(tree', staged', trail', flow')
             | OpView.Repeat(count, body) ->
                 if count < 0 then
                     Error "the repeat's count is negative"

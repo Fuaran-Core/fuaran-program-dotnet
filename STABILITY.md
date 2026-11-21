@@ -50,6 +50,57 @@ first sweep.
 | `integer-only` | profile, **PROPOSED** | 1 | `toy` |
 <!-- /witness-coverage -->
 
+## 0.16.1 — the op channel carries a structured refusal, and a branch stops reading a condition it could not evaluate as false (Phase 2828)
+
+**Class: additive by the surface rule.** `v0.16.0` is tagged, so this cannot ride it: it advances to the
+next patch. No record gains a field and no existing closed union gains a case; what is public and new is two
+types and their modules in `Fuaran.Program.Bounded`. The behaviour it changes is listed below, and three of
+those changes reach a consumer that already runs. `DECISIONS.md` D73 records the design, amending D19 §4 and
+D21. The program wire specification does not move: the outcome report keeps its shape, and a `Failed`
+diagnostic's `reason` becomes the discriminator the specification already asks an engine failure to carry.
+
+### What a consumer gains
+
+- `OpRefusalClass` (`Refused` | `Malformed` | `Unavailable`) and `OpRefusal = { Class; Code; Detail }` in
+  `Fuaran.Program.Bounded`, with `OpRefusal.refused` / `malformed` / `unavailable` (class, code, detail),
+  `render` (the canonical text, `<class>:<code>` then `: <detail>` when there is one), `tryParse` (the
+  refusal a canonical text spells, else `None`), `parse` (total: a text in no canonical form is class
+  `Refused` with no code and the whole text its detail), `discriminator` (`<class>:<code>`), `halts`, and
+  `NoCode` (`-`, the code a refusal that names none is written with). `OpRefusalClass.token` and
+  `tryOfToken`.
+- An op-channel branch (`OpView.Choose`) whose entry condition, or exit assertion, answers a refusal of
+  class `malformed` or `unavailable` HALTS the `ApplyOps` effect with that refusal: neither arm plans,
+  nothing is staged or performed. A witness that renders its refusals through `OpRefusal.render` can say
+  "this condition could not be evaluated" where it used to be able to say only "no".
+
+### What a consumer pays
+
+- **A branch over an unavailable read halts.** `ReadUnavailable.refusal` (and so `Reads.Refusal()`) is now
+  written in the canonical form, class `unavailable`, code `read-unavailable`:
+  `unavailable:read-unavailable: <subject> (<cause>); …` where it was `read-unavailable: <subject> (<cause>); …`.
+  A plan that returns it from a branch's condition used to take the false arm; it now halts. A host that
+  matched the old text by prefix matches `unavailable:read-unavailable` or reads it with `OpRefusal.tryParse`.
+- **The outcome report carries a structured refusal's discriminator only.** `HandlerReport.ofOutcome`
+  writes a `Failed` diagnostic whose reason is in the canonical form as `Failed(capability, "<class>:<code>")`.
+  The host's `HandlerOutcome` keeps the reason whole, detail included. A run that halts on an unavailable
+  read is therefore reported as `unavailable:read-unavailable`, where the report used to carry the subjects
+  and causes.
+- **An exit assertion that answers `malformed` or `unavailable` halts on its own refusal**, after either
+  arm. After the true arm it is reported as the refusal, not wrapped as an assertion that did not hold;
+  after the false arm the effect used to commit.
+
+### What did not move
+
+A refusal in no canonical form — every reason a witness wrote before this version, the in-repo verb's
+canonical-JSON refusals among them — reads exactly as it did: the false answer on a branch, the halt reason
+verbatim on a guard, and verbatim on the report. `OpView.Require`, `ActionView.Choose`, the op channel's
+rejection type (`string`, D19 §4), `StreamWitness`, `ServerDiagnostic`, `HandlerReport`'s members, the
+outcome document's shape, every corpus vector and golden, the demanded document and its version (15), and
+the journal. **The staging model is behind:** `proofs/Staging.fst` reads every refusal of a branch's
+condition as the false answer, so `choose_plans_the_taken_arm` and `exit_violation_halts` say nothing about
+the two halting classes; the differential host's toy witness never answers in the canonical form, so it and
+the model agree on every case it runs (D73 §5).
+
 ## 0.16.0 — the closure share is one projection of the demanded document (Phase 2446), and what rode the draft (Phase 2797)
 
 **Class: breaking.** `v0.15.0` is tagged, so this cannot ride it: the demanded document's version moves,

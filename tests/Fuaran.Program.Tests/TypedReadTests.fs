@@ -261,7 +261,7 @@ let private codec =
 
               Expect.equal
                   (reads.Refusal())
-                  (Some "read-unavailable: entry (codec record-v1: node is not a string)")
+                  (Some "unavailable:read-unavailable: entry (codec record-v1: node is not a string)")
                   "the refusal names the read, the codec and the codec's reason"
           }
 
@@ -318,7 +318,10 @@ let private degraded =
 
               Expect.equal
                   outcome.Outcome.Diagnostics
-                  [ ServerDiagnostic.Failed("ApplyOps", "read-unavailable: bundle (not-read: the store is unreachable)") ]
+                  [ ServerDiagnostic.Failed(
+                        "ApplyOps",
+                        "unavailable:read-unavailable: bundle (not-read: the store is unreachable)"
+                    ) ]
                   "the plan's own refusal, naming the read it could not make"
 
               Expect.equal performed.Value 0 "no op was performed"

@@ -60,6 +60,10 @@ type FileCheck =
     | Missing of path: string
     /// Refuses, always, with this typed refusal — the W5 crossing in one op.
     | Refused of VerbRefusal
+    /// Refuses, always, with this STRUCTURED refusal in Program's canonical
+    /// form (Phase 2828): a condition whose class says whether the answer is
+    /// "no" or could not be had at all.
+    | Raises of OpRefusal
 
 /// The verb's ops. A read, a write, a delete and a publish — the four shapes
 /// a store-mutating verb has — a check, its guard, and since Phase 1976 a
@@ -116,13 +120,15 @@ let private checkPlaceholders (check: FileCheck) : string list =
     match check with
     | Exists path
     | Missing path -> Placeholder.names path
-    | Refused _ -> []
+    | Refused _
+    | Raises _ -> []
 
 let private substituteCheck (placeholder: string) (element: JVal) (check: FileCheck) : FileCheck =
     match check with
     | Exists path -> Exists(Placeholder.fill placeholder element path)
     | Missing path -> Missing(Placeholder.fill placeholder element path)
-    | Refused _ -> check
+    | Refused _
+    | Raises _ -> check
 
 /// The verb's `Substitute` (Phase 1990): the element written over the
 /// placeholder in every operand of the op and of the ops beneath it, the shape
@@ -182,6 +188,8 @@ let rec encodeOp (op: FileOp) : string =
     | Check(Missing path) -> Canonical.write Rendering.CrossHost (Canonical.typed "Missing" [ "path", JStr path ])
     | Check(Refused refusal) ->
         Canonical.write Rendering.CrossHost (Canonical.typed "Refused" [ "refusal", JStr(VerbRefusal.render refusal) ])
+    | Check(Raises refusal) ->
+        Canonical.write Rendering.CrossHost (Canonical.typed "Raises" [ "refusal", JStr(OpRefusal.render refusal) ])
     | Branch(entry, whenTrue, whenFalse, exit) ->
         let arm (ops: FileOp list) =
             JArr(ops |> List.map (encodeOp >> JStr))
@@ -261,6 +269,12 @@ let rec decodeOp (text: string) : Result<FileOp, string> =
                 match VerbRefusal.parse r with
                 | Some refusal -> Ok(Check(Refused refusal))
                 | None -> Error "member 'refusal' is not a refusal")
+        | Some(JStr "Raises") ->
+            str "refusal" members
+            |> Result.bind (fun r ->
+                match OpRefusal.tryParse r with
+                | Some refusal -> Ok(Check(Raises refusal))
+                | None -> Error "member 'refusal' is not a canonical refusal")
         | Some(JStr "Branch") ->
             str "entry" members
             |> Result.bind check
@@ -335,6 +349,7 @@ let apply (op: FileOp) (tree: FileMap) : Result<FileMap, string> =
         else
             Ok tree
     | Check(Refused refusal) -> Error(VerbRefusal.render refusal)
+    | Check(Raises refusal) -> Error(OpRefusal.render refusal)
     // A flow op is planned through its VIEW — its conditions and its arms are
     // what the handler applies — and is never applied itself.
     | Branch _
@@ -360,7 +375,8 @@ let reach (op: FileOp) : OpReach =
     | Check(Missing path) ->
         { Arguments = [ "path", path ]
           Destination = EffectDestination.Absent }
-    | Check(Refused _) -> OpReach.nothing
+    | Check(Refused _)
+    | Check(Raises _) -> OpReach.nothing
     // A branch reaches nothing of its own: its conditions and arms reach, and
     // the policy reads them beneath it. A repeat names its COUNT as an
     // argument, which is how a deployer's allow-list bounds how many times a
@@ -435,6 +451,7 @@ let witness: ProgramWitness<FileMap, FileOp, Unfilled, Unfilled> =
                 | Publish target
                 | Retract target -> Some target
                 | Check(Refused _)
+                | Check(Raises _)
                 | Branch _
                 | Times _
                 | ForEach _ -> None

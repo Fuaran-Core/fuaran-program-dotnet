@@ -5798,3 +5798,138 @@ open one, and the specification should not read as if it did.
 and two literals). A second process resuming a held run, and a host on storage that cannot lock, are refused
 where they used to run. It rides the `0.16.0` draft, which is already breaking, and `STABILITY.md` carries the
 entry.
+
+## D73 — The op channel's refusal has a canonical STRUCTURED form: `OpRefusal` (class `refused` / `malformed` / `unavailable`, a host code, a detail) rendered into the channel's string as `<class>:<code>[: <detail>]` and read back by Program; an op-channel branch whose condition or exit assertion answers `malformed` or `unavailable` HALTS with that refusal, and only `refused` or a reason in no canonical form is the false answer; the outcome report carries a structured refusal's discriminator, the host's outcome keeps it whole; Program's own unavailable-read refusal is written in the form; the rejection type stays `string`; amends D19 §4 and D21 §2 (2026-11-21)
+
+**2026-11-21. Phase 2828. Amends D19 §4 (the W5 ruling) and the op-axis half of D21 §2.**
+
+**Context.** D19 §4 kept the op channel's rejection a `string` and named the crossing for a typed
+refusal: render it canonically into the string, parse it back on the far side. The rejection of a seventh
+type parameter stands. What the string left out has a correctness cost, which D21 §2 wrote down as a
+design choice: on the op axis "the channel has two answers and no third", so `OpView.Choose` read ANY
+`Error` from its entry condition as the false answer. A condition that could not be evaluated was
+indistinguishable from one that evaluated to false.
+
+**The evidence, reproduced here.** A worked example built against the released 0.14.1 ran a state-only
+witness whose draft check answers a `malformed` refusal when asked before anything is loaded. Handed one
+`ApplyOps` effect holding a single branch, `Choose(check, [], [delete], Some check)`, the run came back
+`Committed = true`, `Flow = [Chose false]`, no diagnostic, and the delete PERFORMED under a registered op
+performer. The same check as an `OpView.Require` halted with the reason. The exit assertion did not catch
+it: it refused too, which is what the false arm expects. The in-repo verb witness carries the case now
+(`tests/Fuaran.Program.Tests/VerbWitnessTests.fs`, "Phase 2828"): a check that raises a structured
+refusal (`FileCheck.Raises`), and the branch above over a delete. Written before the change, four of its
+eleven tests failed against this tree's `Choose` (the malformed and unavailable conditions, the exit
+assertion, the unavailable read); after it, all pass.
+
+**Premises checked against the tree first.** At 0.16.0, `Handler.planOps` still read the condition as
+`Result.isOk (state.Stream.Apply entry tree)`, and its exit arm still read an assertion's `Error` after the
+false arm as agreement. Nothing in the tree distinguished a condition that could not be evaluated from one
+that was false; the premise held, and the mechanism below is built.
+
+**1. The record: `OpRefusal = { Class: OpRefusalClass; Code: string option; Detail: string }`**, in
+`Fuaran.Program.Bounded` beside `OpView`. One fixed type, no type parameter. The class is closed at three:
+`refused` (the domain says no), `malformed` (the program is wrong) and `unavailable` (an input could not be
+read). The code is the HOST's, in its own vocabulary; the detail is whatever else the refusal says.
+
+**2. The form: `<class>:<code>`, then `: <detail>` when the detail is not empty.** `render` writes it,
+`tryParse` reads exactly it, and `parse` is total: a text in no canonical form is class `refused` with no
+code, the whole text its detail. Three choices inside it:
+
+- **The form is strict.** A code is a non-empty token of ASCII letters, digits, `-`, `_` and `.`, written
+  straight after the class's colon. So a reason that merely begins with a class word — `malformed: x`, the
+  spelling the evidence's witness used — is NOT canonical, and reads as it read before. Rejected: *read a
+  leading class word as the class.* It would have halted the evidence's own string unchanged, but it would
+  also re-read every existing witness reason that happens to begin `unavailable:` — "unavailable: the slot
+  is taken" is a domain's "no" — and the guarantee this phase gives is that a reason not written in the form
+  behaves exactly as it did.
+- **`render` normalises a code rather than refusing it.** A character outside the token set is written
+  `-`, and an absent or empty code is written `-` (`NoCode`), which `tryParse` reads as no code. The class
+  therefore always survives the crossing: an ill-written code must never turn a `malformed` refusal into an
+  answer, which is the defect this entry exists to remove. `tryParse (render r)` is `r` with its code
+  normalised.
+- **Program's other coded strings are not re-read.** `argument-not-allowed:<arg>` and
+  `return-contract:<name>` are a denial and a performer contract, not op-channel refusals, and stay as they
+  are.
+
+**3. `Choose` (amends D21 §2's op-axis sentence).** An entry condition whose refusal parses as `malformed`
+or `unavailable` halts the effect with that refusal, verbatim, before either arm plans; `refused`, and a
+reason in no canonical form, is the false answer. An exit assertion answering `malformed` or `unavailable`
+halts with its refusal after either arm — after the true arm it is reported as the refusal rather than
+wrapped as "did not hold", so its class reaches the report; after the false arm the effect used to commit.
+The op axis now agrees with the dispatch axis, where an errored condition already halted ("a branch that
+cannot decide is a defect, not a default", D21 §2); what the op axis keeps is that a domain's "no" is a
+value, not a halt. `OpView.Require` is unchanged: it already halted on every refusal.
+
+**4. The diagnostic, and the ruling on the report's shape: it does NOT change shape.** The host's
+`HandlerOutcome` keeps a `Failed` diagnostic's reason whole, detail included: the outcome is the host's
+and holds the host's own state. `HandlerReport.ofOutcome` — the only way to build a report from a run —
+writes a `Failed` whose reason is in the canonical form as `Failed(capability, "<class>:<code>")`, with no
+detail; every other diagnostic, and a reason in no form, is carried as before. The report gains no member,
+no arm and no refusal class, and its `reason` is still a string. The specification already says what a
+`Failed` reason carries for an engine failure — the discriminator only, never a message that can quote a
+wire-supplied name (§6.5) — and a guard's detail is exactly such a message: a witness that interpolates an
+operand puts a wire-supplied value there. So the five-artefact specification act this task would otherwise
+have filed is not needed. Rejected: *a host-side field for the detail* (`HandlerOutcome.Refusal`): a record
+field is breaking for every full-literal construction, and the session and durable tallies would each need
+to accumulate it, to hold what the diagnostic already holds. Rejected: *a new diagnostic arm*: a closed-union
+case is breaking for every exhaustive match, and the report would decode to a different arm than the outcome
+held.
+
+**5. Program's own unavailable read is written in the form.** `ReadUnavailable.refusal` — and so
+`Reads.Refusal()` — is `unavailable:read-unavailable: <subject> (<cause>); …`, where it was
+`read-unavailable: <subject> (<cause>); …`. A branch whose condition returns it halts and takes neither
+arm (pinned in the verb witness over Program's own `Reads`). Rejected: *teach `parse` the old spelling as a
+second way to write class `unavailable`.* It would have kept every byte, and left the form with two
+spellings for one value for good; a one-time change of text, recorded in `STABILITY.md`, is the durable
+choice.
+
+**6. The staging model is behind, and this entry says so rather than leaving it to be found.**
+`proofs/Staging.fst` models the branch's condition as `ROk? (w_apply entry tree)`: every refusal is the
+false answer. `choose_plans_the_taken_arm` and `exit_violation_halts` are still true of the model and still
+match the code on every refusal in no canonical form and every `refused` one, which is every refusal the
+differential host's toy witness produces; they say nothing about the two halting classes, which the model
+does not have. Moving the model — a class reader on the witness, a halting arm in `plan_view`, and a lemma
+that a branch over an unevaluable condition halts — is deferred to its own change; until it lands, the
+claims on those two theorems are narrower than the code's behaviour, by exactly §3.
+
+**7. The ruling on stage two: `OpRefusal` should NOT become `StreamWitness`'s rejection type now.** The
+breaking stage would make the state witness's `Stream` a `StreamWitness<'Op, 'Node, OpRefusal>`, so every
+`Apply` returns the record and the compiler, not a convention, holds every witness to class its refusals.
+The census of what moves:
+
+- **In this repository:** the four test witnesses (`ToyDomain`, `VerbDomain`, `GridDomain`, `DocDomain`) and
+  the seven test sites that override a witness's `Stream`; the differential host's model witness, whose
+  `w_apply` maps the apply's error to the model's string; `Handler.planOps` and every reason it threads; the
+  undo run's apply of inverses; and the journal's served refusals, which are text.
+- **Outside it:** the UI tier's adapter witness (in the UI tier's repository), and every second-domain
+  instantiation the earlier entries record — the verb (D19), the document pipeline (D20), the spreadsheet
+  automation (D29), the actuator (D60) — each of which renders its refusals into the string today; and a
+  host in another language that runs this corpus differentially, which moves only if the wire does.
+
+Not now, for three reasons. (a) `StreamWitness` is the substrate's op-stream witness, and the same value is
+a domain's op stream, where a refusal is the reason a record was not chained; fixing `'Rej` at a Program type
+would put Program's vocabulary into the substrate's chain refusals for every domain that shares the value.
+(b) The halt reason crosses as text everywhere it goes — the outcome, the journal, the report — which is D19
+§4's argument, and it has not moved. (c) The form already carries the semantics; what the breaking stage
+adds is enforcement, and the condition for paying for enforcement is evidence that the convention fails: a
+witness that adopted the form and still let a `malformed` or `unavailable` condition read as false. **The
+trigger to revisit** is that evidence, or a third reader of the class beyond the branch and the report. This
+is a recommendation and an operator call: it is irreversible for every witness in the census, so it is
+escalated, not decided here.
+
+**What this forecloses.** A reader of the op channel that needs the class reads it through
+`OpRefusal.parse`, never by matching text of its own. A witness that wants a condition to HALT says so in
+the form; one that does not changes nothing.
+
+**Falsifiers.**
+
+- *No existing witness reason is canonical by accident.* Falsified by a reason of the shape
+  `refused:<token>` / `malformed:<token>` / `unavailable:<token>` written before this version: on a branch
+  it would now halt (for the last two) and on the report it would lose its detail.
+- *The report's projection is the only place a run's diagnostics reach a caller.* Falsified by a host that
+  serialises `HandlerOutcome.Diagnostics` directly: it would carry a refusal's detail, as it did before.
+
+**Version.** Additive by surface: two types and their modules, no record field, no case on an existing
+union. `v0.16.0` is tagged, so this advances to `0.16.1`. The behaviour a consumer pays — a branch over an
+unavailable read halts, `Reads.Refusal()`'s text, and the report's `reason` for a structured refusal — is
+listed in `STABILITY.md`.

@@ -1941,7 +1941,7 @@ module ReadCause =
 
 module ReadUnavailable =
 
-    /// The halt-reason prefix of a plan that refuses on its unavailable reads.
+    /// The code of the refusal a plan returns on its unavailable reads.
     [<Literal>]
     let Code = "read-unavailable"
 
@@ -1951,10 +1951,18 @@ module ReadUnavailable =
 
     /// The refusal a plan returns for a run's unavailable reads, naming each
     /// and why in the order they were read — `None` when every read answered.
+    /// It is in the canonical refusal form, class `unavailable` (Phase 2828,
+    /// D73): `unavailable:read-unavailable: <subject> (<cause>); …`, so a
+    /// branch whose condition met it halts rather than reading it as false.
     let refusal (degraded: ReadUnavailable list) : string option =
         match degraded with
         | [] -> None
-        | reads -> Some(Code + ": " + (reads |> List.map describe |> String.concat "; "))
+        | reads ->
+            Some(
+                Fuaran.Program.Bounded.OpRefusal.render (
+                    Fuaran.Program.Bounded.OpRefusal.unavailable Code (reads |> List.map describe |> String.concat "; ")
+                )
+            )
 
 module Read =
 

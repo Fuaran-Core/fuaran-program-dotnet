@@ -242,7 +242,14 @@
          a run for one live process and refuses another
          (`JournalStoreRefusedException`, `JournalStore.RunHeld` /
          `HoldUnavailable`; DECISIONS.md D72). -->
-    <Version>0.16.0</Version>
+    <!-- 0.16.1 — Phase 2828. ADVANCES rather than rides: v0.16.0 is TAGGED.
+         Additive by surface: the op channel's refusal has a canonical
+         structured form, `OpRefusal` (class refused / malformed / unavailable,
+         code, detail); an op-channel branch halts on a condition or exit
+         assertion it could not evaluate instead of reading it as false; the
+         report carries a structured refusal's discriminator only
+         (DECISIONS.md D73). -->
+    <Version>0.16.1</Version>
     <!-- This repository's restore path is PUBLIC: it publishes to nuget.org, so
          a consumer of the published packages reaches the registry and nothing
          else. Undeclared would read as `local-feed`, under which a pin only this

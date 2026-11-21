@@ -1143,3 +1143,368 @@ let undoTests =
               | Ok _ -> failtest "an uncommitted plan was undone"
               | Error refusal -> Expect.equal refusal.Code UndoCode.UncommittedPlan "named"
           } ]
+
+// ─── Phase 2828: the op channel carries a structured refusal ────────────────
+
+/// A refusal the verb's condition raises when it is asked before what it reads
+/// exists: the program is wrong, not the answer "no".
+let private notDraft = OpRefusal.malformed "not-draft" "tested before any load"
+
+/// The report a caller receives of an outcome, encoded as the specification's
+/// outcome document.
+let private reportOf (outcome: HandlerOutcome<FileMap, unit, FileOp, Nothing>) : string =
+    match HandlerWire.encodeReport witness (HandlerReport.ofOutcome outcome) with
+    | Ok text -> text
+    | Error refusal -> failtestf "the report did not encode: %A" refusal
+
+/// A store's own codec for a text record: any content is the record.
+let private textCodec: ReadCodec<string> = { Name = "text"; Decode = Ok }
+
+/// The verb witness whose `Exists` check over a `store/` path READS the store
+/// through Program's typed reads, and answers the run's own unavailable-read
+/// refusal when the read could not answer: Program's refusal, on the channel.
+let private readingWitness (reads: Reads) =
+    { witness with
+        State =
+            { witness.State with
+                Stream =
+                    { witness.State.Stream with
+                        Apply =
+                            fun op tree ->
+                                match op with
+                                | Check(Exists path) when path.StartsWith "store/" ->
+                                    match reads.Read(textCodec, path, (fun () -> Error "the store is unreachable")) with
+                                    | Error tier -> Error tier
+                                    | Ok(Read.Available _) -> Ok tree
+                                    | Ok(Read.Unavailable _) -> Error(Option.get (reads.Refusal()))
+                                | _ -> apply op tree } } }
+
+[<Tests>]
+let refusalTests =
+    testList
+        "Phase 2828 — the op channel carries a structured refusal"
+        [ test "the canonical form round-trips per class, and the report carries its discriminator" {
+              for refusal in
+                  [ OpRefusal.refused "no-draft" "the report is final"
+                    notDraft
+                    OpRefusal.unavailable "read-unavailable" "index (not-read: gone); notes: a: b" ] do
+                  Expect.equal (OpRefusal.tryParse (OpRefusal.render refusal)) (Some refusal) "back from the text"
+                  Expect.equal (OpRefusal.parse (OpRefusal.render refusal)) refusal "and through the total reading"
+
+              Expect.equal (OpRefusal.render notDraft) "malformed:not-draft: tested before any load" "the spelling"
+              Expect.equal (OpRefusal.discriminator notDraft) "malformed:not-draft" "the discriminator"
+
+              Expect.equal
+                  (OpRefusal.render (OpRefusal.malformed "draft" ""))
+                  "malformed:draft"
+                  "an empty detail is not written"
+
+              Expect.equal
+                  (OpRefusal.tryParse "unavailable:-: nothing named")
+                  (Some
+                      { Class = OpRefusalClass.Unavailable
+                        Code = None
+                        Detail = "nothing named" })
+                  "`-` is the spelling of no code"
+          }
+
+          test "an ill-written code is normalised, and the refusal keeps its class" {
+              let refusal = OpRefusal.malformed "not draft:yet" "x"
+
+              Expect.equal (OpRefusal.render refusal) "malformed:not-draft-yet: x" "written as a token"
+
+              Expect.equal
+                  (OpRefusal.tryParse (OpRefusal.render refusal) |> Option.map _.Class)
+                  (Some OpRefusalClass.Malformed)
+                  "the class survives the crossing"
+
+              Expect.isTrue (OpRefusal.halts (OpRefusal.render refusal)) "and still halts a branch"
+
+              Expect.equal
+                  (OpRefusal.render (OpRefusal.unavailable "" "x"))
+                  "unavailable:-: x"
+                  "an empty code is no code, never a lost class"
+          }
+
+          test "a reason not in the canonical form reads as refused with no code, the whole reason its detail" {
+              for reason in
+                  [ "malformed: not-draft tested before any load"
+                    "no such file: notes/x.md"
+                    VerbRefusal.render
+                        { Code = "missing"
+                          Detail = "notes/x.md" }
+                    "refused:"
+                    "malformed:x: "
+                    "unavailable:a b: c"
+                    "" ] do
+                  Expect.isNone (OpRefusal.tryParse reason) (sprintf "%s is not canonical" reason)
+
+                  Expect.equal
+                      (OpRefusal.parse reason)
+                      { Class = OpRefusalClass.Refused
+                        Code = None
+                        Detail = reason }
+                      "refused, no code"
+
+                  Expect.isFalse (OpRefusal.halts reason) "and the false answer, as before the form existed"
+          }
+
+          test
+              "a branch whose condition is MALFORMED halts with that refusal: neither arm plans and the delete is never performed" {
+              // The evidence, in the verb: a draft check that cannot be
+              // answered before anything is loaded, guarding a delete in the
+              // false arm, with the same check as the exit assertion, which
+              // refuses too, as the false arm expects, so it never caught it.
+              let world = seeded ()
+
+              let outcome =
+                  run
+                      world
+                      None
+                      { Name = "archive-report"
+                        Stages =
+                          [ Effect(
+                                ServerEffect.ApplyOps
+                                    [ Branch(Raises notDraft, [], [ Delete "notes/x.md" ], Some(Raises notDraft)) ]
+                            ) ] }
+
+              Expect.isFalse outcome.Committed "halted"
+              Expect.isEmpty outcome.Performed "nothing performed"
+              Expect.isEmpty world.Invocations "the performer was never asked"
+              Expect.equal (world.Files |> Map.toList) [ "notes/x.md", "live" ] "the file is still there"
+              Expect.isEmpty outcome.Flow "and no arm was taken"
+
+              Expect.equal
+                  outcome.Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", OpRefusal.render notDraft) ]
+                  "the host's outcome holds the refusal whole"
+
+              Expect.equal
+                  (HandlerReport.ofOutcome outcome).Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", "malformed:not-draft") ]
+                  "the report carries its discriminator"
+          }
+
+          test "an UNAVAILABLE condition halts the same way" {
+              let world = seeded ()
+              let unknown = OpRefusal.unavailable "index" "the catalogue was not read"
+
+              let outcome =
+                  run
+                      world
+                      None
+                      { Name = "unknown"
+                        Stages =
+                          [ Effect(
+                                ServerEffect.ApplyOps
+                                    [ Branch(Raises unknown, [ Publish "origin" ], [ Delete "notes/x.md" ], None) ]
+                            ) ] }
+
+              Expect.isFalse outcome.Committed "halted"
+              Expect.isEmpty world.Invocations "nothing performed"
+              Expect.isEmpty outcome.Flow "no arm"
+
+              Expect.equal
+                  outcome.Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", OpRefusal.render unknown) ]
+                  "on the refusal"
+          }
+
+          test "a domain REFUSED condition still takes the false arm" {
+              let world = seeded ()
+
+              let outcome =
+                  run
+                      world
+                      None
+                      { Name = "final"
+                        Stages =
+                          [ Effect(
+                                ServerEffect.ApplyOps
+                                    [ Branch(
+                                          Raises(OpRefusal.refused "no-draft" "the report is final"),
+                                          [ Write("notes/archive/x.md", "true") ],
+                                          [ Delete "notes/x.md" ],
+                                          None
+                                      ) ]
+                            ) ] }
+
+              Expect.isTrue outcome.Committed "no halt"
+              Expect.equal outcome.Flow [ FlowDecision.Chose false ] "the false arm"
+              Expect.isEmpty outcome.Diagnostics "the refusal was the answer"
+              Expect.isFalse (world.Files.ContainsKey "notes/x.md") "and the false arm's delete performed"
+          }
+
+          test "an unparsed reason behaves as it did before the form existed: the false arm, and the delete performed" {
+              let world = seeded ()
+
+              let undecided =
+                  { Code = "undecided"
+                    Detail = "not-draft tested before any load" }
+
+              Expect.isNone
+                  (OpRefusal.tryParse (VerbRefusal.render undecided))
+                  "premise: the verb's own JSON is no canonical refusal"
+
+              let outcome =
+                  run
+                      world
+                      None
+                      { Name = "legacy"
+                        Stages =
+                          [ Effect(
+                                ServerEffect.ApplyOps
+                                    [ Branch(Refused undecided, [], [ Delete "notes/x.md" ], Some(Refused undecided)) ]
+                            ) ] }
+
+              Expect.isTrue outcome.Committed "committed"
+              Expect.equal outcome.Flow [ FlowDecision.Chose false ] "the false arm"
+              Expect.isEmpty outcome.Diagnostics "no diagnostic"
+              Expect.equal outcome.Performed [ "ApplyOps" ] "the delete was performed"
+              Expect.isFalse (world.Files.ContainsKey "notes/x.md") "the world lost the file"
+          }
+
+          test "an exit assertion that could not be evaluated halts on its own refusal, after either arm" {
+              // After the TRUE arm: the assertion's refusal is reported as it
+              // is, never wrapped as an assertion that did not hold.
+              let afterTrue = seeded ()
+
+              let outcome =
+                  flowRun
+                      afterTrue
+                      { Name = "after-true"
+                        Stages =
+                          [ Effect(
+                                ServerEffect.ApplyOps
+                                    [ Branch(
+                                          Exists "notes/x.md",
+                                          [ Write("notes/x.md", "migrated") ],
+                                          [],
+                                          Some(Raises notDraft)
+                                      ) ]
+                            ) ] }
+
+              Expect.isFalse outcome.Committed "halted"
+              Expect.isEmpty afterTrue.Invocations "nothing performed"
+
+              Expect.equal
+                  outcome.Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", OpRefusal.render notDraft) ]
+                  "the assertion's refusal"
+
+              // After the FALSE arm, where a refusal used to be the expected
+              // answer and the effect committed.
+              let afterFalse = seeded ()
+
+              let outcome' =
+                  flowRun
+                      afterFalse
+                      { Name = "after-false"
+                        Stages =
+                          [ Effect(
+                                ServerEffect.ApplyOps
+                                    [ Branch(Missing "notes/x.md", [], [ Delete "notes/x.md" ], Some(Raises notDraft)) ]
+                            ) ] }
+
+              Expect.isFalse outcome'.Committed "halted"
+              Expect.isEmpty afterFalse.Invocations "the false arm's delete was planned, never performed"
+              Expect.equal (afterFalse.Files |> Map.toList) [ "notes/x.md", "live" ] "the world is untouched"
+          }
+
+          test
+              "Program's own unavailable-read refusal reaches a branch as class unavailable: it halts and takes neither arm" {
+              let world = seeded ()
+              let reads = Reads.Over EntryReader.live
+
+              let outcome =
+                  Handler.runWith
+                      (readingWitness reads)
+                      (ServerEffectRegistry.permissive ServerEffectRegistry.denyAll)
+                      (OpPerformance.performedWithDetail (world.Performer None))
+                      DataFrame.noResolve
+                      "verb"
+                      { Name = "over-the-store"
+                        Stages =
+                          [ Effect(
+                                ServerEffect.ApplyOps
+                                    [ Branch(Exists "store/index", [ Publish "origin" ], [ Delete "notes/x.md" ], None) ]
+                            ) ] }
+                      { Tree = { empty with Files = world.Files }
+                        Bindings = () }
+
+              let refusal =
+                  "unavailable:read-unavailable: store/index (not-read: the store is unreachable)"
+
+              Expect.equal (reads.Refusal()) (Some refusal) "the run's refusal, in the canonical form"
+              Expect.isFalse outcome.Committed "halted"
+              Expect.isEmpty outcome.Flow "neither arm was taken"
+              Expect.isEmpty world.Invocations "nothing performed"
+              Expect.isEmpty world.Published "the true arm's publish never happened"
+              Expect.equal (world.Files |> Map.toList) [ "notes/x.md", "live" ] "nor the false arm's delete"
+              Expect.equal outcome.Diagnostics [ ServerDiagnostic.Failed("ApplyOps", refusal) ] "on the refusal"
+
+              Expect.equal
+                  (HandlerReport.ofOutcome outcome).Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", "unavailable:read-unavailable") ]
+                  "the report names the class and the code, not the store"
+          }
+
+          test "a guard's detail does not appear in the report; a reason in no canonical form is reported as before" {
+              let ambiguous = OpRefusal.refused "bundle-ambiguous" "x matches 2 bundles: x-a, x-b"
+
+              let world = seeded ()
+
+              let outcome =
+                  run
+                      world
+                      None
+                      { Name = "ambiguous"
+                        Stages = [ Effect(ServerEffect.ApplyOps [ Check(Raises ambiguous); Publish "origin" ]) ] }
+
+              Expect.isFalse outcome.Committed "the guard halted"
+              Expect.isEmpty world.Invocations "nothing performed"
+
+              Expect.equal
+                  outcome.Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", OpRefusal.render ambiguous) ]
+                  "the host's outcome keeps the detail"
+
+              let report = reportOf outcome
+              Expect.stringContains report "\"reason\":\"refused:bundle-ambiguous\"" "the report names the refusal"
+              Expect.isFalse (report.Contains "x-a") "and carries none of its detail"
+              Expect.isFalse (report.Contains "matches") "none"
+
+              // The W5 crossing in the verb's own JSON is no canonical refusal,
+              // so the report carries it verbatim, as it did.
+              let legacy =
+                  { Code = "missing"
+                    Detail = "notes/y.md" }
+
+              let world' = seeded ()
+
+              let outcome' =
+                  run
+                      world'
+                      None
+                      { Name = "legacy"
+                        Stages = [ Effect(ServerEffect.ApplyOps [ Check(Refused legacy); Publish "origin" ]) ] }
+
+              Expect.equal
+                  (HandlerReport.ofOutcome outcome').Diagnostics
+                  [ ServerDiagnostic.Failed("ApplyOps", VerbRefusal.render legacy) ]
+                  "verbatim"
+          }
+
+          test "a branch over a structured refusal round-trips as a Program document" {
+              let handler: VerbHandler =
+                  { Name = "archive-report"
+                    Stages =
+                      [ Effect(
+                            ServerEffect.ApplyOps
+                                [ Branch(Raises notDraft, [], [ Delete "notes/x.md" ], Some(Raises notDraft)) ]
+                        ) ] }
+
+              match HandlerWire.encodeHandler witness handler with
+              | Error refusal -> failtestf "did not encode: %A" refusal
+              | Ok text -> Expect.equal (HandlerWire.decodeHandler witness text) (Ok handler) "back"
+          } ]

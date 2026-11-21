@@ -55,12 +55,27 @@ type HandlerReport<'Op> =
 
 module HandlerReport =
 
+    /// A diagnostic as the report carries it: a `Failed` whose reason is in the
+    /// canonical refusal form (`OpRefusal`, Phase 2828, D73) by its
+    /// discriminator, `<class>:<code>`, so the refusal's detail — a witness's
+    /// text, which may quote an operand the program supplied — stays on the
+    /// host's outcome. Every other diagnostic, and a reason in no canonical
+    /// form, is carried as it was.
+    let private reported (diagnostic: ServerDiagnostic) : ServerDiagnostic =
+        match diagnostic with
+        | ServerDiagnostic.Failed(capability, reason) ->
+            match OpRefusal.tryParse reason with
+            | Some refusal -> ServerDiagnostic.Failed(capability, OpRefusal.discriminator refusal)
+            | None -> diagnostic
+        | _ -> diagnostic
+
     /// The projection of a run. Everything it drops is state the caller does not
     /// receive; everything it keeps is what the specification's outcome document
-    /// declares.
+    /// declares. A refusal's detail is dropped too: a `Failed` diagnostic in the
+    /// canonical refusal form is reported by its discriminator.
     let ofOutcome (outcome: HandlerOutcome<'Node, 'Store, 'Op, 'Effect>) : HandlerReport<'Op> =
         { Committed = outcome.Committed
-          Diagnostics = outcome.Diagnostics
+          Diagnostics = outcome.Diagnostics |> List.map reported
           Notifications = outcome.Notifications
           Patches = outcome.Patches
           Performed = outcome.Performed }

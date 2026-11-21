@@ -346,6 +346,172 @@ module OpReach =
         { Arguments = []
           Destination = EffectDestination.Absent }
 
+/// The CLASS of a refusal on the op channel (Phase 2828, DECISIONS.md D73):
+/// what the refusal says about the program. Closed at three, because the one
+/// reader that acts on it, a branch's condition, has exactly two readings of
+/// a refusal and the class is what picks between them.
+[<RequireQualifiedAccess>]
+type OpRefusalClass =
+    /// The domain says no: the op was understood and the answer is negative.
+    /// On a branch's condition this is the false answer.
+    | Refused
+    /// The program is wrong: the op cannot be answered as written — an operand
+    /// outside its domain, a condition asked before what it reads exists.
+    | Malformed
+    /// An input the op reads could not be read, so the answer is unknown.
+    | Unavailable
+
+module OpRefusalClass =
+
+    /// The class as the canonical form spells it.
+    let token (refusalClass: OpRefusalClass) : string =
+        match refusalClass with
+        | OpRefusalClass.Refused -> "refused"
+        | OpRefusalClass.Malformed -> "malformed"
+        | OpRefusalClass.Unavailable -> "unavailable"
+
+    /// The class a token spells, or `None` for any other text.
+    let tryOfToken (text: string) : OpRefusalClass option =
+        match text with
+        | "refused" -> Some OpRefusalClass.Refused
+        | "malformed" -> Some OpRefusalClass.Malformed
+        | "unavailable" -> Some OpRefusalClass.Unavailable
+        | _ -> None
+
+/// A refusal on the op channel, STRUCTURED (Phase 2828, DECISIONS.md D73): its
+/// class, the HOST's code for it in the host's own vocabulary, and a detail.
+/// One fixed type with no type parameter: the op channel's rejection stays
+/// `string` (D19 §4), and this is the canonical text a witness renders into
+/// that string and Program reads back (`OpRefusal.render`, `OpRefusal.parse`).
+/// A reason not in the canonical form reads as class `Refused` with no code,
+/// the whole reason its detail — which is how every reason written before the
+/// form existed is read, and why such a reason behaves as it always did.
+type OpRefusal =
+    {
+        Class: OpRefusalClass
+        /// The host's code, or `None` for a refusal that names none.
+        Code: string option
+        /// What the refusal says beyond its class and code. It stays on the
+        /// host side: the outcome report carries the discriminator only.
+        Detail: string
+    }
+
+module OpRefusal =
+
+    /// The code a refusal that names none is written with.
+    [<Literal>]
+    let NoCode = "-"
+
+    let private isCodeChar (c: char) =
+        (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')
+        || c = '-'
+        || c = '_'
+        || c = '.'
+
+    /// The code as the canonical form writes it: a token of ASCII letters,
+    /// digits, `-`, `_` and `.`, with any other character written as `-`, and
+    /// an absent or empty code written `-`. A code is normalised rather than
+    /// refused so that a refusal always keeps its CLASS across the crossing: an
+    /// ill-written code must never turn a `malformed` refusal into an answer.
+    let private codeToken (code: string option) : string =
+        match code with
+        | None
+        | Some "" -> NoCode
+        | Some text -> String.map (fun c -> if isCodeChar c then c else '-') text
+
+    /// A refusal of class `Refused`: the domain says no.
+    let refused (code: string) (detail: string) : OpRefusal =
+        { Class = OpRefusalClass.Refused
+          Code = Some code
+          Detail = detail }
+
+    /// A refusal of class `Malformed`: the program is wrong.
+    let malformed (code: string) (detail: string) : OpRefusal =
+        { Class = OpRefusalClass.Malformed
+          Code = Some code
+          Detail = detail }
+
+    /// A refusal of class `Unavailable`: an input could not be read.
+    let unavailable (code: string) (detail: string) : OpRefusal =
+        { Class = OpRefusalClass.Unavailable
+          Code = Some code
+          Detail = detail }
+
+    /// The refusal's DISCRIMINATOR, `<class>:<code>`: what an outcome report
+    /// carries of it, with no detail.
+    let discriminator (refusal: OpRefusal) : string =
+        OpRefusalClass.token refusal.Class + ":" + codeToken refusal.Code
+
+    /// The canonical text of a refusal, the string the op channel carries:
+    /// `<class>:<code>`, followed by `: <detail>` when the detail is not
+    /// empty. `tryParse (render r)` is `r`, its code normalised as the form
+    /// writes it.
+    let render (refusal: OpRefusal) : string =
+        if refusal.Detail = "" then
+            discriminator refusal
+        else
+            discriminator refusal + ": " + refusal.Detail
+
+    /// The refusal a CANONICAL text spells, or `None` for any other text. The
+    /// form is strict: the class token, `:`, a non-empty code token with no
+    /// space, and either the end or `: ` and a non-empty detail. So a reason
+    /// that merely begins with a class word and a colon — `malformed: x` — is
+    /// not canonical, and reads as it read before the form existed.
+    let tryParse (text: string) : OpRefusal option =
+        let colon = text.IndexOf ':'
+
+        if colon < 0 then
+            None
+        else
+            match OpRefusalClass.tryOfToken (text.Substring(0, colon)) with
+            | None -> None
+            | Some refusalClass ->
+                let rest = text.Substring(colon + 1)
+                let codeEnd = rest.IndexOf ':'
+
+                let code, tail =
+                    if codeEnd < 0 then
+                        rest, ""
+                    else
+                        rest.Substring(0, codeEnd), rest.Substring codeEnd
+
+                let refusal (detail: string) =
+                    Some
+                        { Class = refusalClass
+                          Code = (if code = NoCode then None else Some code)
+                          Detail = detail }
+
+                if code = "" || not (String.forall isCodeChar code) then
+                    None
+                elif tail = "" then
+                    refusal ""
+                elif tail.StartsWith ": " && tail.Length > 2 then
+                    refusal (tail.Substring 2)
+                else
+                    None
+
+    /// The refusal a reason on the op channel spells: its canonical reading,
+    /// or class `Refused` with no code and the whole reason as its detail.
+    let parse (reason: string) : OpRefusal =
+        match tryParse reason with
+        | Some refusal -> refusal
+        | None ->
+            { Class = OpRefusalClass.Refused
+              Code = None
+              Detail = reason }
+
+    /// Whether a reason, read as a branch's condition or exit assertion,
+    /// HALTS the effect rather than answering false: a `malformed` or
+    /// `unavailable` refusal halts, and a `refused` one, or a reason not in
+    /// the canonical form, is the false answer.
+    let halts (reason: string) : bool =
+        match (parse reason).Class with
+        | OpRefusalClass.Refused -> false
+        | OpRefusalClass.Malformed
+        | OpRefusalClass.Unavailable -> true
+
 /// What one op IS to the handler (Phase 1974, the third witness's F-GUARD;
 /// Phase 1976, the two flow shapes the second witness's re-run found
 /// missing; Phase 1990, per-element iteration; Phase 2186, the value
@@ -374,17 +540,22 @@ type OpView<'Node, 'Op> =
     /// `guard_refusal_halts` in `proofs/Staging.fst`.
     | Require
     /// SELECTION over ops (Phase 1976). `entry` is an op applied for its
-    /// ANSWER, exactly as a guard is: `Ok` takes `whenTrue`, `Error` takes
-    /// `whenFalse` — on this channel a domain's typed refusal is the false
-    /// value, not a halt, because the channel has two answers and no third.
-    /// The arm runs as the ops of an `ApplyOps` effect run. `exit`, when
-    /// carried, is applied against the state the arm left and must HOLD after
-    /// the true arm and FAIL after the false arm (the Janus discipline that
-    /// lets an inverse pick the arm to undo): violated, the whole effect is
-    /// refused with the assertion named, after the arm planned — a defect in
-    /// the program, caught. Neither condition is applied for its state,
-    /// staged or performed. `choose_plans_the_taken_arm` and
-    /// `exit_violation_halts` in `proofs/Staging.fst`.
+    /// ANSWER, exactly as a guard is: `Ok` takes `whenTrue`, and a refusal
+    /// the domain means as "no" takes `whenFalse` — a refusal of class
+    /// `refused`, or one not in the canonical form (`OpRefusal`). A refusal
+    /// of class `malformed` or `unavailable` is not an answer: the condition
+    /// could not be evaluated, so the effect HALTS with that refusal and
+    /// neither arm plans (Phase 2828, D73). The arm runs as the ops of an
+    /// `ApplyOps` effect run. `exit`, when carried, is applied against the
+    /// state the arm left and must HOLD after the true arm and FAIL after the
+    /// false arm (the Janus discipline that lets an inverse pick the arm to
+    /// undo): violated, the whole effect is refused with the assertion named,
+    /// after the arm planned — a defect in the program, caught; an assertion
+    /// whose refusal is `malformed` or `unavailable` halts with that refusal
+    /// after either arm. Neither condition is applied for its state, staged
+    /// or performed. `choose_plans_the_taken_arm` and `exit_violation_halts`
+    /// in `proofs/Staging.fst`, whose model reads every refusal as the false
+    /// answer (D73: the model is behind for the two halting classes).
     | Choose of entry: 'Op * whenTrue: 'Op list * whenFalse: 'Op list * exit: 'Op option
     /// BOUNDED ITERATION over ops (Phase 1976, D2). The body plans `count`
     /// times, threaded as a sequence is; `count` is a literal the domain's

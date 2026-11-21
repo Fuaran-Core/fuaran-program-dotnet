@@ -489,6 +489,21 @@ refusal renders itself canonically (`Canon.render` over its own JSON) into the s
 or a guard's `Errored` carries, and parses itself back on the far side; the in-repo second witness
 pins that crossing.
 
+**The refusal Program reads: `OpRefusal` (Phase 2828, D73).** The string stays the channel's type, and
+Program now reads one canonical form of it: `<class>:<code>`, then `: <detail>` when there is one, where
+the class is `refused` (the domain says no), `malformed` (the program is wrong) or `unavailable` (an input
+could not be read), and the code is the host's own, a token of ASCII letters, digits, `-`, `_` and `.`.
+`OpRefusal.render` writes it, `OpRefusal.tryParse` reads exactly it, and `OpRefusal.parse` reads any
+reason: one in no canonical form is class `refused` with no code, the whole reason its detail — so a
+witness that never adopts the form behaves exactly as it did. The class is what a branch reads (below).
+The detail stays on the host: a `Failed` diagnostic keeps the reason whole on `HandlerOutcome`, and the
+report a caller receives carries a structured refusal's discriminator, `<class>:<code>`, only — the
+witness's text may quote an operand the program supplied, which is the payload §6.5 of the specification
+keeps out of a `Failed` reason. Program's own unavailable-read refusal is written in the form, class
+`unavailable`, code `read-unavailable`. A witness obligation follows: a condition that cannot be
+evaluated — asked before what it reads exists, or over a read that did not answer — answers `malformed`
+or `unavailable` in the form, never a bare reason, because a bare reason is read as "no".
+
 **The op-channel guard (Phase 1974, D20 — the third witness's F-GUARD).** `View: 'Op -> OpView` says
 which ops are guards. `OpView.Require` makes an op one: the handler resolves it through the op's own
 `Stream.Apply` against the state AS OF ITS POSITION IN THE PLAN — the state the ops before it
@@ -505,12 +520,18 @@ uses the one over the thing its guards read. Proved: `guard_holds_moves_nothing`
 
 **The op-channel branch and repeat (Phase 1976, D21).** `OpView<'Op>` has two more shapes.
 `Choose(entry, whenTrue, whenFalse, exit)`: the entry condition is an op applied for its ANSWER,
-exactly as a guard is — `Ok` takes the true arm, `Error` the false arm, so on this channel a domain's
-typed refusal is the false value and never a halt (the channel has two answers and no third); the
-arm plans as the ops of an `ApplyOps` effect plan; the exit assertion, when carried, is applied
+exactly as a guard is — `Ok` takes the true arm, and a refusal of class `refused`, or one in no
+canonical form, takes the false arm, so on this channel a domain's "no" is the false value and never a
+halt. **Amended by Phase 2828 (D73):** a refusal of class `malformed` or `unavailable` is not an answer
+— the condition could not be evaluated — and HALTS the effect with that refusal before either arm
+plans; the channel had two answers and no third, and a condition nobody evaluated was read as "no".
+The arm plans as the ops of an `ApplyOps` effect plan; the exit assertion, when carried, is applied
 against the state the arm left and must hold after the true arm and fail after the false arm, or the
-whole effect is refused with the assertion named, after the arm planned. Neither condition is applied
-for its state, staged or performed. `Repeat(count, body)` plans its body `count` times as a sequence;
+whole effect is refused with the assertion named, after the arm planned; an exit assertion answering
+`malformed` or `unavailable` halts with its own refusal after either arm. Neither condition is applied
+for its state, staged or performed. The staging model has not moved with the amendment: it reads every
+refusal of a condition as the false answer, so the two theorems below say nothing about the halting
+classes (D73 §6). `Repeat(count, body)` plans its body `count` times as a sequence;
 the count is a literal the view produces — the state axis has no value channel to read a parameter
 from, so D2's range check is the domain's at its codec, and a deployer's ceiling is the argument
 policy's, through a `count` argument on the repeat's reach. The demanded projection and the argument

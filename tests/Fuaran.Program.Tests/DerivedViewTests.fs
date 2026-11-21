@@ -406,7 +406,7 @@ let private unavailable =
                   outcome.Outcome.Diagnostics
                   [ ServerDiagnostic.Failed(
                         "ApplyOps",
-                        "read-unavailable: relation (not-read: the store is unreachable)"
+                        "unavailable:read-unavailable: relation (not-read: the store is unreachable)"
                     ) ]
                   "the commit step's refusal names the read the view could not be derived from"
 
