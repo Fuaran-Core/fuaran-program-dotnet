@@ -437,7 +437,7 @@ type Reads(reader: EntryReader) =
     member _.Degraded: ReadUnavailable list = List.ofSeq degraded
 
     /// The refusal a plan returns for the run's unavailable reads
-    /// (`read-unavailable: <subject> (<cause>); …`), or `None` when every
+    /// (`unavailable:read-unavailable: <subject> (<cause>); …`), or `None` when every
     /// read so far answered.
     member _.Refusal() : string option =
         ReadUnavailable.refusal (List.ofSeq degraded)

@@ -252,7 +252,8 @@ as `no-binding-channel`. The argument policy reads what an op REACHES through th
 `Reach`, so an `AllowList` or a `Ceiling` on `ApplyOps` binds, and the demanded document carries the
 reach beside the capability. Since Phase 1976 (D21) an op the state witness views as a branch
 (`OpView.Choose`) plans as the arm its entry condition picks — the condition is an op applied for its
-answer, `Ok` the true arm and `Error` the false — and is refused, with the assertion named, when its
+answer, `Ok` the true arm and a refusal the false, except that since Phase 2828 (D73) a refusal of class
+`malformed` or `unavailable` in the canonical form (`OpRefusal`) halts the effect — and is refused, with the assertion named, when its
 exit assertion disagrees with the arm it took; one viewed as a repeat (`OpView.Repeat`) plans its
 body that many times. Since Phase 1990 (D29) one viewed as a per-element iteration (`OpView.Each`)
 plans its body once per element of a literal collection, each op with the element substituted for the
