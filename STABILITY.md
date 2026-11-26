@@ -271,8 +271,8 @@ does not move: the receipt crosses no wire, and the `PerformFailed` document kee
 
 **What changed.** The five `Fuaran.Core.*` pins (`Wire`, `Column`, `Tree`, `OpStream`, `Unit`) move
 0.40.2 → 0.41.0, Core's release of 2026-11-08 (`v0.41.0`, every package on nuget.org). Nothing in this
-repository's own surface moves for it; `Fuaran.Compute.DataFrame` stays at 0.43.0, which pins Core
-0.40.2 and lifts to 0.41.0 at restore. The act is recorded in the estate's version ledger.
+repository's own surface moves for it; `Fuaran.Compute.DataFrame` moves 0.43.0 → 0.44.0, which pins
+Core 0.41.0. The act is recorded in the estate's version ledger.
 
 **The class.** A consumer's Core floor rises with this version — a consumer on Core 0.40.2 that takes
 0.15.0 takes Core 0.41.0 with it — so the move is breaking by dependency. It RIDES `0.15.0`, whose class
